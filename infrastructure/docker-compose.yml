@@ -1,0 +1,31 @@
+# Local dev only. Provisions Postgres + Redis for apps/api and packages/database
+# migrations. This does NOT represent the Coolify deployment topology — see
+# infrastructure/README.md and the spec §6 safe rollout checklist before touching
+# any shared host.
+name: athernull-dev
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: athernull
+      POSTGRES_PASSWORD: athernull
+      POSTGRES_DB: athernull_dev
+    ports:
+      # Host port 5433, not 5432: this machine already runs an unrelated
+      # project's Postgres container bound to 5432 (see `docker ps`). Only the
+      # host-side mapping changes; the container still speaks 5432 internally.
+      - "5433:5432"
+    volumes:
+      - athernull-postgres-dev:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - athernull-redis-dev:/data
+
+volumes:
+  athernull-postgres-dev:
+  athernull-redis-dev:
