@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  node:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+      - run: pnpm install
+      - run: pnpm -r typecheck
+      - run: pnpm -r build
+      - run: pnpm -r --if-present test
+
+  python:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        package: [workers/coding-agent, services/verifier]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e "${{ matrix.package }}[dev]"
+      - run: ruff check "${{ matrix.package }}"

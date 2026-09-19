@@ -1,0 +1,17 @@
+{
+  "name": "athernull-platform",
+  "private": true,
+  "version": "0.0.0",
+  "packageManager": "pnpm@9.15.0",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "pnpm -r --if-present build",
+    "lint": "pnpm -r --if-present lint",
+    "typecheck": "pnpm -r --if-present typecheck",
+    "test": "pnpm -r --if-present test",
+    "dev:web": "pnpm --filter @athernull/web dev",
+    "dev:api": "pnpm --filter @athernull/api dev"
+  }
+}
