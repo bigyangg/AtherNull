@@ -1,0 +1,19 @@
+[project]
+name = "athernull-coding-agent"
+version = "0.0.0"
+requires-python = ">=3.12"
+dependencies = [
+    "openhands-sdk==1.42.1",
+    "openhands-tools==1.42.1",
+    "python-dotenv==1.2.2",
+]
+
+[project.optional-dependencies]
+dev = ["ruff", "pytest"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
