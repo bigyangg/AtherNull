@@ -1,0 +1,17 @@
+# Keeps the build context small for apps/*/Dockerfile builds (context is the
+# repo root, since these are pnpm-workspace monorepo builds). Each Dockerfile
+# COPYs in only the paths it actually needs.
+**/node_modules
+**/.next
+**/dist
+**/target
+**/.venv
+**/.pnpm-store
+**/*.tsbuildinfo
+.git
+.github
+infrastructure
+contracts
+workers
+docs
+*.md

@@ -15,6 +15,15 @@ const PUBLIC_PATHS = ["/"];
 
 export function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
+
+  // Pre-launch flag: apps/api isn't deployed alongside this yet, so
+  // sign-in/sign-up/projects would only ever show mock data or a dead auth
+  // form. Bounce everything but the marketing page back to "/" until the
+  // backend is live. Unset (or "false") restores normal routing.
+  if (process.env.LANDING_ONLY_MODE === "true" && pathname !== "/") {
+    return NextResponse.redirect(new URL("/", request.url));
+  }
+
   const isAuthPath = AUTH_PATHS.some(
     (path) => pathname === path || pathname.startsWith(`${path}/`),
   );
