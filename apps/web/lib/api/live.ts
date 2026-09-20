@@ -1,7 +1,16 @@
-import type { AgentProfile, Execution, RepoProject, Task, TaskDetail } from "@/lib/types";
+import type {
+  AgentProfile,
+  EstimateResult,
+  Execution,
+  RepoProject,
+  Task,
+  TaskDetail,
+  VerificationRun,
+} from "@/lib/types";
 import type {
   CreateRepoProjectInput,
   CreateTaskInput,
+  EstimateTaskInput,
   TaskDashboardApi,
 } from "@/lib/api/types";
 
@@ -79,10 +88,26 @@ interface RawTask {
   updated_at: string;
 }
 
+interface RawVerificationRun {
+  id: string;
+  task_id: string | null;
+  execution_id: string | null;
+  verifier_version: string;
+  tests: { name: string; passed: boolean }[];
+  outcome: "PASS" | "FAIL";
+  evidence: Record<string, unknown>;
+  created_at: string;
+}
+
 interface RawTaskDetail extends RawTask {
   executions: RawExecution[];
+  verificationRuns: RawVerificationRun[];
   budgetSpentMinor: number;
 }
+
+// apps/api's estimate response (EstimateJobResponseSchema) is already
+// camelCase, not a DB row — no raw/to mapping needed, unlike everything else
+// in this file.
 
 function toProject(raw: RawProject): RepoProject {
   return {
@@ -110,6 +135,19 @@ function toExecution(raw: RawExecution): Execution {
     resolvedModel: raw.resolved_model,
     startedAt: raw.started_at,
     endedAt: raw.ended_at,
+    createdAt: raw.created_at,
+  };
+}
+
+function toVerificationRun(raw: RawVerificationRun): VerificationRun {
+  return {
+    id: raw.id,
+    taskId: raw.task_id,
+    executionId: raw.execution_id,
+    verifierVersion: raw.verifier_version,
+    tests: raw.tests,
+    outcome: raw.outcome,
+    evidence: raw.evidence,
     createdAt: raw.created_at,
   };
 }
@@ -174,7 +212,36 @@ export const liveApi: TaskDashboardApi = {
     return {
       ...task,
       executions: raw.executions.map(toExecution),
+      verificationRuns: raw.verificationRuns.map(toVerificationRun),
       budgetSpentMinor: raw.budgetSpentMinor,
     };
+  },
+
+  async estimateTask(input: EstimateTaskInput) {
+    return apiFetch<EstimateResult>("/v1/jobs/estimate", {
+      method: "POST",
+      body: JSON.stringify(input),
+    });
+  },
+
+  async verifyTask(taskId: string, outcome: "PASS" | "FAIL") {
+    const raw = await apiFetch<RawTask>(`/v1/jobs/${taskId}/verify`, {
+      method: "POST",
+      body: JSON.stringify({ outcome }),
+    });
+    return toTask(raw);
+  },
+
+  async acceptTask(taskId: string) {
+    const raw = await apiFetch<RawTask>(`/v1/jobs/${taskId}/accept`, { method: "POST" });
+    return toTask(raw);
+  },
+
+  async rejectTask(taskId: string, reason?: string) {
+    const raw = await apiFetch<RawTask>(`/v1/jobs/${taskId}/reject`, {
+      method: "POST",
+      body: JSON.stringify(reason ? { reason } : {}),
+    });
+    return toTask(raw);
   },
 };

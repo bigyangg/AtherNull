@@ -12,6 +12,7 @@
 //   psql ... -f packages/database/migrations/0002_platform_tables.sql
 //   psql ... -f packages/database/migrations/0003_tasks_agent_profile.sql
 //   psql ... -f packages/database/migrations/0004_task_reproducibility_snapshot.sql
+//   psql ... -f packages/database/migrations/0005_verification_runs_task_fk.sql
 // Override with TEST_DATABASE_URL if your setup differs.
 //
 // Env vars must be set before any app-dependent module loads (auth.ts reads
@@ -289,6 +290,13 @@ describe("tenant authorization", () => {
       headers: { cookie: removedUser.jar.header },
     });
     assert.equal(fundAfter.statusCode, 403, `removed member must not be able to fund jobs: ${fundAfter.body}`);
+
+    const acceptAfter = await app.inject({
+      method: "POST",
+      url: `/v1/jobs/${taskId}/accept`,
+      headers: { cookie: removedUser.jar.header },
+    });
+    assert.equal(acceptAfter.statusCode, 403, `removed member must not be able to accept jobs: ${acceptAfter.body}`);
   });
 
   test("one organization cannot access another's project/task", async () => {
@@ -342,6 +350,48 @@ describe("tenant authorization", () => {
       headers: { cookie: ownerB.jar.header },
     });
     assert.equal(crossFund.statusCode, 404, `org B must not be able to fund org A's task: ${crossFund.body}`);
+
+    const crossVerify = await app.inject({
+      method: "POST",
+      url: `/v1/jobs/${taskA}/verify`,
+      headers: { cookie: ownerB.jar.header },
+      payload: { outcome: "PASS" },
+    });
+    assert.equal(crossVerify.statusCode, 404, `org B must not be able to verify org A's task: ${crossVerify.body}`);
+
+    const crossAccept = await app.inject({
+      method: "POST",
+      url: `/v1/jobs/${taskA}/accept`,
+      headers: { cookie: ownerB.jar.header },
+    });
+    assert.equal(crossAccept.statusCode, 404, `org B must not be able to accept org A's task: ${crossAccept.body}`);
+
+    const crossReject = await app.inject({
+      method: "POST",
+      url: `/v1/jobs/${taskA}/reject`,
+      headers: { cookie: ownerB.jar.header },
+    });
+    assert.equal(crossReject.statusCode, 404, `org B must not be able to reject org A's task: ${crossReject.body}`);
+
+    // Estimate has no :id — cross-tenant targeting means pricing against
+    // another org's agentProfileId, which must 400 the same way job
+    // creation with a cross-org agentProfileId already does.
+    const crossEstimate = await app.inject({
+      method: "POST",
+      url: "/v1/jobs/estimate",
+      headers: { cookie: ownerB.jar.header },
+      payload: {
+        agentProfileId: agentProfileA,
+        objective: "Add a health check endpoint",
+        acceptanceCriteria: ["Returns 200"],
+        budgetMinor: 1000,
+      },
+    });
+    assert.equal(
+      crossEstimate.statusCode,
+      400,
+      `org B must not be able to price against org A's agent profile: ${crossEstimate.body}`,
+    );
   });
 
   test("concurrent funding yields one QUEUED task and one payment intent", async () => {

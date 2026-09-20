@@ -143,6 +143,8 @@ export async function internalRoutes(app: FastifyInstance) {
       executionId: execution.id,
       organizationId: task.organization_id,
       repositorySnapshot: `${project?.permitted_repository ?? "unknown"}@${task.repository_revision}`,
+      objective: task.requirements,
+      acceptanceCriteria: Array.isArray(task.acceptance_criteria) ? task.acceptance_criteria : [],
       agentProfileVersion: task.agent_profile_config_revision,
       resolvedModel: routing.resolvedModel,
       routingTier: routing.routingTier,

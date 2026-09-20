@@ -1,0 +1,36 @@
+.flow{padding:24px 28px 28px;border-top:1px solid #e4e4e9;background:#fff}
+.heading{display:flex;align-items:baseline;justify-content:space-between;gap:24px;margin-bottom:21px}
+.heading span{color:#554ce4;font-size:10px;font-weight:800;letter-spacing:.1em;text-transform:uppercase;white-space:nowrap}
+.heading p{max-width:570px;margin:0;color:#52525e;font-size:13px;font-weight:550;line-height:1.45;text-align:right}
+.canvas{display:grid;grid-template-columns:minmax(0,.95fr) minmax(0,1.25fr) minmax(0,.95fr);align-items:stretch;gap:16px}
+.intake,.handoff{position:relative;min-width:0;padding:20px 17px 18px;border:1px solid #e8e7ed;border-radius:10px;background:#fcfcfd}
+.transfer{position:absolute;z-index:1;top:50%;right:-12px;display:grid;place-items:center;width:22px;height:22px;transform:translateY(-50%);border:1px solid #e8e7ed;border-radius:50%;background:#fff;color:#73717e;font-size:14px}
+.label{display:block;color:#777483;font-size:10px;font-weight:750;letter-spacing:.065em;text-transform:uppercase}
+.issue{display:flex;flex-direction:column;gap:7px;margin-top:27px}
+.issue span{color:#5b52d9;font-size:11px;font-weight:750}
+.issue strong{color:#202028;font-size:19px;font-weight:700;letter-spacing:-.045em;line-height:1.15}
+.sources{display:flex;flex-wrap:wrap;gap:7px;margin-top:26px}
+.sources span{display:inline-flex;align-items:center;gap:5px;padding:6px 8px;border:1px solid #e9e8ef;border-radius:5px;background:#fff;color:#64636d;font-size:10px;font-weight:550}
+.sources svg{width:11px;height:11px}
+.work{position:relative;min-width:0;padding:18px 20px 19px;border:1px solid #292a34;border-radius:10px;background:#1d1e27;color:#fff;box-shadow:0 12px 24px rgba(25,25,36,.12)}
+.workHeader{display:flex;justify-content:space-between;gap:12px;padding-bottom:14px;border-bottom:1px solid #3a3b46;color:#fff;font-size:10px;font-weight:750;letter-spacing:.035em;text-transform:uppercase}
+.workHeader .runStatus{display:flex;align-items:center;gap:7px;max-width:64%;color:#c3c1d0;font-weight:550;letter-spacing:0;text-align:right;text-transform:none}
+.runStatus i{flex:none;width:6px;height:6px;border-radius:50%;background:#8d83ff;box-shadow:0 0 0 3px rgba(141,131,255,.18);animation:runPulse 1.6s ease-in-out infinite}
+.workRows{position:relative;display:flex;flex-direction:column;gap:17px;margin-top:17px}
+.progress{position:absolute;top:12px;bottom:12px;left:10px;width:1px;background:#484955}
+.progress span{position:absolute;inset:0;background:#a89fff;transform:scaleY(0);transform-origin:top}
+.workRow{position:relative;display:flex;align-items:center;gap:13px;color:#e5e5ec;font-size:12px;font-weight:550}
+.check{display:grid;place-items:center;flex:none;width:21px;height:21px;border:1px solid #575967;border-radius:50%;background:#2d2f3a;color:#8b8d9d}
+.check svg{width:12px;height:12px;stroke-width:2}
+.handoff{display:flex;flex-direction:column}
+.pull{display:flex;align-items:center;gap:11px;margin-top:27px}
+.pull>svg{flex:none;width:24px;height:24px;color:#5c54d7;stroke-width:1.6}
+.pull div{display:flex;flex-direction:column;gap:5px}
+.pull span{color:#777483;font-size:11px;font-weight:650}
+.pull strong{color:#202028;font-size:16px;font-weight:700;letter-spacing:-.04em;line-height:1.2}
+.handoff p{max-width:245px;margin:17px 0 0;color:#64636d;font-size:11px;font-weight:550;line-height:1.55}
+.reviewStatus{align-self:flex-start;margin-top:auto;padding:6px 9px;border:1px solid #e6e6eb;border-radius:5px;background:#f4f4f7;color:#686871;font-size:10px;font-weight:750}
+@keyframes runPulse{50%{opacity:.4;box-shadow:0 0 0 6px rgba(141,131,255,0)}}
+@media(max-width:860px){.canvas{grid-template-columns:1fr;gap:14px}.transfer{top:auto;right:calc(50% - 11px);bottom:-19px;transform:none;rotate:90deg}.heading{align-items:flex-start;flex-direction:column;gap:8px}.heading p{text-align:left}.intake,.handoff,.work{padding:18px}.issue,.pull{margin-top:17px}.sources{margin-top:18px}.handoff p{margin-top:12px}.reviewStatus{margin-top:18px}}
+@media(max-width:600px){.flow{padding:21px 14px 24px}.heading p{font-size:12px}.issue strong{font-size:18px}}
+@media(prefers-reduced-motion:reduce){.progress span{transform:none!important}.check{border-color:#cbc7ff;background:#cbc7ff;color:#28206a}.reviewStatus{border-color:#cde9d2;background:#eff9f1;color:#246238}.runStatus i{animation:none}}

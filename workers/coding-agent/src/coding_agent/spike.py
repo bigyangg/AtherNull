@@ -27,42 +27,11 @@ from openhands.sdk import LLM, Agent, Conversation, Tool
 from openhands.tools.file_editor import FileEditorTool
 from openhands.tools.terminal import TerminalTool
 
+from coding_agent.llm import PROVIDER_API_KEY_ENV, resolve_api_key
+
 load_dotenv(Path(__file__).resolve().parents[2] / ".env")
 
 DEFAULT_MODEL = "anthropic/claude-sonnet-5"
-
-# Providers that need a key, mapped to the env var LiteLLM/OpenHands expect it
-# under. Extend this as we onboard providers — it's a lookup table, not policy.
-PROVIDER_API_KEY_ENV = {
-    "anthropic": "ANTHROPIC_API_KEY",
-    "openai": "OPENAI_API_KEY",
-    "azure": "AZURE_API_KEY",
-    "gemini": "GEMINI_API_KEY",
-    "vertex_ai": "GOOGLE_API_KEY",
-    "openrouter": "OPENROUTER_API_KEY",
-    "groq": "GROQ_API_KEY",
-    "mistral": "MISTRAL_API_KEY",
-    "deepseek": "DEEPSEEK_API_KEY",
-    "together_ai": "TOGETHER_API_KEY",
-    "fireworks_ai": "FIREWORKS_API_KEY",
-    # NVIDIA Build / NIM: OpenAI-compatible catalog at integrate.api.nvidia.com.
-    # LiteLLM's "nvidia_nim/<model>" prefix routes there automatically —
-    # no api_base override needed for the default hosted endpoint.
-    "nvidia_nim": "NVIDIA_NIM_API_KEY",
-    # "ollama" and other local runtimes intentionally omitted: no key needed.
-}
-
-
-def resolve_api_key(model: str) -> str | None:
-    """LLM_API_KEY always wins; otherwise look up the provider prefix in
-    PROVIDER_API_KEY_ENV. A provider not in the table (e.g. a local runtime)
-    is assumed not to need a key rather than treated as an error."""
-    override = os.getenv("LLM_API_KEY")
-    if override:
-        return override
-    provider = model.split("/", 1)[0]
-    env_var = PROVIDER_API_KEY_ENV.get(provider)
-    return os.getenv(env_var) if env_var else None
 
 TASK = (
     "In this repository, add a function `add(a, b)` to src/math_utils.py that "

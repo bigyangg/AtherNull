@@ -20,6 +20,8 @@ export const InternalWorkDispatchSchema = z.object({
   executionId: z.string(),
   organizationId: z.string(),
   repositorySnapshot: z.string(), // artifact://...
+  objective: z.string(),
+  acceptanceCriteria: z.array(z.string()),
   agentProfileVersion: z.number().int(),
   resolvedModel: z.string(),
   routingTier: z.string(),
@@ -30,3 +32,42 @@ export const InternalWorkDispatchSchema = z.object({
   policyVersion: z.string(),
 });
 export type InternalWorkDispatch = z.infer<typeof InternalWorkDispatchSchema>;
+
+// POST /v1/jobs/estimate — pre-funding cost quote. Mirrors the fields of
+// CreateJobRequestSchema that actually feed routing (no projectId/
+// repositoryRevision/currency: those don't affect model choice or cost).
+export const EstimateJobRequestSchema = z.object({
+  agentProfileId: z.string(),
+  objective: z.string(),
+  acceptanceCriteria: z.array(z.string()),
+  budgetMinor: z.number().int().nonnegative(),
+});
+export type EstimateJobRequest = z.infer<typeof EstimateJobRequestSchema>;
+
+export const EstimateJobResponseSchema = z.object({
+  tier: z.string(),
+  model: z.string(),
+  score: z.number(),
+  reason: z.string(),
+  costCeilingMinor: z.number().int().nullable(),
+});
+export type EstimateJobResponse = z.infer<typeof EstimateJobResponseSchema>;
+
+// POST /v1/jobs/:id/verify — a manual, privileged-reviewer gate standing in
+// for Phase 4's independent verifier (services/verifier has no
+// implementation yet). Recording who/what verified separately from the
+// worker's own completion claim is what PLAN.md's "a worker reports
+// results; it cannot self-approve" non-negotiable requires.
+export const VerifyJobRequestSchema = z.object({
+  outcome: z.enum(["PASS", "FAIL"]),
+  verifierVersion: z.string().default("manual-v1"),
+  tests: z.array(z.object({ name: z.string(), passed: z.boolean() })).default([]),
+  evidence: z.record(z.string(), z.unknown()).default({}),
+});
+export type VerifyJobRequest = z.infer<typeof VerifyJobRequestSchema>;
+
+// POST /v1/jobs/:id/reject
+export const RejectJobRequestSchema = z.object({
+  reason: z.string().optional(),
+});
+export type RejectJobRequest = z.infer<typeof RejectJobRequestSchema>;

@@ -38,7 +38,7 @@ export default function WhitepaperPage() {
           <span className={styles.kicker}>02 / The task</span>
           <h2>Make the contract of work explicit.</h2>
           <p>AtherNull’s proposed unit of work is a task. It connects an outcome to a repository, constraints, a definition of done, and a maximum budget. That structure makes the agent’s assignment understandable before it starts and the result judgeable when it finishes.</p>
-          <p>The task is also where the lifecycle belongs: requested, funded, running, verifying, awaiting review, and either accepted or returned. The agent can report progress, but it should not control the state transitions that authorize acceptance or payment.</p>
+          <p>The task's lifecycle follows the same shape end to end: estimate the cost, approve and fund the budget, execute the work, verify the result independently, and settle — accept and release payment, or reject and refund. The agent can report progress, but it should not control the state transitions that authorize acceptance or payment.</p>
         </section>
 
         <section>

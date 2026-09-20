@@ -79,7 +79,7 @@ export default function DocsPage() {
         <section id="connections">
           <span className={styles.kicker}>05 / Context</span>
           <h2>Bring your tools into the task.</h2>
-          <p>Repository, issue, and document connections are on the roadmap. GitHub, GitLab, Linear, Jira, and Notion are examples of the tools the product is being designed around, not live app connections today.</p>
+          <p>Repository, issue, conversation, document, and internal-tool connections are on the roadmap. GitHub, GitLab, Linear, Jira, Notion, Slack, and MCP are examples of the tools and protocols the product is being designed around, not live connections today.</p>
           <p>Until these connections ship, the safest way to understand AtherNull is as a developing task system with a tested coding-engine prototype, not as a service that already acts across your accounts.</p>
         </section>
 

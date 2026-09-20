@@ -5,7 +5,13 @@ requires-python = ">=3.12"
 dependencies = [
     "openhands-sdk==1.42.1",
     "openhands-tools==1.42.1",
+    # No release of openhands-workspace exactly matches 1.42.1 (nearest are
+    # 1.41.0/1.49.2) — pinned to the closest version confirmed by install +
+    # import smoke test against the pinned SDK, not guessed. See
+    # workers/coding-agent/README.md.
+    "openhands-workspace==1.41.0",
     "python-dotenv==1.2.2",
+    "httpx==0.28.1",
 ]
 
 [project.optional-dependencies]

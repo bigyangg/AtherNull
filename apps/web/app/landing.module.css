@@ -48,3 +48,30 @@
 .footerColumn a{color:#4d4b57;font-size:14px;font-weight:550}
 .footerBottom{color:#62616b;font-size:12px}
 @media(max-width:760px){.workflowLead>p,.integrationsHead>p{font-size:16px}.integrationFrameBottom{font-size:11px}}
+
+/* Seven compact connection cards, with the same readable rhythm at every width. */
+.integrationGrid{grid-template-columns:repeat(7,minmax(0,1fr));gap:10px;padding:24px 24px 44px}
+.integrationTile{min-width:0;min-height:132px;padding:17px;border-radius:12px}
+.integrationIcon{width:36px;height:36px;margin-bottom:17px;border-radius:9px}
+.integrationTile svg{width:17px;height:17px}
+.integrationTile strong{font-size:15px}
+.integrationTile span{font-size:12px}
+@media(max-width:980px){.integrationGrid{grid-template-columns:repeat(4,minmax(0,1fr))}}
+@media(max-width:600px){.integrationGrid{grid-template-columns:repeat(2,minmax(0,1fr));gap:9px;padding:14px 14px 40px}.integrationTile{min-height:112px;padding:14px}.integrationIcon{width:32px;height:32px;margin-bottom:13px}.integrationTile svg{width:16px;height:16px}}
+
+/* Connections are grouped by the job they do, not presented as a logo wall. */
+.integrationGrid{grid-template-columns:repeat(3,minmax(0,1fr));align-items:stretch;gap:10px;padding:20px 20px 44px}
+.integrationGroup{display:flex;flex-direction:column;min-width:0;padding:17px;border:1px solid #e6e4ee;border-radius:13px;background:#fff;box-shadow:0 2px 5px rgba(23,22,41,.025)}
+.integrationGroupHeading{display:flex;justify-content:space-between;align-items:baseline;gap:10px;margin-bottom:15px;padding-bottom:13px;border-bottom:1px solid #eeeef2}
+.integrationGroupHeading span{color:#5143c8;font-size:11px;font-weight:800;letter-spacing:.04em;text-transform:uppercase;white-space:nowrap}
+.integrationGroupHeading small{color:#6e6d79;font-size:11px;font-weight:550;text-align:right}
+.integrationGroupCards{display:flex;flex:1;flex-direction:column;gap:8px}
+.integrationTile{flex:1;display:flex;flex-direction:row;align-items:center;gap:11px;min-height:61px;padding:10px 12px;border-radius:9px;background:#fbfbfe;box-shadow:none}
+.integrationTile:hover{transform:translateX(3px);box-shadow:0 7px 16px rgba(69,58,190,.07)}
+.integrationIcon{flex:none;width:33px;height:33px;margin:0;border-radius:8px}
+.integrationTile svg{width:16px;height:16px}
+.integrationTile strong,.integrationTile span{display:block;margin:0;line-height:1.3}
+.integrationTile strong{font-size:14px}
+.integrationTile span{margin-top:3px;font-size:11px}
+@media(max-width:980px){.integrationGrid{grid-template-columns:repeat(2,minmax(0,1fr))}.integrationGroup:last-child{grid-column:1/-1}.integrationGroup:last-child .integrationGroupCards{flex-direction:row}}
+@media(max-width:600px){.integrationGrid{grid-template-columns:1fr;gap:9px;padding:14px 14px 40px}.integrationGroup{padding:14px}.integrationGroup:last-child{grid-column:auto}.integrationGroupCards,.integrationGroup:last-child .integrationGroupCards{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.integrationTile{flex-direction:column;align-items:flex-start;min-height:101px;padding:11px}.integrationIcon{width:31px;height:31px}.integrationTile svg{width:16px;height:16px}.integrationGroup:nth-child(2) .integrationTile:last-child{grid-column:1/-1;flex-direction:row;align-items:center;min-height:54px}.integrationGroupHeading{margin-bottom:12px;padding-bottom:11px}}

@@ -6,6 +6,7 @@ import { Separator } from "@/components/ui/separator";
 import { StatusBadge } from "@/components/status-badge";
 import { BudgetMeter } from "@/components/workspace/budget-meter";
 import { ExecutionList } from "@/components/tasks/execution-list";
+import { ReviewPanel } from "@/components/tasks/review-panel";
 import { useTask } from "@/lib/hooks/use-task";
 
 export default function TaskStatusPage() {
@@ -62,6 +63,8 @@ export default function TaskStatusPage() {
           currency={task.currency}
         />
       </div>
+
+      <ReviewPanel task={task} />
 
       <Separator className="mb-6" />
 

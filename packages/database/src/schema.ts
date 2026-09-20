@@ -82,6 +82,21 @@ export interface UsageEventsTable {
   created_at: Timestamp;
 }
 
+export interface VerificationRunsTable {
+  id: Generated<string>;
+  // Nullable: 0005_verification_runs_task_fk.sql added these after the table
+  // already existed, and legacy rows (from before any task/execution link
+  // existed) never had them.
+  task_id: string | null;
+  execution_id: string | null;
+  artifact_hash: string | null; // no artifact pipeline wired up yet (0005)
+  verifier_version: string;
+  tests: Generated<unknown>; // jsonb, default '[]'
+  outcome: string;
+  evidence: Generated<unknown>; // jsonb, default '{}'
+  created_at: Timestamp;
+}
+
 export interface PaymentIntentsTable {
   id: Generated<string>;
   job_id: string;
@@ -114,6 +129,7 @@ export interface Database {
   tasks: TasksTable;
   executions: ExecutionsTable;
   usage_events: UsageEventsTable;
+  verification_runs: VerificationRunsTable;
   payment_intents: PaymentIntentsTable;
   member: MemberTable;
 }

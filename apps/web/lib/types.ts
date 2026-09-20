@@ -140,9 +140,29 @@ export interface Task {
   updatedAt: string;
 }
 
+export interface VerificationRun {
+  id: string;
+  taskId: string | null;
+  executionId: string | null;
+  verifierVersion: string;
+  tests: { name: string; passed: boolean }[];
+  outcome: "PASS" | "FAIL";
+  evidence: Record<string, unknown>;
+  createdAt: string;
+}
+
 export interface TaskDetail extends Task {
   executions: Execution[];
+  verificationRuns: VerificationRun[];
   budgetSpentMinor: number;
+}
+
+export interface EstimateResult {
+  tier: string;
+  model: string;
+  score: number;
+  reason: string;
+  costCeilingMinor: number | null;
 }
 
 export interface AgentProfile {

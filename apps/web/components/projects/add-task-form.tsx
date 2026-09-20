@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { useAgentProfiles } from "@/lib/hooks/use-agent-profiles";
-import { useCreateTask, useFundTask } from "@/lib/hooks/use-tasks";
+import { useCreateTask, useEstimateTask, useFundTask } from "@/lib/hooks/use-tasks";
 
 function parseAcceptanceCriteria(text: string): string[] {
   return text
@@ -26,6 +26,7 @@ export function AddTaskForm({
   const router = useRouter();
   const createTask = useCreateTask();
   const fundTask = useFundTask();
+  const estimateTask = useEstimateTask();
   const { data: agentProfiles } = useAgentProfiles();
 
   const [repositoryRevision, setRepositoryRevision] = useState(defaultRevision);
@@ -41,6 +42,20 @@ export function AddTaskForm({
     agentProfileId.length > 0 &&
     !createTask.isPending &&
     !fundTask.isPending;
+
+  async function handlePreviewEstimate() {
+    setError(null);
+    try {
+      await estimateTask.mutateAsync({
+        agentProfileId,
+        objective: objective.trim(),
+        acceptanceCriteria: parseAcceptanceCriteria(acceptanceCriteria),
+        budgetMinor: Math.round(parseFloat(maxBudgetUsd || "0") * 100),
+      });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Something went wrong.");
+    }
+  }
 
   async function handleSubmit() {
     setError(null);
@@ -107,6 +122,23 @@ export function AddTaskForm({
           value={maxBudgetUsd}
           onChange={(event) => setMaxBudgetUsd(event.target.value)}
         />
+      </div>
+      <div className="flex flex-col gap-2">
+        <Button
+          type="button"
+          variant="outline"
+          disabled={objective.trim().length === 0 || agentProfileId.length === 0 || estimateTask.isPending}
+          onClick={handlePreviewEstimate}
+          className="self-start"
+        >
+          {estimateTask.isPending ? "Estimating…" : "Preview estimate"}
+        </Button>
+        {estimateTask.data && (
+          <p className="rounded-lg border border-border bg-muted/40 p-3 text-sm text-muted-foreground">
+            <span className="font-medium text-foreground">{estimateTask.data.tier}</span> tier ·{" "}
+            {estimateTask.data.model} — {estimateTask.data.reason}
+          </p>
+        )}
       </div>
       {error && <p className="text-sm text-destructive">{error}</p>}
       <Button disabled={!canSubmit} onClick={handleSubmit} className="self-end">

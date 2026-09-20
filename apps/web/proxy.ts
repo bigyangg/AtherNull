@@ -15,24 +15,18 @@ const PUBLIC_PATHS = ["/", "/docs", "/whitepaper", "/privacy-policy", "/refund-p
 
 export function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
+  const isPublicPath = PUBLIC_PATHS.includes(pathname);
+  const landingOnly = process.env.LANDING_ONLY_MODE === "true";
 
-  // Pre-launch flag: apps/api isn't deployed alongside this yet, so
-  // sign-in/sign-up/projects would only ever show mock data or a dead auth
-  // form. Bounce everything but the marketing page (and the waitlist, which
-  // only needs Resend, not apps/api) back to "/" until the backend is live.
-  // Unset (or "false") restores normal routing.
-  if (
-    process.env.LANDING_ONLY_MODE === "true" &&
-    pathname !== "/" &&
-    pathname !== "/waitlist"
-  ) {
+  // Until apps/api is live, keep account/product routes closed. Marketing,
+  // policy, and contact pages are public and don't depend on the API.
+  if (landingOnly && !isPublicPath) {
     return NextResponse.redirect(new URL("/", request.url));
   }
 
   const isAuthPath = AUTH_PATHS.some(
     (path) => pathname === path || pathname.startsWith(`${path}/`),
   );
-  const isPublicPath = PUBLIC_PATHS.includes(pathname);
 
   // Cookie presence only — an optimistic check to avoid a DB round trip on
   // every navigation. The real session is validated server-side wherever it
@@ -46,7 +40,7 @@ export function proxy(request: NextRequest) {
     return NextResponse.redirect(url);
   }
 
-  if (sessionCookie && pathname === "/") {
+  if (sessionCookie && pathname === "/" && !landingOnly) {
     return NextResponse.redirect(new URL("/projects", request.url));
   }
 
