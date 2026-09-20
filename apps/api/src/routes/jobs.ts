@@ -4,6 +4,7 @@ import {
   type TaskStatus,
 } from "@athernull/contracts";
 import type { FastifyInstance } from "fastify";
+import { sql } from "kysely";
 import { z } from "zod";
 
 import { db } from "../db.js";
@@ -210,7 +211,18 @@ export async function jobRoutes(app: FastifyInstance) {
         .orderBy("created_at", "desc")
         .execute();
 
-      reply.send({ ...task, executions });
+      // No spend if there are no executions yet — left join + coalesce
+      // rather than a plain sum, which would return null for that case.
+      const spend = await db
+        .selectFrom("executions")
+        .leftJoin("usage_events", "usage_events.execution_id", "executions.id")
+        .select(({ fn }) => [
+          fn.coalesce(fn.sum<string>("usage_events.cost_minor"), sql<string>`0`).as("total"),
+        ])
+        .where("executions.task_id", "=", id)
+        .executeTakeFirstOrThrow();
+
+      reply.send({ ...task, executions, budgetSpentMinor: Number(spend.total) });
     } catch (err) {
       if (sendHttpError(reply, err)) return;
       if (err instanceof z.ZodError) {

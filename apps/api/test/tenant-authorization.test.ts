@@ -26,6 +26,11 @@ process.env.WEB_APP_URL ??= "http://localhost:3000";
 // Unset so email.ts's lazy Resend client stays null and just logs instead of
 // trying to send real mail.
 delete process.env.RESEND_API_KEY;
+// This suite signs up/in more real users in one run than production's
+// 5/60s sign-up and sign-in rate limits allow — inject() has no resolvable
+// client IP, so every call shares one bucket (see auth.ts). Raised for this
+// process only.
+process.env.AUTH_TEST_RATE_LIMIT_MAX ??= "50";
 
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
@@ -200,6 +205,36 @@ function createJobPayload(projectId: string, agentProfileId: string) {
 // --- tests --------------------------------------------------------------
 
 describe("tenant authorization", () => {
+  test("a freshly signed-up user has a working org with no explicit org action", async () => {
+    const suffix = randomUUID();
+    // No createOrgAsOwner/setActiveOrg call here — auth.ts's databaseHooks
+    // (user.create.after + session.create.before) are what's under test:
+    // sign-up alone must be enough for every /v1/* route to work.
+    const user = await signUpVerifiedAndSignIn(
+      `fresh-${suffix}@example.com`,
+      "correct horse battery",
+      "Fresh User",
+    );
+
+    const listProjects = await app.inject({
+      method: "GET",
+      url: "/v1/projects",
+      headers: { cookie: user.jar.header },
+    });
+    assert.equal(listProjects.statusCode, 200, `expected 200: ${listProjects.body}`);
+    assert.deepEqual(JSON.parse(listProjects.body), []);
+
+    const listAgentProfiles = await app.inject({
+      method: "GET",
+      url: "/v1/agent-profiles",
+      headers: { cookie: user.jar.header },
+    });
+    assert.equal(listAgentProfiles.statusCode, 200, `expected 200: ${listAgentProfiles.body}`);
+    const profiles = JSON.parse(listAgentProfiles.body) as { policy_version: string }[];
+    assert.equal(profiles.length, 1, "the auto-created org must have its seeded default agent profile");
+    assert.equal(profiles[0]?.policy_version, "v1");
+  });
+
   test("removed member cannot list/create/fund jobs", async () => {
     const suffix = randomUUID();
     const owner = await signUpVerifiedAndSignIn(`owner-${suffix}@example.com`, "correct horse battery", "Owner");

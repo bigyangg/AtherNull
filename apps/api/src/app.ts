@@ -3,6 +3,7 @@ import { fromNodeHeaders } from "better-auth/node";
 import Fastify, { type FastifyInstance } from "fastify";
 
 import { auth } from "./auth.js";
+import { agentProfileRoutes } from "./routes/agent-profiles.js";
 import { internalRoutes } from "./routes/internal.js";
 import { jobRoutes } from "./routes/jobs.js";
 import { projectRoutes } from "./routes/projects.js";
@@ -33,6 +34,7 @@ export async function buildApp(opts: { logger?: boolean } = {}): Promise<Fastify
   // claim/heartbeat/complete surface, gated by INTERNAL_API_TOKEN instead.
   await app.register(projectRoutes);
   await app.register(jobRoutes);
+  await app.register(agentProfileRoutes);
   await app.register(internalRoutes);
 
   // Better Auth owns everything under /api/auth/* (ADR-0004). Fastify hands the
