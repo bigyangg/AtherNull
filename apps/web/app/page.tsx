@@ -42,6 +42,9 @@ export default function LandingPage() {
             <Button asChild size="lg" className={styles.darkButton}><Link href="/waitlist">Join Waitlist <ArrowRight /></Link></Button>
             <a className={styles.textButton} href="#workflow">See the workflow <ArrowRight /></a>
           </div>
+          <noscript>
+            <style>{`[data-hero-copy],[data-hero-actions]{opacity:1}`}</style>
+          </noscript>
         </section>
 
         <section className={ownership.section} data-section>

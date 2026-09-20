@@ -58,5 +58,10 @@ export function proxy(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/((?!api|_next/static|_next/image|favicon.ico).*)"],
+  // Excludes any path with a file extension (images, fonts, icon.png,
+  // robots.txt, etc.) in addition to api/_next — otherwise an unauthenticated
+  // request for a static asset like /brand/*.png gets redirected to
+  // /sign-in, and whatever fetched it (e.g. next/image's optimizer) chokes
+  // trying to parse that HTML redirect as an image.
+  matcher: ["/((?!api|_next/static|_next/image|favicon.ico|.*\\..*).*)"],
 };

@@ -10,7 +10,7 @@ export function SiteHeader() {
     <header className={styles.nav}>
       <Link href="/" className={styles.brand} aria-label="AtherNull home">
         <span className={styles.logoCrop}>
-          <Image src="/brand/athernull-dark.png" alt="" width={512} height={512} priority />
+          <Image src="/brand/athernull-icon.png" alt="" width={28} height={28} priority />
         </span>
         <span>Ather<span>Null</span></span>
       </Link>

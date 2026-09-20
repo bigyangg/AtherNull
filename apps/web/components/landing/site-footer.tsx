@@ -36,7 +36,7 @@ export function SiteFooter() {
         <div className={styles.footerBrand}>
           <Link href="/" aria-label="AtherNull home">
             <span className={styles.logoCrop}>
-              <Image src="/brand/athernull-dark.png" alt="" width={512} height={512} />
+              <Image src="/brand/athernull-icon.png" alt="" width={28} height={28} />
             </span>
             <span>Ather<span>Null</span></span>
           </Link>
