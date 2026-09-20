@@ -11,7 +11,7 @@ const AUTH_PATHS = [
 ];
 
 // Public marketing routes, reachable with or without a session.
-const PUBLIC_PATHS = ["/"];
+const PUBLIC_PATHS = ["/", "/docs", "/whitepaper", "/privacy-policy", "/refund-policy", "/contact"];
 
 export function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;

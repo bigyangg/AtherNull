@@ -1,0 +1,40 @@
+.hero{width:min(760px,calc(100% - 48px));margin:0 auto;padding:88px 0 36px}
+.hero span{color:#554ce4;font-size:11px;font-weight:700;letter-spacing:.11em;text-transform:uppercase}
+.hero h1{margin:14px 0 0;font-size:clamp(34px,4.4vw,52px);font-weight:500;letter-spacing:-.07em;line-height:1.03}
+.hero p{max-width:560px;margin:18px 0 0;color:#74747e;font-size:15px;line-height:1.65}
+.meta{display:flex;gap:16px;margin-top:22px;color:#9998a2;font-size:12px;font-family:ui-monospace,monospace}
+
+.content{width:min(760px,calc(100% - 48px));margin:0 auto;padding:0 0 130px}
+.content section{padding:30px 0;border-top:1px solid var(--line)}
+.content section:first-child{border-top:0;padding-top:0}
+.content h2{margin:0 0 13px;font-size:19px;font-weight:600;letter-spacing:-.03em}
+.content p{margin:0 0 13px;color:#4c4c55;font-size:14.5px;line-height:1.75}
+.content p:last-child{margin-bottom:0}
+.content ul{margin:0 0 13px;padding-left:20px;color:#4c4c55;font-size:14.5px;line-height:1.75}
+.content li{margin-bottom:7px}
+.content li:last-child{margin-bottom:0}
+.content a{color:#554ce4;text-decoration:underline;text-underline-offset:3px}
+.content strong{color:#27272e;font-weight:600}
+
+.index{display:flex;flex-wrap:wrap;gap:10px 18px;margin-top:36px;padding-top:28px;border-top:1px solid var(--line)}
+.index a{color:#554ce4;font-size:13px;font-weight:600;text-decoration:none}
+.index a:hover{text-decoration:underline}
+
+.grid{display:grid;grid-template-columns:repeat(2,1fr);gap:1px;margin-top:8px;border:1px solid var(--line);border-radius:13px;overflow:hidden;background:var(--line)}
+.grid article{display:flex;flex-direction:column;gap:9px;padding:24px;background:#fff}
+.grid svg{width:18px;color:#5d54e7;stroke-width:1.6}
+.grid h3{margin:0;font-size:15px;letter-spacing:-.03em}
+.grid p{margin:0;color:#777780;font-size:13px;line-height:1.6}
+.grid small{color:#a09da8;font-size:11px;font-family:ui-monospace,monospace}
+
+.contactCard{display:flex;align-items:center;gap:16px;margin-top:8px;padding:22px 24px;border:1px solid var(--line);border-radius:13px;background:var(--mist)}
+.contactCard svg{flex-shrink:0;width:36px;height:36px;padding:9px;border:1px solid #e6e0f4;border-radius:10px;background:#f4f0fc;color:#7a66b4;stroke-width:1.5}
+.contactCard strong{display:block;font-size:14px}
+.contactCard span{display:block;margin-top:3px;color:#77717f;font-size:13px}
+
+@media(max-width:760px){
+  .hero{padding:64px 0 28px}
+  .content{padding-bottom:90px}
+  .grid{grid-template-columns:1fr}
+  .contactCard{flex-direction:column;align-items:flex-start;gap:12px}
+}

@@ -22,9 +22,13 @@ export function HeroTitle() {
     const sweep = root.current?.querySelector<HTMLElement>("[data-type-sweep]");
     if (!firstLine || !lead || !accent || !ending || !cursor || !sweep) return;
 
-    if (reduceMotion) return;
+    if (reduceMotion) {
+      gsap.set([firstLine, lead, accent, ending], { opacity: 1 });
+      return;
+    }
 
     gsap.set([firstLine, lead, accent, ending], { text: "" });
+    gsap.set([firstLine, lead, accent, ending], { opacity: 1 });
     gsap.set(cursor, { autoAlpha: 1 });
     gsap.set(sweep, { autoAlpha: 0, scaleX: 0, transformOrigin: "50% 50%" });
     gsap.timeline({ defaults: { ease: "none" } })
@@ -43,6 +47,9 @@ export function HeroTitle() {
       <span className={styles.line} aria-hidden="true"><span data-type-first>Software moves faster</span></span>
       <span className={styles.line} aria-hidden="true"><span data-type-lead>when </span><em data-type-accent>intent</em><span data-type-ending> is enough.</span><i className={styles.cursor} data-type-cursor /></span>
       <i className={styles.sweep} data-type-sweep aria-hidden="true" />
+      <noscript>
+        <style>{`[data-type-first],[data-type-lead],[data-type-accent],[data-type-ending]{opacity:1}`}</style>
+      </noscript>
     </h1>
   );
 }

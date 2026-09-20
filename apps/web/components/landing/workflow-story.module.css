@@ -1,0 +1,18 @@
+.storyPin{position:relative;height:100vh;min-height:620px;max-height:820px;margin-top:70px;overflow:hidden;border-radius:20px}
+.storyProgress{position:absolute;top:0;left:0;right:0;z-index:2;height:3px;background:#ecebff}
+.storyProgressFill{display:block;height:100%;width:100%;transform:scaleX(0);transform-origin:left;background:linear-gradient(90deg,#7a72ef,#5b52e6)}
+.storyTrack{display:flex;height:100%;width:300%;will-change:transform}
+.storyPanel{display:grid;grid-template-columns:.62fr .9fr;align-items:center;gap:clamp(32px,5vw,72px);width:calc(100% / 3);height:100%;padding:0 clamp(24px,5vw,88px)}
+.storyPanelText span{display:block;margin-bottom:16px;color:#8d8b98;font-family:ui-monospace,monospace;font-size:12px}
+.storyPanelText h3{margin:0;font-size:clamp(28px,3.1vw,42px);font-weight:500;letter-spacing:-.055em;line-height:1.02}
+.storyPanelText p{max-width:340px;margin:16px 0 0;color:#6b6b76;font-size:15px;line-height:1.6}
+.storyPanelVisual{position:relative;display:flex;flex-direction:column;height:clamp(380px,54vh,480px);border:1px solid #dedde5;border-radius:15px;background:linear-gradient(145deg,#fff,#fafaff);box-shadow:0 28px 60px rgba(45,42,100,.1);overflow:hidden}
+
+/* screenContent centers each screen's body within the fixed-height card, so
+   the shorter Review body doesn't leave dead space below it the way plain
+   top-aligned flow did. Shared with the legacy crossfade layout's markup,
+   where it stays a plain block (no ancestor gives it flex), so mobile is
+   untouched. */
+.screenContent{flex:1;min-height:0;display:flex;flex-direction:column;justify-content:center}
+
+@media(max-width:760px){.storyPin{display:none}}
