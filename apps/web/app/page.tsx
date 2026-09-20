@@ -47,7 +47,7 @@ export default function LandingPage() {
           </noscript>
         </section>
 
-        <section className={ownership.section} data-section>
+        <section id="ownership" className={ownership.section} data-section>
           <div className={ownership.intro}>
             <span>Built around ownership</span>
             <h2>You own the code.<br />You set the terms.</h2>
