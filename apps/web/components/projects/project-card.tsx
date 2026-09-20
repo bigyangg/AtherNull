@@ -1,8 +1,7 @@
 import Link from "next/link";
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { StatusBadge } from "@/components/status-badge";
-import type { Project } from "@/lib/types";
+import type { RepoProject } from "@/lib/types";
 
 function relativeTime(iso: string): string {
   const deltaMs = Date.now() - new Date(iso).getTime();
@@ -15,20 +14,20 @@ function relativeTime(iso: string): string {
   return `${Math.round(hours / 24)}d ago`;
 }
 
-export function ProjectCard({ project }: { project: Project }) {
+export function ProjectCard({ project }: { project: RepoProject }) {
   return (
-    <Link href={`/projects/${project.id}/workspace`}>
+    <Link href={`/projects/${project.id}`}>
       <Card className="transition-colors hover:border-primary/50">
         <CardHeader className="flex-row items-start justify-between space-y-0">
-          <CardTitle className="text-base">{project.name}</CardTitle>
-          <StatusBadge status={project.status} />
+          <CardTitle className="text-base">{project.permittedRepository}</CardTitle>
         </CardHeader>
         <CardContent className="flex items-center justify-between">
           <p className="line-clamp-1 text-sm text-muted-foreground">
-            {project.objective}
+            {project.revision ? `Pinned at ${project.revision}` : "Tracks default branch"}
+            {project.scope ? ` · ${project.scope}` : ""}
           </p>
           <span className="shrink-0 pl-4 text-xs text-muted-foreground">
-            Updated {relativeTime(project.updatedAt)}
+            Added {relativeTime(project.createdAt)}
           </span>
         </CardContent>
       </Card>

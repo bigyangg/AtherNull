@@ -6,10 +6,10 @@ import { FolderPlus, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { IconBadge } from "@/components/icon-badge";
 import { ProjectCard } from "@/components/projects/project-card";
-import { useProjects } from "@/lib/hooks/use-projects";
+import { useRepoProjects } from "@/lib/hooks/use-repo-projects";
 
 export default function ProjectsPage() {
-  const { data: projects, isLoading } = useProjects();
+  const { data: projects, isLoading } = useRepoProjects();
 
   return (
     <main className="mx-auto max-w-3xl px-6 py-10">
@@ -17,7 +17,7 @@ export default function ProjectsPage() {
         <div>
           <h1 className="text-xl font-semibold">Projects</h1>
           <p className="text-sm text-muted-foreground">
-            Everything Proto-col is building for you.
+            Repositories AtherNull is authorized to work on.
           </p>
         </div>
         <Button asChild>
@@ -35,7 +35,7 @@ export default function ProjectsPage() {
             <FolderPlus />
           </IconBadge>
           <p className="text-sm text-muted-foreground">
-            No projects yet. Describe what you want built to get started.
+            No projects yet. Import a repository to get started.
           </p>
           <Button asChild className="mt-1">
             <Link href="/projects/new">

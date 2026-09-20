@@ -97,6 +97,60 @@ export interface WorkspaceState {
   previewUrl: string;
 }
 
+// --- Real task-status dashboard model (apps/api's tasks/executions/agent_profiles) ---
+// Distinct from Project/WorkspaceState above, which back the mocked
+// "Create New" greenfield flow (lib/api/mock.ts) and are left as-is. A
+// RepoProject is a permitted repository (apps/api's `projects` table),
+// not a from-scratch app — see PLAN.md's "Import Repository" entry point.
+
+export interface RepoProject {
+  id: string;
+  permittedRepository: string;
+  revision: string | null;
+  scope: string | null;
+  createdAt: string;
+}
+
+export interface Execution {
+  id: string;
+  taskId: string;
+  attemptId: string;
+  status: string;
+  routingTier: string | null;
+  routingScore: number | null;
+  routingReason: string | null;
+  resolvedModel: string | null;
+  startedAt: string | null;
+  endedAt: string | null;
+  createdAt: string;
+}
+
+export interface Task {
+  id: string;
+  organizationId: string;
+  projectId: string;
+  agentProfileId: string;
+  repositoryRevision: string;
+  requirements: string;
+  acceptanceCriteria: string[];
+  maxBudgetMinor: number;
+  currency: string;
+  status: TaskStatus;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface TaskDetail extends Task {
+  executions: Execution[];
+  budgetSpentMinor: number;
+}
+
+export interface AgentProfile {
+  id: string;
+  policyVersion: string;
+  configRevision: number;
+}
+
 export function formatMinor(minor: number, currency: string): string {
   return (minor / 100).toLocaleString("en-US", {
     style: "currency",
