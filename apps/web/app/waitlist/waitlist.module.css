@@ -1,0 +1,16 @@
+.card{width:min(480px,calc(100% - 48px));margin:0 auto;padding:0 0 130px}
+.form{display:flex;flex-direction:column;gap:14px;padding:28px;border:1px solid var(--line);border-radius:16px;background:#fff;box-shadow:0 2px 6px rgba(23,22,41,.025)}
+.field{display:flex;flex-direction:column;gap:6px}
+.field label{color:#4c4c55;font-size:12.5px;font-weight:600;letter-spacing:-.01em}
+.field input{height:44px;padding:0 14px;border:1px solid var(--line);border-radius:10px;background:var(--mist);color:var(--ink);font-size:14.5px;font-family:inherit;transition:border-color .2s,background .2s}
+.field input:focus{outline:none;border-color:#a8a1f0;background:#fff}
+.field input::placeholder{color:#adacb4}
+.submit{height:46px;margin-top:4px;border:0;border-radius:999px;background:var(--ink);color:#fff;font-size:14px;font-weight:600;cursor:pointer;transition:background .2s}
+.submit:hover{background:#35353e}
+.submit:disabled{opacity:.6;cursor:default}
+.error{margin:0;color:#c23a3a;font-size:13px}
+.success{display:flex;flex-direction:column;gap:6px;padding:28px;border:1px solid var(--line);border-radius:16px;background:var(--mist);text-align:center}
+.success strong{font-size:16px;letter-spacing:-.03em}
+.success span{color:#74747e;font-size:13.5px;line-height:1.6}
+.note{margin:14px 0 0;color:#9998a2;font-size:12px;line-height:1.6;text-align:center}
+@media(max-width:760px){.card{padding-bottom:90px}}

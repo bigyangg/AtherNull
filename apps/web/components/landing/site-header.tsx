@@ -20,9 +20,8 @@ export function SiteHeader() {
         <Link href="/#principles">Principles</Link>
       </nav>
       <div className={styles.navActions}>
-        <Link className={styles.login} href="/sign-in">Log in</Link>
-        <Button asChild size="sm" className={styles.darkButton}>
-          <Link href="/sign-up">Request access <ArrowRight /></Link>
+        <Button asChild size="default" className={`${styles.darkButton} ${styles.navCta}`}>
+          <Link href="/waitlist">Join Waitlist <ArrowRight /></Link>
         </Button>
       </div>
     </header>

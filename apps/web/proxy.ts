@@ -11,16 +11,21 @@ const AUTH_PATHS = [
 ];
 
 // Public marketing routes, reachable with or without a session.
-const PUBLIC_PATHS = ["/", "/docs", "/whitepaper", "/privacy-policy", "/refund-policy", "/contact"];
+const PUBLIC_PATHS = ["/", "/docs", "/whitepaper", "/privacy-policy", "/refund-policy", "/contact", "/waitlist"];
 
 export function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
   // Pre-launch flag: apps/api isn't deployed alongside this yet, so
   // sign-in/sign-up/projects would only ever show mock data or a dead auth
-  // form. Bounce everything but the marketing page back to "/" until the
-  // backend is live. Unset (or "false") restores normal routing.
-  if (process.env.LANDING_ONLY_MODE === "true" && pathname !== "/") {
+  // form. Bounce everything but the marketing page (and the waitlist, which
+  // only needs Resend, not apps/api) back to "/" until the backend is live.
+  // Unset (or "false") restores normal routing.
+  if (
+    process.env.LANDING_ONLY_MODE === "true" &&
+    pathname !== "/" &&
+    pathname !== "/waitlist"
+  ) {
     return NextResponse.redirect(new URL("/", request.url));
   }
 
