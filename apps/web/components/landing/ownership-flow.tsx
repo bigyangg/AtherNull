@@ -14,7 +14,7 @@ const circuit = "M280 66 L440 158 L440 342 L280 434 L120 342 L120 158 Z";
 
 // Match node timing to distance traveled along the circuit.
 const edges = stages.map((stage, i) => {
-  const next = stages[(i + 1) % stages.length];
+  const next = stages[(i + 1) % stages.length]!;
   return Math.hypot(next.x - stage.x, next.y - stage.y);
 });
 const perimeter = edges.reduce((sum, edge) => sum + edge, 0);
