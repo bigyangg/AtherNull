@@ -1,0 +1,106 @@
+import type { ColumnType, Generated } from "kysely";
+
+// Typed from packages/database/migrations/0002_platform_tables.sql +
+// 0003_tasks_agent_profile.sql + 0004_task_reproducibility_snapshot.sql. Only
+// the tables apps/api's Phase 1 job engine touches are represented here — add
+// more as more of the platform gets a typed query path. Types only, no
+// connection/pool code, so importing this never pulls in a runtime DB
+// dependency for callers that just need the shape.
+//
+// ColumnType's three params are (select, insert, update) — used directly
+// (not nested inside Generated<>, which would double-wrap it) so a
+// timestamptz column can be selected as Date but written as Date | string.
+type Timestamp = ColumnType<Date, Date | string | undefined, Date | string>;
+type NullableTimestamp = ColumnType<Date | null, Date | string | null | undefined, Date | string | null>;
+
+export interface ProjectsTable {
+  id: Generated<string>;
+  organization_id: string;
+  permitted_repository: string;
+  revision: string | null;
+  scope: string | null;
+  owner_user_id: string;
+  created_at: Timestamp;
+}
+
+export interface AgentProfilesTable {
+  id: Generated<string>;
+  organization_id: string;
+  model_tiers: unknown; // jsonb — validate with ModelTierSchema.array() on read
+  policy_version: string;
+  tool_allowlist: Generated<unknown>; // jsonb, default '[]'
+  config_revision: Generated<number>;
+  created_at: Timestamp;
+}
+
+export interface TasksTable {
+  id: Generated<string>;
+  organization_id: string;
+  project_id: string;
+  agent_profile_id: string;
+  // Snapshotted at job creation (0004_task_reproducibility_snapshot.sql), not
+  // read live off agent_profiles — that table can change after a task
+  // references it, and a task must stay reproducible against what was
+  // actually approved.
+  repository_revision: string;
+  agent_profile_config_revision: number;
+  agent_policy_version: string;
+  requirements: string;
+  acceptance_criteria: Generated<unknown>; // jsonb, default '[]'
+  max_budget_minor: string; // bigint — Kysely/pg returns bigint as string by default
+  currency: string;
+  status: Generated<string>; // TaskStatus (packages/contracts) — text column, no DB-level enum
+  version: Generated<number>;
+  created_at: Timestamp;
+  updated_at: Timestamp;
+}
+
+export interface ExecutionsTable {
+  id: Generated<string>;
+  task_id: string;
+  attempt_id: Generated<string>;
+  lease_owner: string | null;
+  lease_expires_at: NullableTimestamp;
+  sandbox_id: string | null;
+  status: Generated<string>;
+  routing_tier: string | null;
+  routing_score: number | null;
+  routing_reason: string | null;
+  resolved_model: string | null;
+  started_at: NullableTimestamp;
+  ended_at: NullableTimestamp;
+  created_at: Timestamp;
+}
+
+export interface UsageEventsTable {
+  id: Generated<string>;
+  execution_id: string;
+  provider_request_id: string;
+  model: string;
+  tokens: number;
+  cost_minor: string;
+  created_at: Timestamp;
+}
+
+export interface PaymentIntentsTable {
+  id: Generated<string>;
+  job_id: string;
+  chain: string;
+  asset: string;
+  amount_minor: string;
+  actor: string;
+  idempotency_key: string;
+  chain_reference: string | null;
+  status: Generated<string>;
+  created_at: Timestamp;
+  updated_at: Timestamp;
+}
+
+export interface Database {
+  projects: ProjectsTable;
+  agent_profiles: AgentProfilesTable;
+  tasks: TasksTable;
+  executions: ExecutionsTable;
+  usage_events: UsageEventsTable;
+  payment_intents: PaymentIntentsTable;
+}

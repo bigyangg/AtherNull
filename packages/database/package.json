@@ -2,7 +2,16 @@
   "name": "@athernull/database",
   "version": "0.0.0",
   "private": true,
+  "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
   "scripts": {
-    "typecheck": "echo \"no TS sources yet\""
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "kysely": "^0.29.6"
+  },
+  "devDependencies": {
+    "typescript": "^7.0.2"
   }
 }
