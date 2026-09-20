@@ -1,62 +1,65 @@
 import Image from "next/image";
 import Link from "next/link";
-import { BookOpen, FileText, LogIn, Mail, RotateCcw, ShieldCheck } from "lucide-react";
-import type { ComponentType } from "react";
+import { ArrowUpRight } from "lucide-react";
 
-import styles from "@/app/landing.module.css";
+import styles from "./site-footer.module.css";
 
-const FOOTER_COLUMNS: { heading: string; links: { label: string; href: string; icon: ComponentType<{ strokeWidth?: number }> }[] }[] = [
+const FOOTER_COLUMNS = [
   {
-    heading: "Product",
+    heading: "Explore",
     links: [
-      { label: "Docs", href: "/docs", icon: BookOpen },
-      { label: "Whitepaper", href: "/whitepaper", icon: FileText },
+      { label: "How it works", href: "/#workflow" },
+      { label: "Integrations", href: "/#integrations" },
+      { label: "Documentation", href: "/docs" },
+      { label: "Whitepaper", href: "/whitepaper" },
     ],
   },
   {
-    heading: "Legal",
+    heading: "AtherNull",
     links: [
-      { label: "Refund policy", href: "/refund-policy", icon: RotateCcw },
-      { label: "Privacy policy", href: "/privacy-policy", icon: ShieldCheck },
+      { label: "Request access", href: "/waitlist" },
+      { label: "Contact", href: "/contact" },
+      { label: "Log in", href: "/sign-in" },
     ],
   },
   {
-    heading: "Company",
+    heading: "Policies",
     links: [
-      { label: "Contact", href: "/contact", icon: Mail },
-      { label: "Log in", href: "/sign-in", icon: LogIn },
+      { label: "Privacy policy", href: "/privacy-policy" },
+      { label: "Refund policy", href: "/refund-policy" },
     ],
   },
-];
+] as const;
 
 export function SiteFooter() {
   return (
     <footer className={styles.footer}>
-      <div className={styles.footerInner}>
-        <div className={styles.footerBrand}>
-          <Link href="/" aria-label="AtherNull home">
-            <span className={styles.logoCrop}>
-              <Image src="/brand/athernull-icon.png" alt="" width={28} height={28} />
-            </span>
+      <div className={styles.inner}>
+        <div className={styles.brandArea}>
+          <Link href="/" className={styles.brand} aria-label="AtherNull home">
+            <span className={styles.logo}><Image src="/brand/athernull-icon.png" alt="" width={34} height={34} /></span>
             <span>Ather<span>Null</span></span>
           </Link>
-          <p>Agent-executed engineering work, held in escrow until you approve it.</p>
+          <p>Describe the work. Set the terms. Review the proof.</p>
+          <span className={styles.brandNote}>A clearer way to work with coding agents.</span>
         </div>
-        <div className={styles.footerColumns}>
+
+        <nav className={styles.columns} aria-label="Footer navigation">
           {FOOTER_COLUMNS.map(({ heading, links }) => (
-            <div key={heading} className={styles.footerColumn}>
-              <span>{heading}</span>
-              {links.map(({ label, href, icon: Icon }) => (
-                <Link key={label} href={href}><Icon strokeWidth={1.6} aria-hidden />{label}</Link>
+            <div key={heading} className={styles.column}>
+              <h2>{heading}</h2>
+              {links.map(({ label, href }) => (
+                <Link key={label} href={href}>{label}<ArrowUpRight aria-hidden="true" /></Link>
               ))}
             </div>
           ))}
-        </div>
+        </nav>
       </div>
-      <div className={styles.footerBottom}>
+
+      <div className={styles.bottom}>
         <span>© {new Date().getFullYear()} AtherNull</span>
-        <span>athernull.io</span>
-        <span>AI agent orchestration platform</span>
+        <span>Built around human approval.</span>
+        <Link href="/contact">Questions? Get in touch <ArrowUpRight aria-hidden="true" /></Link>
       </div>
     </footer>
   );

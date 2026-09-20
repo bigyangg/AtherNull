@@ -29,3 +29,22 @@
 .integrationTile strong{margin-top:0;letter-spacing:-.03em}
 .integrationTile span{margin-top:3px}
 @media(max-width:760px){.integrationGrid{padding:16px 14px 34px;gap:10px}.integrationTile{min-height:0;padding:16px}.integrationIcon{width:38px;height:38px;margin-bottom:13px;border-radius:10px}.integrationTile svg{width:18px;height:18px}}
+
+/* Landing type hierarchy: readable at a glance, including the supporting copy. */
+.page{--muted:#555560;font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;-webkit-font-smoothing:antialiased}
+.navLinks a{color:#494953;font-size:14px;font-weight:550}
+.sectionLabel{font-size:12px;font-weight:750;letter-spacing:.06em}
+.workflow h2,.integrationsHead h2,.principlesHeading h2,.finalCta h2{font-weight:650;letter-spacing:-.06em;line-height:1.03}
+.workflowLead>p,.integrationsHead>p{color:#454550;font-size:17px;font-weight:500;line-height:1.6}
+.integrationFrameTop,.integrationFrameTop span:first-child,.integrationFrameTop span:last-child{font-size:12px}
+.integrationTile span{color:#5f5f6b;font-size:13px;font-weight:550}
+.integrationFrameBottom{font-size:13px}
+.principlesList h3{font-size:20px;font-weight:700;letter-spacing:-.03em}
+.principlesList p{max-width:330px;color:#555560;font-size:15px;font-weight:500;line-height:1.6}
+.principlesList small{color:#5143c8;font-size:12px;font-weight:700}
+.finalCta p{font-size:12px;letter-spacing:.06em}
+.footerBrand p{color:#555560;font-size:14px;font-weight:500}
+.footerColumn>span{color:#62606c;font-size:11px}
+.footerColumn a{color:#4d4b57;font-size:14px;font-weight:550}
+.footerBottom{color:#62616b;font-size:12px}
+@media(max-width:760px){.workflowLead>p,.integrationsHead>p{font-size:16px}.integrationFrameBottom{font-size:11px}}

@@ -11,18 +11,18 @@
 .center { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); display: flex; flex-direction: column; align-items: center; text-align: center; }
 .centerIcon { display: grid; place-items: center; width: 46px; height: 46px; margin-bottom: 13px; background: linear-gradient(145deg, #fff, #ede6fc); border: 1px solid #ded4f5; border-radius: 50%; color: #7955cb; box-shadow: 0 6px 16px #7153b80f; }
 .centerIcon svg { width: 21px; height: 21px; }
-.center strong { color: #292633; font-size: clamp(17px, 2vw, 22px); font-weight: 500; line-height: 1.14; letter-spacing: -.05em; }
-.centerCaption { margin-top: 12px; white-space: nowrap; color: #938aa1; font: 8px ui-monospace, monospace; letter-spacing: .13em; }
+.center strong { color: #292633; font-size: clamp(18px, 2vw, 23px); font-weight: 650; line-height: 1.14; letter-spacing: -.04em; }
+.centerCaption { margin-top: 12px; white-space: nowrap; color: #5c526b; font-size: 10px; font-weight: 700; letter-spacing: .03em; }
 
 .node { position: absolute; transform: translate(-50%, -50%); }
 .nodeIcon { position: relative; z-index: 1; display: grid; place-items: center; width: 52px; height: 52px; border: 1px solid #ded9e8; border-radius: 50%; background: #fff; color: #7a7385; box-shadow: 0 4px 12px #28203906; animation: activate 4s linear infinite; animation-delay: var(--delay); }
 .nodeIcon svg { width: 21px; height: 21px; }
-.nodeLabel { position: absolute; color: #6f6879; font-size: 12px; font-weight: 600; white-space: nowrap; }
+.nodeLabel { position: absolute; color: #514a61; font-size: 13px; font-weight: 650; white-space: nowrap; }
 .node[data-pos="top"] .nodeLabel { bottom: calc(100% + 11px); left: 50%; transform: translateX(-50%); }
 .node[data-pos="right"] .nodeLabel { top: 50%; left: calc(100% + 14px); transform: translateY(-50%); }
 .node[data-pos="left"] .nodeLabel { top: 50%; right: calc(100% + 14px); transform: translateY(-50%); }
 
-.caption { position: absolute; bottom: -30px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 8px; white-space: nowrap; font: 8px ui-monospace, monospace; letter-spacing: .12em; color: #9992a2; }
+.caption { position: absolute; bottom: -30px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 8px; white-space: nowrap; color: #625a70; font-size: 10px; font-weight: 700; letter-spacing: .03em; }
 .caption > span { width: 4px; height: 4px; border-radius: 50%; background: #8677d5; }
 
 @keyframes travel { to { stroke-dashoffset: -276; } }
@@ -36,13 +36,13 @@
   .diagram { max-width: 300px; }
   .nodeIcon { width: 42px; height: 42px; }
   .nodeIcon svg { width: 18px; height: 18px; }
-  .nodeLabel { font-size: 10px; }
+  .nodeLabel { font-size: 11px; }
   .node[data-pos="right"] .nodeLabel { left: calc(100% + 9px); }
   .node[data-pos="left"] .nodeLabel { right: calc(100% + 9px); }
   .centerIcon { width: 38px; height: 38px; margin-bottom: 9px; }
   .centerIcon svg { width: 17px; height: 17px; }
-  .centerCaption { font-size: 6px; }
-  .caption { font-size: 7px; bottom: -24px; }
+  .centerCaption { font-size: 9px; }
+  .caption { font-size: 9px; bottom: -24px; }
 }
 
 @media (prefers-reduced-motion: reduce) {

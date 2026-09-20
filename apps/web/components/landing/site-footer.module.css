@@ -1,0 +1,22 @@
+.footer{margin-top:6px;background:#171821;color:#f7f7fb}
+.inner{display:grid;grid-template-columns:minmax(260px,1.15fr) minmax(0,1.85fr);gap:clamp(54px,8vw,130px);width:min(1320px,calc(100% - 48px));margin:auto;padding:82px 0 88px}
+.brandArea{display:flex;flex-direction:column;align-items:flex-start}
+.brand{display:inline-flex;align-items:center;gap:12px;color:#fff;font-size:22px;font-weight:750;letter-spacing:-.065em}
+.brand>span:last-child>span{color:#a99dff}
+.logo{display:grid;place-items:center;width:38px;height:38px;border-radius:10px;background:#fff}
+.brandArea p{max-width:340px;margin:31px 0 0;color:#fff;font-size:clamp(21px,2vw,27px);font-weight:600;letter-spacing:-.04em;line-height:1.28}
+.brandNote{margin-top:15px;color:#aaaab8;font-size:14px;font-weight:500;line-height:1.5}
+.columns{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:clamp(20px,3vw,56px)}
+.column{display:flex;flex-direction:column;align-items:flex-start;gap:3px}
+.column h2{margin:4px 0 18px;color:#a99dff;font-size:12px;font-weight:750;letter-spacing:.09em;text-transform:uppercase}
+.column a{display:inline-flex;align-items:center;gap:7px;min-height:40px;color:#e1e1e9;font-size:15px;font-weight:550;line-height:1.35;transition:color .2s}
+.column a svg{width:14px;height:14px;opacity:0;transform:translate(-3px,3px);transition:opacity .2s,transform .2s}
+.column a:hover,.column a:focus-visible{color:#bdb4ff}
+.column a:hover svg,.column a:focus-visible svg{opacity:1;transform:none}
+.bottom{display:flex;align-items:center;justify-content:space-between;gap:24px;width:min(1320px,calc(100% - 48px));margin:auto;padding:25px 0 30px;border-top:1px solid #393943;color:#aaaab8;font-size:13px;font-weight:500}
+.bottom a{display:inline-flex;align-items:center;gap:5px;color:#e1e1e9}
+.bottom a:hover{color:#bdb4ff}
+.bottom a svg{width:14px;height:14px}
+@media(max-width:900px){.inner{grid-template-columns:1fr;gap:56px}.brandArea p{margin-top:20px}}
+@media(max-width:600px){.inner,.bottom{width:calc(100% - 36px)}.inner{padding:60px 0 58px;gap:46px}.columns{grid-template-columns:repeat(2,minmax(0,1fr));gap:30px 16px}.column h2{margin-bottom:10px}.column a{font-size:14px}.bottom{flex-wrap:wrap;gap:10px 18px;padding:22px 0 28px}.bottom>span:nth-child(2){display:none}}
+@media(prefers-reduced-motion:reduce){.column a,.column a svg{transition:none}}
