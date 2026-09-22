@@ -17,13 +17,22 @@ const PORT = Number(process.env.PORT ?? 4100);
 
 const app = express();
 
-// The OpenHands frontend (spike-a-standalone-shell/upstream, served on its
-// own dev-server origin) calls this adapter cross-origin. No credentials
-// mode needed - the browser never holds or sends AtherNull's session
-// cookie, so a permissive CORS origin here does not widen the adapter's own
-// trust boundary (it only decides which origins may read the *mapped*
-// AtherNull-derived JSON these routes return).
-app.use(cors({ origin: true }));
+// SECURITY FIX (post-Spike-D containment): the two real, verified callers of
+// this adapter are Spike A's built frontend, served via
+// `npx sirv build/ --single --port 4173` per this spike's own README's
+// "How to reproduce" step 3, and Spike B/D's Next harness, served via
+// `npm start -- --port 3902` per spike-b-selective-reuse/README.md's Spike D
+// section. No credentials mode needed - the browser never holds or sends
+// AtherNull's session cookie - but an explicit allowlist (not `origin: true`)
+// is used regardless, since CORS is a browser-enforced same-origin control,
+// not a network-access control: it does not stop a non-browser client from
+// reaching this server directly (see the binding fix below for the actual
+// network containment).
+app.use(
+  cors({
+    origin: ["http://localhost:4173", "http://localhost:3902"],
+  }),
+);
 app.use(express.json());
 
 app.get("/health", (_req, res) => {
@@ -40,7 +49,14 @@ app.use("/api/conversations", conversationsRouter);
 // health probe - see health.ts's header comment).
 app.use(healthRouter);
 
-app.listen(PORT, () => {
-  console.log(`[adapter-server] listening on http://localhost:${PORT}`);
+// SECURITY FIX (post-Spike-D containment): explicit loopback-only bind.
+// Spike D's verification found this previously bound to 0.0.0.0/[::] (all
+// interfaces) because no host argument was passed here - confirmed via
+// `netstat` and a successful `curl` to the machine's LAN IP. Binding to
+// 127.0.0.1 is what actually contains network reachability to this machine;
+// the CORS allowlist above only affects browser-enforced same-origin
+// behavior and is not itself a network-access control.
+app.listen(PORT, "127.0.0.1", () => {
+  console.log(`[adapter-server] listening on http://127.0.0.1:${PORT}`);
   console.log(`[adapter-server] proxying AtherNull API at ${process.env.ATHERNULL_API_BASE ?? "http://localhost:3001"} (read-only)`);
 });

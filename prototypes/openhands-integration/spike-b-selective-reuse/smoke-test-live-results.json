@@ -1,0 +1,35 @@
+{
+  "results": [
+    {
+      "name": "loading-completed-before-assertions",
+      "pass": true,
+      "detail": "data-load-status text: \"Loaded 9 real events for conversation 91ac88b0-825b-411a-bde6-e375c48191f9.\""
+    },
+    {
+      "name": "exact-seeded-conversation-title-present",
+      "pass": true,
+      "detail": "looked for \"[Spike-C probe 7f2a91] Add a rate-limited GET /health endpoint\"; found=true"
+    },
+    {
+      "name": "distinctive-seeded-event-message-present",
+      "pass": true,
+      "detail": "looked for \"I'll add a GET /health route with a per-IP rate limit and a passing test.\"; found=true"
+    },
+    {
+      "name": "terminal-shows-seeded-command",
+      "pass": true,
+      "detail": "looked for \"npm run test -- health.test.ts\" in .xterm-rows; found=true"
+    },
+    {
+      "name": "terminal-shows-seeded-output",
+      "pass": true,
+      "detail": "looked for \"PASS health.test.ts\" in .xterm-rows; found=true"
+    },
+    {
+      "name": "zero-console-errors",
+      "pass": true,
+      "detail": "(none)"
+    }
+  ],
+  "consoleErrors": []
+}

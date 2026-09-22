@@ -138,3 +138,216 @@ measure.
 - Everything else (fixture counts, adapter location, `next/dynamic`
   `ssr:false`, the `#/` alias mapping, the i18n shim) matches the plan as
   given.
+
+## Spike D: wired to REAL AtherNull data (closes the §10 asymmetry)
+
+Everything above this section is Spike B as originally built, against
+**static fixtures only** (`/harness`) — untouched by Spike D. This section
+covers a later addition: a second route, `/harness-live`, that renders the
+same vendored `<Messages>`/`<Terminal>` components against **real AtherNull
+API data**, closing the specific asymmetry `COMPARISON.md` §10 left open
+(Spike C had proven real-data rendering for the full shell; Spike B never
+had, only fixtures).
+
+**Data provenance — stated precisely, once, here:** every event and every
+piece of text `/harness-live` renders is a real AtherNull API response read
+from a **seeded local development database**
+(`spike-c-full-shell-adapter/seed/seed.ts`), created through the same
+zero-cost, zero-LLM, zero-Solana internal test-only endpoints
+`apps/api/test/job-lifecycle.test.ts` uses. It is **not** the output of a
+paid coding-agent execution, and nothing in `/harness-live`, its fetch
+module, or its smoke test implies otherwise.
+
+### What was added
+
+- `lib/adapter/adapter-live-client.ts` — fetches
+  `GET {ADAPTER_BASE}/api/conversations?ids[]={id}` (title) and
+  `GET {ADAPTER_BASE}/api/conversations/{id}/events/search` (events) from
+  Spike C's adapter-server, unmodified. Does **not** reuse or duplicate
+  `execution-event-to-openhands-event.ts` — that module translates
+  AtherNull's raw wire `ExecutionEvent` shape for the fixture path; Spike
+  C's adapter-server has already done that exact translation server-side,
+  so this fetches already-`OpenHandsEvent`-shaped JSON directly.
+- `app/harness-live/page.tsx` — new route, client component, fetches on
+  mount, renders through the same `toUiMessages`/`<Messages>` pattern
+  `app/harness/page.tsx` uses (duplicated locally, not imported, so the
+  existing fixture-only page stays untouched), plus `<Terminal>` seeded
+  from real fetched command/output text.
+- `smoke-test.mjs` (repo root of this spike) — Playwright smoke test for
+  `/harness-live`. `live-metrics.json` — the measured numbers for this
+  addition, kept separate from `metrics.json` (Spike B's original,
+  fixture-only record, left as-is).
+- `.env.local` (gitignored, not committed) — `NEXT_PUBLIC_ADAPTER_BASE` /
+  `NEXT_PUBLIC_CONVERSATION_ID`.
+
+### Environment setup that actually worked
+
+Next.js inlines `NEXT_PUBLIC_*` vars at **build/dev-start time**, not at
+request time — dropping values into `seed-output.json` alone does nothing.
+The exact mechanism used: a `.env.local` file was written (gitignored via
+the repo root `.gitignore`'s `.env.*` rule) with
+
+```
+NEXT_PUBLIC_ADAPTER_BASE=http://localhost:4100
+NEXT_PUBLIC_CONVERSATION_ID=91ac88b0-825b-411a-bde6-e375c48191f9
+```
+
+**before** running `npm run build` / `npm run dev`. `NEXT_PUBLIC_CONVERSATION_ID`
+is `seed-output.json`'s **`taskId`**, not its `conversationId` field — the
+adapter's routes key on AtherNull's task id
+(`adapter-server/src/mapping.ts`: `AppConversation.id = task.id`, confirmed
+by reading that file, not assumed), while `conversationId` on the execution
+row is a different, Agent-Server-native id the adapter never routes on. See
+`lib/adapter/adapter-live-client.ts`'s header comment for the full
+explanation.
+
+### Adapter-server security properties (verified, not assumed)
+
+Per the task's explicit instruction to verify rather than assume, before
+connecting anything:
+
+- **Binding**: `adapter-server/src/index.ts`'s `app.listen(PORT, ...)` call
+  has no host argument. `netstat -ano` while the server ran showed it bound
+  to `0.0.0.0:4100` / `[::]:4100` — **all interfaces, not loopback-only** —
+  and a direct `curl` to the machine's LAN IP
+  (`http://192.168.1.64:4100/health`) returned `200`. This is a genuine
+  deviation from an assumption in this spike's own task brief ("confirm it
+  binds to loopback only") — the real behavior is broader. Recorded
+  honestly here, not corrected (Spike C's source was not modified, per this
+  spike's own constraints) and not something Spike D introduced — it is
+  Spike C's process, run exactly as Spike C's own README already documents
+  starting it (`PORT=4100 npm start`, no host override anywhere in that
+  README either).
+- **Credentials**: `athernull-client.ts`'s `OWNER_EMAIL`/`OWNER_PASSWORD`/
+  `ORGANIZATION_ID` come from `seed-output.json`'s spike-generated dev user
+  (`spike-c-eb81ec80@example.com`) and a random per-run password — no
+  production credential anywhere in the process.
+- **Dataset scope**: `getTasks()`/`getProjects()` call AtherNull's real
+  `/v1/jobs`/`/v1/projects`, both organization-scoped by the adapter's held
+  session (switched to the seeded spike-c org at sign-in) — no broader
+  query path exists.
+- **CORS**: `cors({ origin: true })` is fully permissive by itself — stated
+  here as exactly that, a same-machine, dev-dataset-only convenience, **not
+  a security guarantee**. Combined with the loopback-binding finding above,
+  what actually made this safe to run for this prototype is the *combination*
+  of no production credentials anywhere in the process and the approved
+  seeded dev dataset being the only thing the server can return — not the
+  CORS setting, and not an (incorrect) loopback assumption either.
+
+### Rendering-contract check: one real mismatch found and fixed
+
+Verified by `curl`-ing the adapter's real `/events/search` response for the
+seeded conversation and comparing it field-by-field against
+`vendor/openhands/types/agent-server/core` (not assumed) before wiring the
+fetch into `<Messages>`:
+
+- **Mismatch**: `TerminalObservation.metadata` is declared **required**
+  (`CmdOutputMetadata`, no `?`) in `base/observation.ts`, but the adapter's
+  real JSON for the seeded terminal pair omits it entirely. The one
+  vendored call site reading it
+  (`event-content-helpers/get-observation-result.ts`:
+  `observation.exit_code ?? observation.metadata.exit_code ?? null`)
+  doesn't crash today only because the real `exit_code` is `0` (a
+  non-nullish value short-circuits `??` before `.metadata` is ever
+  touched) — but would throw (`Cannot read properties of undefined`) on
+  any future seeded event with a null/undefined `exit_code`.
+- **Fix**: `adapter-live-client.ts`'s `normalizeEvent()` synthesizes a
+  default `CmdOutputMetadata` object whenever the real payload omits it.
+  Fixed in Spike B's new fetch layer only — `vendor/openhands/...` and
+  `spike-c-full-shell-adapter/` were never touched, and no smoke-test
+  assertion was loosened to route around it.
+- Two other gaps were found and confirmed harmless (no fix needed):
+  `FileEditorObservation.old_content`/`new_content`/`error` are also
+  omitted by the real payload, but every vendored read site guards with
+  `'old_content' in observation` first; and the real `MessageEvent` JSON
+  carries an extra top-level `reasoning_content` field the type doesn't
+  declare at that level (it's nested under `llm_message` instead) — never
+  read at the top level by any vendored file, so it's inert excess JSON.
+
+### Terminal pairing and store isolation
+
+Terminal `ActionEvent`/`ObservationEvent` pairs are matched by the real
+`action_id` relationship (`ObservationEvent.action_id === ActionEvent.id`,
+via a `Map`), mirroring `apps/web/lib/execution-events.ts`'s
+`pairActionsWithObservations` — never by array position. `useCommandStore`
+is reset (`setState({ commands: [] })`) on every fetch-effect run
+(including first mount) and again on unmount, so `/harness-live` and the
+existing fixture-driven `/harness` can never leak terminal state into each
+other if both are visited in one browser session (as happened during this
+spike's own manual verification).
+
+### Smoke test: all 5 required assertions pass
+
+`node smoke-test.mjs` (after `npm run build && npm start -- --port 3902`,
+with `.env.local` present at build time) against `/harness-live`:
+
+| Assertion | Result |
+|---|---|
+| Loading actually completed (no stuck spinner) before assertions ran | PASS |
+| Exact seeded conversation title present | PASS |
+| Exact distinctive seeded event message text present | PASS |
+| Seeded terminal command present | PASS |
+| Seeded terminal output text present | PASS |
+| Zero browser console errors | PASS |
+
+**A production build was required to get a clean console.** Under `next
+dev`, the page (and, independently confirmed, the existing untouched
+`/harness` fixture page too) throws a pre-existing
+`@xterm/addon-fit`/`xterm` runtime error ("Cannot read properties of
+undefined (reading 'dimensions')") — a dev-mode-only race in vendored
+`hooks/use-terminal.ts`'s fit-on-resize logic, not introduced by this spike
+and not present under `next build && next start` (the same measurement
+method Spike B's original `metrics.json` already used). Not patched
+(vendor file).
+
+`@playwright/test@1.62.1` was added as this project's own devDependency
+(`npm install`, isolated from the pnpm workspace as this whole spike
+already is) rather than borrowing Spike A's `upstream/` install the way
+Spike C did — it reused the Chromium build already cached at
+`%LOCALAPPDATA%/ms-playwright/chromium-1234` (matching version), so no
+browser re-download was needed, and keeps the smoke test self-contained
+under this directory with no cross-spike copy step.
+
+Screenshots: `screenshots-live/01-initial-load.png`,
+`02-loaded.png`, `03-event-feed-and-terminal.png`. Raw results:
+`smoke-test-live-results.json`.
+
+### Event-category coverage: honest, not implied by the pass/fail above
+
+The smoke test's pass does **not** mean all 9 seeded events render
+distinctly — only 5 of them do, at rest, with no interaction:
+
+- **Distinctly visible, no interaction needed** (5 of 9): the user
+  message, the agent's message, the `FinishAction`'s closing message (all
+  3 with their full real text in the chat feed), and the terminal
+  command + its output (both with full real text, but in the separate
+  `<Terminal>` panel, not the chat feed).
+- **Not distinctly visible anywhere on the page** (4 of 9): the 2
+  file-editor action/observation pairs (`create` on `health.ts`,
+  `str_replace` on `app.ts` — 4 events total). All 3 action/observation
+  pairs (terminal + both file-editor pairs) collapse in the chat feed into
+  a single `EventGroup` whose summary text is an **untranslated i18n key
+  literal** (`EVENT_GROUP$ACTIONS_COMPLETED` — a pre-existing artifact of
+  this harness's own `react-i18next` passthrough shim, not introduced or
+  fixed by this spike). Clicking it expands to 3 rows, also untranslated
+  keys (`OBSERVATION_MESSAGE$RUN`/`WRITE`/`EDIT`) — real per-event content
+  (file paths, diffs, stdout text) never appears in the chat feed's DOM
+  text, at rest or expanded. Only the terminal pair's real text is
+  separately recoverable at all, via the `<Terminal>` panel.
+
+This mirrors Spike C's own §10 finding almost exactly ("the individual
+command/stdout text inside that group is not in the DOM until it's
+expanded by click") — same underlying vendored grouping/i18n behavior,
+now confirmed to reproduce identically against real data in the selective-
+reuse harness too.
+
+### An operational note, for completeness
+
+While standing up this spike, `next dev`'s automatic port-picker briefly
+bound port 3001 — already held by `apps/api`'s own dev server — after port
+3000 turned out to be occupied by an unrelated process. `apps/api`'s
+`/health` 404'd for under a minute until this was caught via `netstat` and
+the conflicting Next process was killed; Next was then restarted pinned to
+an explicit unused port (`--port 3902`) for the remainder of this spike.
+`apps/api`'s `/health` returned `200` again immediately. No data was lost;
+recorded here in the interest of not hiding it.

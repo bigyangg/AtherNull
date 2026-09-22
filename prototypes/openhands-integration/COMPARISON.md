@@ -262,3 +262,83 @@ OpenHands-source-change terms (zero) and moderate in new-adapter-code terms
 (~1650 lines, mostly straightforward once the true 6-endpoint contract was
 known) — and that true contract could only be established by running the
 real app, not by reasoning from its mocks alone.
+
+## 11. Spike D: closing the live-data asymmetry
+
+§10 left one specific question open: Spike C proved the full-shell approach
+can display real, org-scoped AtherNull data; Spike B's vendored terminal
+and event feed had only ever been tested against static fixtures. Spike D
+closes exactly that gap — nothing broader — by wiring Spike B's existing
+`app/harness-live/page.tsx` (new route, `spike-b-selective-reuse/`) to the
+**same seeded dataset and the same adapter-server Spike C already built and
+proved**, not a new one. Spike C's `adapter-server/` source was read-only
+for this whole spike; zero lines changed under it.
+
+**Data provenance, stated once more since it matters for how to read every
+number below:** both spikes render real AtherNull API responses read from a
+seeded **local development database**, created through the same zero-cost,
+zero-LLM, zero-Solana internal test-only endpoints
+`apps/api/test/job-lifecycle.test.ts` uses. Neither is the output of a paid
+coding-agent execution.
+
+### The shared axis: read-only rendering of the same seeded records
+
+Both spikes were exercised against the identical seeded task/execution (9
+`execution_events`, via Spike C's `seed-output.json`), through the same
+adapter-server, on this axis only:
+
+| | Spike B (`/harness-live`) | Spike C (full shell) |
+|---|---|---|
+| Real seeded conversation title rendered | Yes (smoke-test asserted, exact string) | Yes (smoke-test asserted, exact string) |
+| Real seeded event *message* text rendered | Yes (smoke-test asserted, exact string — the agent's 2nd `MessageEvent`) | Yes (smoke-test asserted, exact string — the agent's 2nd `MessageEvent`, same event) |
+| Real seeded terminal command + output rendered | Yes (smoke-test asserted, exact strings, via the vendored `<Terminal>`/xterm panel) | Not separately asserted (Spike C's smoke test checked the chat feed's collapsed group summary, not xterm output — Spike C has no vendored `<Terminal>` component at all) |
+| Real seeded file-editor events (2 pairs, 4 events) rendered distinctly | **No** — collapsed into the same `EventGroup`, summary text is an untranslated i18n key (pre-existing shim artifact), individual paths/diffs never appear in the DOM even expanded | **No** — same collapsed-group behavior Spike C's own §10 finding already documented ("the individual command/stdout text inside that group is not in the DOM until expanded by click") |
+| Adapter endpoints exercised | `GET /api/conversations?ids[]=`, `GET /api/conversations/:id/events/search` (2 of the adapter's 6) | All 6 (conversations search/batch/single, events count/search, settings/server_info) |
+| Zero console errors, real browser (Playwright) | Yes (under `next build && next start` — see README's dev-mode caveat) | Yes |
+
+**On this shared axis, the asymmetry §10 flagged is closed**: Spike B's
+vendored event feed and terminal now have a real, browser-verified,
+Playwright-asserted rendering pass against genuine AtherNull data, not just
+fixtures — the same standard of evidence Spike C already met. Both spikes
+independently hit the identical underlying limitation for the file-editor
+event pairs (collapsed group, no distinct per-event text without a click
+this spike's own smoke test didn't require) — this is a real, shared
+render-fidelity ceiling in the vendored OpenHands grouping/i18n code, not a
+gap unique to either integration approach.
+
+### What this does NOT settle
+
+- **Spike B still has no equivalent of Spike C's full navigation/application
+  shell** — no sidebar, no routing between conversations, no multi-page
+  flow, no settings UI, no backend-registry onboarding. `/harness-live` is
+  a single hand-fetched page rendering 2 vendored components; Spike C is a
+  full standalone app. Comparing "closed" on the read-only-rendering axis
+  above says nothing about that gap, which remains exactly as wide as §8/§10
+  already described it.
+- **Endpoint coverage is intentionally narrower.** Spike B's live path only
+  needed 2 of Spike C's 6 real endpoints (it has no settings screen, no
+  onboarding gate, no sidebar list to populate) — this is not evidence
+  selective reuse "needs less adapter," only that this spike's scope (2
+  components) needs less of the adapter's total surface than a full shell
+  does, which was already expected from §1's scope-asymmetry framing.
+- **No architecture winner is declared here**, consistent with §8/§10. This
+  closes one specific open question — can the selectively-reused components
+  render real data too — and reports plainly that they can, on the terms
+  actually tested. It does not make the two spikes comparable on a single
+  cost unit, and it does not revisit §10's own cost table.
+
+### One verification-worthy finding surfaced along the way
+
+Re-verifying Spike C's `adapter-server` security properties before
+connecting Spike B to it (rather than assuming §10's characterization still
+held) found that `app.listen(PORT, ...)` in `adapter-server/src/index.ts`
+has no host argument and binds to **all interfaces** (`0.0.0.0`/`[::]`,
+confirmed via `netstat` and a successful `curl` to the machine's LAN IP),
+not loopback-only. This was not previously stated precisely in the repo.
+Spike C's source was not modified (out of scope, and the binding behavior
+predates this spike) — recorded here because it changes how the adapter's
+already-documented permissive CORS should be read: safe for this prototype
+specifically because of no production credentials + single approved dev
+dataset, not because of loopback binding, which turns out not to hold.
+See `spike-b-selective-reuse/README.md`'s "Spike D" section and
+`spike-b-selective-reuse/live-metrics.json` for the full detail.

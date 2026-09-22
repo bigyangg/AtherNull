@@ -1,0 +1,93 @@
+{
+  "spike": "D — Spike B wired to real AtherNull data (closes §10's open asymmetry)",
+  "dataProvenance": "Real AtherNull API responses read from a seeded LOCAL DEVELOPMENT DATABASE (spike-c-full-shell-adapter/seed/seed.ts, same zero-cost/zero-LLM/zero-Solana internal test-only endpoints apps/api/test/job-lifecycle.test.ts uses). NOT the output of a paid coding-agent execution.",
+  "reusedExistingSeed": true,
+  "seedCreatedAt": "2026-09-22T11:40:53.387Z",
+  "adapterServer": {
+    "reused": true,
+    "modified": false,
+    "url": "http://localhost:4100",
+    "endpointsCalled": [
+      "GET /api/conversations?ids[]={taskId}",
+      "GET /api/conversations/{taskId}/events/search"
+    ]
+  },
+  "securityVerification": {
+    "bindingInspection": "app.listen(PORT, callback) in adapter-server/src/index.ts has NO host argument. Verified via netstat -ano and a direct curl to the machine's LAN IP (192.168.1.64:4100/health -> 200) while the server ran: it binds to 0.0.0.0/[::] (ALL interfaces), NOT loopback-only. This is a genuine deviation from the plan's stated assumption ('confirm it binds to loopback only') -- the actual behavior is broader than assumed, verified by direct measurement, not corrected/patched (adapter-server is read-only per this spike's constraints).",
+    "productionCredentials": "None found. athernull-client.ts's OWNER_EMAIL/OWNER_PASSWORD/ORGANIZATION_ID come from seed-output.json's spike-generated dev user (spike-c-eb81ec80@example.com) and a random per-run password, not any real credential.",
+    "datasetScope": "Confirmed single-org-scoped: getTasks()/getProjects() call AtherNull's real /v1/jobs and /v1/projects, both organization-scoped by the adapter's held session (switched to the seeded spike-c org at signin) -- no cross-org or broader query path exists in athernull-client.ts.",
+    "corsCaveat": "cors({ origin: true }) is fully permissive by itself. Documented here as a same-machine, dev-dataset-only convenience that is safe ONLY because it is combined with (a) no production credentials anywhere in the process and (b) the approved seeded dev dataset being the only thing it can return -- NOT because of the CORS setting itself. Given the loopback-binding finding above, this combination is what actually made running it safe for this prototype, not any single property alone."
+  },
+  "renderingContractCheck": {
+    "verifiedBy": "curl http://localhost:4100/api/conversations/{taskId}/events/search, compared field-by-field against vendor/openhands/types/agent-server/core (base/event.ts, base/observation.ts, events/action-event.ts, events/observation-event.ts, events/message-event.ts) and vendor/openhands/types/agent-server/type-guards.ts before wiring the fetch into <Messages>.",
+    "mismatchFound": true,
+    "mismatch": "TerminalObservation.metadata is declared REQUIRED (CmdOutputMetadata, no '?') in observation.ts, but the adapter's real JSON for the seeded terminal pair omits it entirely. The one vendored call site that reads it (get-observation-content helper's get-observation-result.ts, line ~39: `observation.exit_code ?? observation.metadata.exit_code ?? null`) does not crash TODAY because the real exit_code is 0 (a non-nullish value short-circuits the ?? chain before .metadata is touched), but would throw on a future event with a null/undefined exit_code.",
+    "fix": "Synthesized a default CmdOutputMetadata object in lib/adapter/adapter-live-client.ts's normalizeEvent() whenever the adapter's real payload omits it. Fixed in Spike B's new fetch layer only -- vendor/openhands/... and spike-c-full-shell-adapter/ were never touched, and no smoke-test assertion was loosened to route around it.",
+    "otherObservedGaps": [
+      "FileEditorObservation's old_content/new_content/error fields (declared required, no '?') are also omitted by the real adapter response, but every vendored read site guards with `'old_content' in observation` first (get-observation-content.ts) -- confirmed safe, no fix needed.",
+      "MessageEvent's real JSON carries an extra top-level reasoning_content field not declared on the MessageEvent interface (Message.reasoning_content is nested under llm_message in the type, not sibling to it) -- harmless excess JSON property, not read by any vendored file at the top level, no fix needed."
+    ]
+  },
+  "terminalPairing": {
+    "method": "Map from ObservationEvent.action_id -> ObservationEvent, mirroring apps/web/lib/execution-events.ts's pairActionsWithObservations (not array position/adjacency).",
+    "pairsFound": 3,
+    "terminalPairsUsedForCommandStore": 1,
+    "commandStoreResetOn": ["every (re)fetch effect run, including first mount", "component unmount"]
+  },
+  "eventCategoryCoverage": {
+    "totalSeededEvents": 9,
+    "distinctlyVisibleAtRestNoInteraction": {
+      "count": 5,
+      "events": [
+        "UserMessageEvent (event 1) - full exact text in chat feed",
+        "Agent MessageEvent (event 2) - full exact text in chat feed",
+        "ActionEvent TerminalAction (event 3) - real command text visible in the separate Terminal panel",
+        "ObservationEvent TerminalObservation (event 4) - real output text visible in the separate Terminal panel",
+        "ActionEvent FinishAction (event 9) - full exact closing message, special-cased by FinishEventMessage"
+      ]
+    },
+    "collapsedBehindClickToExpand": {
+      "count": 4,
+      "events": [
+        "ActionEvent FileEditorAction 'create' (event 5)",
+        "ObservationEvent FileEditorObservation 'create' (event 6)",
+        "ActionEvent FileEditorAction 'str_replace' (event 7)",
+        "ObservationEvent FileEditorObservation 'str_replace' (event 8)"
+      ],
+      "detail": "Events 3-8 (all 3 action/observation pairs) render in the chat feed as a single collapsed EventGroup whose summary text is an UNTRANSLATED i18n key literal ('EVENT_GROUP$ACTIONS_COMPLETED') -- a pre-existing artifact of this harness's own react-i18next passthrough shim (vendor/openhands/_shims/react-i18next.tsx, documented in metrics.json's shimsApplied; not introduced or fixed by this spike, vendor/shim files were not touched). Clicking the group expands it to 3 rows, one per pair, but those rows are ALSO untranslated i18n keys (OBSERVATION_MESSAGE$RUN / OBSERVATION_MESSAGE$WRITE / OBSERVATION_MESSAGE$EDIT) rather than the real per-event content (file paths, diffs, stdout text) -- that deeper content never appears in the chat feed's own DOM text, at rest or expanded. The 2 file-editor pairs (events 5-8) therefore have NO real, distinct text visible anywhere on this page outside of being counted in the '9 events' / grouped-summary total; only the terminal pair's real text is separately recoverable, via the Terminal panel below the chat feed, not the chat feed itself."
+    }
+  },
+  "smokeTest": {
+    "script": "smoke-test.mjs",
+    "runMethod": "next build && next start (production mode) -- next dev mode reproduced a PRE-EXISTING console error (xterm/@xterm/addon-fit 'Cannot read properties of undefined (reading dimensions)') independently confirmed to also occur on the existing, untouched /harness fixture page under next dev; not introduced by this spike, not present under next build+start, and not patched (vendor file use-terminal.ts).",
+    "playwrightInstall": "@playwright/test@1.62.1 added as spike-b-selective-reuse's own devDependency (npm install, isolated project, not the pnpm workspace) -- reused the Chromium build already cached at %LOCALAPPDATA%/ms-playwright/chromium-1234 (matching version), no browser re-download needed.",
+    "assertions": [
+      { "name": "loading-completed-before-assertions", "pass": true },
+      { "name": "exact-seeded-conversation-title-present", "pass": true },
+      { "name": "distinctive-seeded-event-message-present", "pass": true },
+      { "name": "terminal-shows-seeded-command", "pass": true },
+      { "name": "terminal-shows-seeded-output", "pass": true },
+      { "name": "zero-console-errors", "pass": true }
+    ],
+    "allPassed": true,
+    "screenshotDir": "screenshots-live/",
+    "screenshots": ["01-initial-load.png", "02-loaded.png", "03-event-feed-and-terminal.png"],
+    "resultsFile": "smoke-test-live-results.json"
+  },
+  "newCodeLinesOfCode": {
+    "adapterLiveClient": 219,
+    "harnessLivePage": 176,
+    "smokeTest": 168,
+    "total": 563
+  },
+  "envSetup": {
+    "mechanism": ".env.local (gitignored via root .gitignore's .env.* rule) written with NEXT_PUBLIC_ADAPTER_BASE and NEXT_PUBLIC_CONVERSATION_ID BEFORE running next build/next dev -- required because Next.js inlines NEXT_PUBLIC_* vars at build/dev-start time, not at request time.",
+    "conversationIdSource": "seed-output.json's taskId field, NOT its conversationId field -- verified by reading adapter-server/src/mapping.ts (AppConversation.id = task.id), documented in lib/adapter/adapter-live-client.ts's header comment.",
+    "values": {
+      "NEXT_PUBLIC_ADAPTER_BASE": "http://localhost:4100",
+      "NEXT_PUBLIC_CONVERSATION_ID": "91ac88b0-825b-411a-bde6-e375c48191f9"
+    }
+  },
+  "isolationFromExistingHarness": "app/harness/page.tsx (fixture-only) was not modified. useCommandStore.setState({commands: []}) is called on every fetch-effect run (including first mount) and on unmount in app/harness-live/page.tsx, so visiting both routes in one browser session (as happened during manual verification of this spike) cannot leak terminal state between them.",
+  "operationalIncidentDuringThisSpike": "next dev's automatic port-picker briefly bound port 3001 (already held by apps/api's dev server) when port 3000 was occupied by an unrelated process, causing apps/api's own /health to 404 for about a minute. Caught immediately via netstat, the conflicting Next process was killed, and Next was restarted pinned to an explicit unused port (3902) for the rest of this spike. apps/api's /health returned 200 again immediately after the kill. No data was lost or corrupted; recorded here for completeness."
+}
