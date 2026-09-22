@@ -20,7 +20,7 @@ import { describeAuthError } from "@/lib/auth/errors";
 function SignInForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const callbackPath = searchParams.get("callbackURL") || "/projects";
+  const callbackPath = searchParams.get("callbackURL") || "/dashboard";
   const urlError = describeAuthError(searchParams.get("error"));
 
   const [email, setEmail] = useState("");

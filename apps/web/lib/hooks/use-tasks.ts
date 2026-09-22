@@ -3,6 +3,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { dashboardApi, type CreateTaskInput, type EstimateTaskInput } from "@/lib/api";
+import { isTaskActive } from "@/lib/types";
 
 // GET /v1/jobs returns every task in the org (apps/api has no per-project
 // filter yet) — filtered client-side here rather than adding a query param
@@ -12,6 +13,29 @@ export function useTasks(projectId: string) {
     queryKey: ["tasks"],
     queryFn: () => dashboardApi.listTasks(),
     select: (tasks) => tasks.filter((task) => task.projectId === projectId),
+  });
+}
+
+// Same queryKey as useTasks — shares its cache entry, so calling this
+// alongside per-project useTasks() calls costs zero extra requests.
+export function useAllTasks() {
+  return useQuery({
+    queryKey: ["tasks"],
+    queryFn: () => dashboardApi.listTasks(),
+  });
+}
+
+// Same query/cache entry as useAllTasks, but polls while anything is
+// in flight — for the dashboard's "Live activity" feed, same conditional
+// pattern as use-task.ts's single-task polling.
+export function useLiveTasks() {
+  return useQuery({
+    queryKey: ["tasks"],
+    queryFn: () => dashboardApi.listTasks(),
+    refetchInterval: (query) => {
+      const tasks = query.state.data;
+      return tasks?.some((task) => isTaskActive(task.status)) ? 4000 : false;
+    },
   });
 }
 

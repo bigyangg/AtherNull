@@ -41,11 +41,11 @@ export function proxy(request: NextRequest) {
   }
 
   if (sessionCookie && pathname === "/" && !landingOnly) {
-    return NextResponse.redirect(new URL("/projects", request.url));
+    return NextResponse.redirect(new URL("/dashboard", request.url));
   }
 
   if (sessionCookie && isAuthPath && pathname !== "/verify-email") {
-    return NextResponse.redirect(new URL("/projects", request.url));
+    return NextResponse.redirect(new URL("/dashboard", request.url));
   }
 
   return NextResponse.next();

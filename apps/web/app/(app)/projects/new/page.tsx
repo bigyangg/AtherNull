@@ -16,7 +16,7 @@ const PATHS = [
     href: "/projects/new/create",
     icon: Sparkles,
     title: "Create New",
-    badge: "New application",
+    badge: "Preview — mock data only",
     description:
       "Describe an idea and generate a working application from our modular foundation.",
     steps: ["Prompt", "Build", "Preview", "Deploy"],

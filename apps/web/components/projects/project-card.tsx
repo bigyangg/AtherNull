@@ -1,6 +1,10 @@
 import Link from "next/link";
+import { FolderGit2 } from "lucide-react";
 
+import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Skeleton } from "@/components/ui/skeleton";
+import { IconBadge } from "@/components/icon-badge";
 import type { RepoProject } from "@/lib/types";
 
 function relativeTime(iso: string): string {
@@ -14,23 +18,56 @@ function relativeTime(iso: string): string {
   return `${Math.round(hours / 24)}d ago`;
 }
 
-export function ProjectCard({ project }: { project: RepoProject }) {
+export function ProjectCard({
+  project,
+  needsReviewCount = 0,
+}: {
+  project: RepoProject;
+  needsReviewCount?: number;
+}) {
   return (
     <Link href={`/projects/${project.id}`}>
       <Card className="transition-colors hover:border-primary/50">
-        <CardHeader className="flex-row items-start justify-between space-y-0">
-          <CardTitle className="text-base">{project.permittedRepository}</CardTitle>
+        <CardHeader className="flex-row items-center gap-3 space-y-0">
+          <IconBadge>
+            <FolderGit2 />
+          </IconBadge>
+          <div className="min-w-0">
+            <CardTitle className="text-base">{project.permittedRepository}</CardTitle>
+            <p className="line-clamp-1 text-sm text-muted-foreground">
+              {project.revision ? `Pinned at ${project.revision}` : "Tracks default branch"}
+              {project.scope ? ` · ${project.scope}` : ""}
+            </p>
+          </div>
         </CardHeader>
-        <CardContent className="flex items-center justify-between">
-          <p className="line-clamp-1 text-sm text-muted-foreground">
-            {project.revision ? `Pinned at ${project.revision}` : "Tracks default branch"}
-            {project.scope ? ` · ${project.scope}` : ""}
-          </p>
-          <span className="shrink-0 pl-4 text-xs text-muted-foreground">
+        <CardContent className="flex items-center justify-end gap-2">
+          {needsReviewCount > 0 && (
+            <Badge variant="warning">
+              {needsReviewCount} need{needsReviewCount === 1 ? "s" : ""} review
+            </Badge>
+          )}
+          <span className="shrink-0 text-xs text-muted-foreground">
             Added {relativeTime(project.createdAt)}
           </span>
         </CardContent>
       </Card>
     </Link>
+  );
+}
+
+export function ProjectCardSkeleton() {
+  return (
+    <Card>
+      <CardHeader className="flex-row items-center gap-3 space-y-0">
+        <Skeleton className="size-11 rounded-xl" />
+        <div className="flex min-w-0 flex-1 flex-col gap-2">
+          <Skeleton className="h-4 w-40" />
+          <Skeleton className="h-3 w-56" />
+        </div>
+      </CardHeader>
+      <CardContent className="flex justify-end">
+        <Skeleton className="h-3 w-16" />
+      </CardContent>
+    </Card>
   );
 }

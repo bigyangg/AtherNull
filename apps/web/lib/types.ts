@@ -116,6 +116,10 @@ export interface Execution {
   taskId: string;
   attemptId: string;
   status: string;
+  // Set once agent_server_adapter.py's EXECUTION_ADAPTER=agent_server path
+  // creates the OpenHands conversation — null for direct-SDK executions,
+  // which have no persisted event history to show a live workspace for.
+  conversationId: string | null;
   routingTier: string | null;
   routingScore: number | null;
   routingReason: string | null;
@@ -157,6 +161,20 @@ export interface TaskDetail extends Task {
   budgetSpentMinor: number;
 }
 
+// The Agent Server's own event stream for an execution (apps/api's
+// execution_events table) — kind/payload are whatever the OpenHands SDK's
+// event model produced (MessageEvent, ActionEvent, ObservationEvent, ...),
+// not a contract this app controls. See lib/execution-events.ts for the
+// defensive per-kind parsers that read `payload`.
+export interface ExecutionEvent {
+  id: string;
+  executionId: string;
+  kind: string;
+  payload: unknown;
+  occurredAt: string;
+  createdAt: string;
+}
+
 export interface EstimateResult {
   tier: string;
   model: string;
@@ -165,10 +183,31 @@ export interface EstimateResult {
   costCeilingMinor: number | null;
 }
 
+export interface ModelTier {
+  tier: string;
+  model: string;
+  maxComplexity: number;
+  costCeilingMinor: number | null;
+}
+
 export interface AgentProfile {
   id: string;
   policyVersion: string;
   configRevision: number;
+  modelTiers: ModelTier[];
+  toolAllowlist: string[];
+}
+
+export interface DailySpend {
+  date: string; // ISO-8601
+  spentMinor: number;
+}
+
+export interface UsageSummary {
+  totalSpentMinor: number;
+  currency: string;
+  dailySpend: DailySpend[];
+  taskCountsByStatus: Partial<Record<TaskStatus, number>>;
 }
 
 export function formatMinor(minor: number, currency: string): string {

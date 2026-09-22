@@ -29,7 +29,7 @@ function VerifyEmailContent() {
   // (autoSignInAfterVerification) and no error — that's the success case.
   useEffect(() => {
     if (!isPending && session && !urlError) {
-      const timeout = setTimeout(() => router.push("/projects"), 1200);
+      const timeout = setTimeout(() => router.push("/dashboard"), 1200);
       return () => clearTimeout(timeout);
     }
   }, [isPending, session, urlError, router]);

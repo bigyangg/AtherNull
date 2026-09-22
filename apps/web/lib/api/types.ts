@@ -1,10 +1,12 @@
 import type {
   AgentProfile,
   EstimateResult,
+  ExecutionEvent,
   Project,
   RepoProject,
   Task,
   TaskDetail,
+  UsageSummary,
   WorkspaceState,
 } from "@/lib/types";
 
@@ -66,4 +68,6 @@ export interface TaskDashboardApi {
   verifyTask(taskId: string, outcome: "PASS" | "FAIL"): Promise<Task>;
   acceptTask(taskId: string): Promise<Task>;
   rejectTask(taskId: string, reason?: string): Promise<Task>;
+  getUsageSummary(): Promise<UsageSummary>;
+  getExecutionEvents(taskId: string, executionId: string): Promise<ExecutionEvent[]>;
 }

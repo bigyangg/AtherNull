@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 
 import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { useAgentProfiles } from "@/lib/hooks/use-agent-profiles";
@@ -27,7 +28,8 @@ export function AddTaskForm({
   const createTask = useCreateTask();
   const fundTask = useFundTask();
   const estimateTask = useEstimateTask();
-  const { data: agentProfiles } = useAgentProfiles();
+  const { data: agentProfiles, isLoading: profilesLoading } = useAgentProfiles();
+  const noAgentProfiles = !profilesLoading && (agentProfiles?.length ?? 0) === 0;
 
   const [repositoryRevision, setRepositoryRevision] = useState(defaultRevision);
   const [objective, setObjective] = useState("");
@@ -77,73 +79,88 @@ export function AddTaskForm({
   }
 
   return (
-    <div className="flex flex-col gap-4 rounded-xl border border-border p-4">
-      <div className="flex flex-col gap-1.5">
-        <label className="text-sm font-medium" htmlFor="add-task-revision">
-          Repository revision
-        </label>
-        <Input
-          id="add-task-revision"
-          value={repositoryRevision}
-          onChange={(event) => setRepositoryRevision(event.target.value)}
-        />
-      </div>
-      <div className="flex flex-col gap-1.5">
-        <label className="text-sm font-medium" htmlFor="add-task-objective">
-          Objective
-        </label>
-        <Textarea
-          id="add-task-objective"
-          rows={3}
-          value={objective}
-          onChange={(event) => setObjective(event.target.value)}
-        />
-      </div>
-      <div className="flex flex-col gap-1.5">
-        <label className="text-sm font-medium" htmlFor="add-task-criteria">
-          Acceptance criteria (one per line)
-        </label>
-        <Textarea
-          id="add-task-criteria"
-          rows={3}
-          value={acceptanceCriteria}
-          onChange={(event) => setAcceptanceCriteria(event.target.value)}
-        />
-      </div>
-      <div className="flex flex-col gap-1.5">
-        <label className="text-sm font-medium" htmlFor="add-task-budget">
-          Max AI development budget (USD)
-        </label>
-        <Input
-          id="add-task-budget"
-          type="number"
-          min="0"
-          step="0.5"
-          value={maxBudgetUsd}
-          onChange={(event) => setMaxBudgetUsd(event.target.value)}
-        />
-      </div>
-      <div className="flex flex-col gap-2">
-        <Button
-          type="button"
-          variant="outline"
-          disabled={objective.trim().length === 0 || agentProfileId.length === 0 || estimateTask.isPending}
-          onClick={handlePreviewEstimate}
-          className="self-start"
-        >
-          {estimateTask.isPending ? "Estimating…" : "Preview estimate"}
-        </Button>
-        {estimateTask.data && (
-          <p className="rounded-lg border border-border bg-muted/40 p-3 text-sm text-muted-foreground">
-            <span className="font-medium text-foreground">{estimateTask.data.tier}</span> tier ·{" "}
-            {estimateTask.data.model} — {estimateTask.data.reason}
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base">New task</CardTitle>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-4">
+        <div className="flex flex-col gap-1.5">
+          <label className="text-sm font-medium" htmlFor="add-task-revision">
+            Repository revision
+          </label>
+          <Input
+            id="add-task-revision"
+            value={repositoryRevision}
+            onChange={(event) => setRepositoryRevision(event.target.value)}
+          />
+        </div>
+        <div className="flex flex-col gap-1.5">
+          <label className="text-sm font-medium" htmlFor="add-task-objective">
+            Objective
+          </label>
+          <Textarea
+            id="add-task-objective"
+            rows={3}
+            value={objective}
+            onChange={(event) => setObjective(event.target.value)}
+          />
+        </div>
+        <div className="flex flex-col gap-1.5">
+          <label className="text-sm font-medium" htmlFor="add-task-criteria">
+            Acceptance criteria (one per line)
+          </label>
+          <Textarea
+            id="add-task-criteria"
+            rows={3}
+            value={acceptanceCriteria}
+            onChange={(event) => setAcceptanceCriteria(event.target.value)}
+          />
+        </div>
+        <div className="flex flex-col gap-1.5">
+          <label className="text-sm font-medium" htmlFor="add-task-budget">
+            Max AI development budget (USD)
+          </label>
+          <Input
+            id="add-task-budget"
+            type="number"
+            min="0"
+            step="0.5"
+            value={maxBudgetUsd}
+            onChange={(event) => setMaxBudgetUsd(event.target.value)}
+          />
+        </div>
+        <div className="flex flex-col gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            disabled={objective.trim().length === 0 || agentProfileId.length === 0 || estimateTask.isPending}
+            onClick={handlePreviewEstimate}
+            className="self-start"
+          >
+            {estimateTask.isPending ? "Estimating…" : "Preview estimate"}
+          </Button>
+          {estimateTask.data && (
+            <p className="rounded-lg border border-border bg-muted/40 p-3 text-sm text-muted-foreground">
+              <span className="font-medium text-foreground">{estimateTask.data.tier}</span> tier ·{" "}
+              {estimateTask.data.model} — {estimateTask.data.reason}
+            </p>
+          )}
+        </div>
+      </CardContent>
+      <CardFooter className="flex-col items-stretch gap-2">
+        {noAgentProfiles && (
+          <p className="text-sm text-warning">
+            No agent profiles are configured for this organization — an admin
+            needs to add one before a task can start.
           </p>
         )}
-      </div>
-      {error && <p className="text-sm text-destructive">{error}</p>}
-      <Button disabled={!canSubmit} onClick={handleSubmit} className="self-end">
-        {createTask.isPending || fundTask.isPending ? "Starting…" : "Start task"}
-      </Button>
-    </div>
+        <div className="flex items-center justify-between">
+          {error ? <p className="text-sm text-destructive">{error}</p> : <span />}
+          <Button disabled={!canSubmit} onClick={handleSubmit}>
+            {createTask.isPending || fundTask.isPending ? "Starting…" : "Start task"}
+          </Button>
+        </div>
+      </CardFooter>
+    </Card>
   );
 }

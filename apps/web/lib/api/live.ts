@@ -2,9 +2,12 @@ import type {
   AgentProfile,
   EstimateResult,
   Execution,
+  ExecutionEvent,
+  ModelTier,
   RepoProject,
   Task,
   TaskDetail,
+  UsageSummary,
   VerificationRun,
 } from "@/lib/types";
 import type {
@@ -24,7 +27,11 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
     // same pattern as lib/auth/client.ts.
     credentials: "include",
     headers: {
-      "Content-Type": "application/json",
+      // Only declare JSON when we're actually sending a body — Fastify's
+      // default JSON parser 400s on a Content-Type: application/json
+      // request with an empty body (e.g. fundTask/acceptTask, which POST
+      // with no body at all).
+      ...(init?.body ? { "Content-Type": "application/json" } : {}),
       ...init?.headers,
     },
   });
@@ -53,10 +60,19 @@ interface RawProject {
   created_at: string;
 }
 
+interface RawModelTier {
+  tier: string;
+  model: string;
+  maxComplexity: number;
+  costCeilingMinor?: number;
+}
+
 interface RawAgentProfile {
   id: string;
   policy_version: string;
   config_revision: number;
+  model_tiers: RawModelTier[];
+  tool_allowlist: string[];
 }
 
 interface RawExecution {
@@ -64,6 +80,7 @@ interface RawExecution {
   task_id: string;
   attempt_id: string;
   status: string;
+  conversation_id: string | null;
   routing_tier: string | null;
   routing_score: number | string | null;
   routing_reason: string | null;
@@ -105,6 +122,15 @@ interface RawTaskDetail extends RawTask {
   budgetSpentMinor: number;
 }
 
+interface RawExecutionEvent {
+  id: string;
+  execution_id: string;
+  kind: string;
+  payload: unknown;
+  occurred_at: string;
+  created_at: string;
+}
+
 // apps/api's estimate response (EstimateJobResponseSchema) is already
 // camelCase, not a DB row — no raw/to mapping needed, unlike everything else
 // in this file.
@@ -119,8 +145,37 @@ function toProject(raw: RawProject): RepoProject {
   };
 }
 
+function toModelTier(raw: RawModelTier): ModelTier {
+  return {
+    tier: raw.tier,
+    model: raw.model,
+    maxComplexity: raw.maxComplexity,
+    costCeilingMinor: raw.costCeilingMinor ?? null,
+  };
+}
+
 function toAgentProfile(raw: RawAgentProfile): AgentProfile {
-  return { id: raw.id, policyVersion: raw.policy_version, configRevision: raw.config_revision };
+  return {
+    id: raw.id,
+    policyVersion: raw.policy_version,
+    configRevision: raw.config_revision,
+    modelTiers: raw.model_tiers.map(toModelTier),
+    toolAllowlist: raw.tool_allowlist,
+  };
+}
+
+// apps/api's /v1/usage/summary response is already camelCase, not a DB row
+// — no raw/to mapping needed, same as estimateTask below.
+
+function toExecutionEvent(raw: RawExecutionEvent): ExecutionEvent {
+  return {
+    id: raw.id,
+    executionId: raw.execution_id,
+    kind: raw.kind,
+    payload: raw.payload,
+    occurredAt: raw.occurred_at,
+    createdAt: raw.created_at,
+  };
 }
 
 function toExecution(raw: RawExecution): Execution {
@@ -129,6 +184,7 @@ function toExecution(raw: RawExecution): Execution {
     taskId: raw.task_id,
     attemptId: raw.attempt_id,
     status: raw.status,
+    conversationId: raw.conversation_id,
     routingTier: raw.routing_tier,
     routingScore: raw.routing_score === null ? null : Number(raw.routing_score),
     routingReason: raw.routing_reason,
@@ -243,5 +299,16 @@ export const liveApi: TaskDashboardApi = {
       body: JSON.stringify(reason ? { reason } : {}),
     });
     return toTask(raw);
+  },
+
+  async getUsageSummary() {
+    return apiFetch<UsageSummary>("/v1/usage/summary");
+  },
+
+  async getExecutionEvents(taskId: string, executionId: string) {
+    const raw = await apiFetch<RawExecutionEvent[]>(
+      `/v1/jobs/${taskId}/executions/${executionId}/events`,
+    );
+    return raw.map(toExecutionEvent);
   },
 };

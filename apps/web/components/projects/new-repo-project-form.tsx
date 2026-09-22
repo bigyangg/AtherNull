@@ -204,6 +204,12 @@ export function NewRepoProjectForm() {
               </option>
             ))}
           </select>
+          {!profilesLoading && (agentProfiles?.length ?? 0) === 0 && (
+            <p className="text-sm text-warning">
+              No agent profiles are configured for this organization — an
+              admin needs to add one before a task can start.
+            </p>
+          )}
         </div>
         <div className="flex flex-col gap-1.5">
           <label className="text-sm font-medium" htmlFor="max-budget">

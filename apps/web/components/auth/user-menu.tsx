@@ -21,10 +21,19 @@ export function UserMenu() {
   }
 
   return (
-    <div className="flex items-center gap-3">
-      <span className="text-sm text-muted-foreground">{userEmail}</span>
-      <Button variant="ghost" size="sm" disabled={signingOut} onClick={handleSignOut}>
-        <LogOut /> Sign out
+    <div className="flex items-center justify-between gap-2 rounded-lg px-2 py-1.5">
+      <span className="truncate text-xs text-muted-foreground" title={userEmail}>
+        {userEmail}
+      </span>
+      <Button
+        variant="ghost"
+        size="icon"
+        className="size-7 shrink-0"
+        disabled={signingOut}
+        onClick={handleSignOut}
+        aria-label="Sign out"
+      >
+        <LogOut className="size-3.5" />
       </Button>
     </div>
   );
