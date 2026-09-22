@@ -1,0 +1,16 @@
+# Own node_modules for the two standalone packages (seed/, adapter-server/) -
+# neither is part of the pnpm workspace, same isolation pattern as Spike A's
+# gitignored upstream/ checkout and Spike B's node_modules.
+seed/node_modules/
+adapter-server/node_modules/
+
+# Contains a generated dev-only password for the seeded AtherNull user
+# (local dev Postgres only, never a real credential) - kept out of git on
+# principle even though it's throwaway. seed.ts regenerates this file (with
+# a fresh random password) on every run; README.md documents how.
+seed/seed-output.json
+
+# Playwright smoke-test raw results dump (screenshots/*.png are committed;
+# this is just the machine-readable duplicate of what the README already
+# transcribes).
+smoke-test-results.json

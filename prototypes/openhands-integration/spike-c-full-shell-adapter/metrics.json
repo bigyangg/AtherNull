@@ -1,0 +1,110 @@
+{
+  "spike": "C - full-shell adaptation cost (real AtherNull data)",
+  "date": "2026-09-22",
+  "openhands_source_modifications": {
+    "count": 0,
+    "detail": "Zero files under spike-a-standalone-shell/upstream/ were edited. The only file added into that checkout was a throwaway Playwright script (spike-c-smoke-test.mjs, a copy of this spike's own smoke-test.mjs), the same pattern Spike A's own smoke-test.mjs already established - not a modification to any existing OpenHands source file, and upstream/ is gitignored so it was never a candidate for commit anyway. The app was pointed at the adapter purely via runtime configuration: a normal (non-mock) build (`npm run build:app`, VITE_MOCK_API unset) plus seeding localStorage's `openhands-backends`/`openhands-active-backend` with a 'local' backend whose host is the adapter's URL - exactly the seam described in the plan (src/api/backend-registry/, agent-server-config.ts)."
+  },
+  "endpoints_implemented": {
+    "in_original_plan": [
+      "GET /api/conversations/search",
+      "GET /api/conversations/:id",
+      "GET /api/conversations/:id/events/count",
+      "GET /api/conversations/:id/events/search"
+    ],
+    "discovered_as_required_at_runtime": [
+      {
+        "endpoint": "GET /api/conversations (plural, ids[]= query param)",
+        "why": "The real conversation-detail view (use-user-conversation.ts) calls AgentServerConversationService.batchGetAppConversations([cid]), which hits this endpoint, NOT the singular GET /api/conversations/:id. Missing it made useActiveConversation() resolve conversation: undefined once isFetched flipped true, which routes/conversation.tsx treats as '404, not your conversation' and silently redirects back to /conversations with a toast - measured directly during the Playwright smoke test's first failing run."
+      },
+      {
+        "endpoint": "GET /api/settings",
+        "why": "Backend-registry health probe (use-backends-health.ts -> validateLocalBackend()) must succeed before the app shows anything but a 'Manage backends' / Disconnected recovery modal over the whole UI. Also read by TelemetryConsentBanner. Getting the response SHAPE wrong (a flat object, copied from the mock's unrelated CLOUD settings stand-in) was measured to have the same practical effect as omitting the endpoint entirely: user_consents_to_analytics fell through to a client-side default of null, which permanently reopens the telemetry-consent modal over the sidebar on every load. Fixed by matching the real local-backend response shape: {agent_settings, conversation_settings, llm_api_key_is_set, misc_settings: {app_preferences: {...}}}."
+      },
+      {
+        "endpoint": "PATCH /api/settings",
+        "why": "Needed so the telemetry-consent modal's 'Confirm preferences' button succeeds (200) instead of 404ing - its onSubmit swallows the failure and never marks the choice submitted, which left the modal permanently stuck open over the sidebar/conversation list across every navigation. Implemented as a local in-memory stub, never forwarded to AtherNull."
+      },
+      {
+        "endpoint": "GET /server_info",
+        "why": "The other half of validateLocalBackend()'s health probe - asserts a minimum agent-server version (config/defaults.json's compatibility.minimumAgentServer, 1.28.0 at this pinned commit)."
+      }
+    ],
+    "total_implemented": 6
+  },
+  "stubbed_appconversation_fields": [
+    { "field": "session_api_key", "value": "null (always, unconditionally)", "reason": "Security-critical - the Agent Server credential concept, forbidden by this spike's safety rules from ever being populated." },
+    { "field": "conversation_url", "value": "null (always)", "reason": "No live browser-reachable sandbox exists in this read-only spike." },
+    { "field": "sandbox_id", "value": "null", "reason": "AtherNull's API surface has no sandbox/container concept at all." },
+    { "field": "metrics", "value": "null", "reason": "MetricsSnapshot is Agent-Server-runtime telemetry never persisted by apps/api; AtherNull's usage_events/budgetSpentMinor exist but are a shape mismatch, not force-fit." },
+    { "field": "workspace", "value": "null", "reason": "No AtherNull equivalent surfaced via the read endpoints this adapter calls." },
+    { "field": "created_by_user_id", "value": "null", "reason": "Tasks have no 'created by' field; projects.owner_user_id is one hop away, not fetched to keep each read a single round trip." },
+    { "field": "trigger", "value": "null", "reason": "AtherNull tasks have no creation-trigger concept." },
+    { "field": "pr_number", "value": "[]", "reason": "No PR-linkage concept in AtherNull's task model." },
+    { "field": "sub_conversation_ids", "value": "[]", "reason": "No parent/child task relationship in AtherNull." },
+    { "field": "agent_kind", "value": "\"openhands\" (constant)", "reason": "Every AtherNull execution runs OpenHands, never ACP - a fleet-wide constant today, not derived per-task." },
+    { "field": "public", "value": "false (constant)" },
+    { "field": "selected_branch", "value": "task.repositoryRevision (lossy, not a stub)", "reason": "Closest available analog is a commit-ish revision string, not a real branch name - surfaced as-is with the mismatch documented, not hidden." }
+  ],
+  "stubbed_openhandsevent_fields": [
+    { "field": "ActionEvent.thinking_blocks", "value": "[]", "reason": "Not present in this spike's seed content (a fixture-content limitation, not a structural AtherNull gap - a real live execution's worker-forwarded payload would carry these verbatim)." },
+    { "field": "ActionEvent.tool_call_id", "value": "`stub-${event.id}`", "reason": "Same fixture-content limitation." },
+    { "field": "ActionEvent.tool_call", "value": "synthetic {id, type: 'function', function: {name, arguments: '{}'}}", "reason": "Built from the stubbed tool_call_id and the real tool_name." },
+    { "field": "ActionEvent.llm_response_id", "value": "event.id", "reason": "No real LLM response id exists for fixture-seeded content." },
+    { "field": "ActionEvent.security_risk", "value": "\"UNKNOWN\" (the SDK's own enum value)", "reason": "Honest 'we don't know', not a fabricated risk level." },
+    { "field": "ObservationEvent.tool_name", "value": "derived from observation.kind (TerminalObservation->terminal, FileEditorObservation->file_editor, else unknown)", "reason": "Not carried directly in AtherNull's ObservationEvent payloads." },
+    { "field": "ObservationEvent.tool_call_id", "value": "`stub-${action_id}` (or `stub-${event.id}` if no action_id)", "reason": "Paired to the matching action's own stub for internal consistency." }
+  ],
+  "code_size": {
+    "seed_seed_ts_lines": 462,
+    "adapter_server_src_lines": 863,
+    "smoke_test_lines": 230,
+    "total_new_code_lines": 1655,
+    "openhands_upstream_files_edited": 0,
+    "comparison_note": "Spike B's vendored-component approach measured 125 files touched to reuse 2 components with fixtures. This spike's full-shell approach needed 0 OpenHands source files touched, but required an entirely separate ~1650-line standalone adapter service (seed script + Express server + mapping layer + smoke test) that Spike B's approach didn't need an equivalent of, since Spike B's Next.js harness fetches AtherNull data directly with no REST-contract-matching translation layer. These aren't apples-to-apples: Spike B's cost is measured in touched/vendored frontend files, Spike C's is measured in a new backend-shaped adapter service - see COMPARISON.md's new section for the fuller discussion."
+  },
+  "dependencies": {
+    "seed_node_modules_size_mb": 38,
+    "seed_top_level_packages": 21,
+    "adapter_server_node_modules_size_mb": 42,
+    "adapter_server_top_level_packages": 76
+  },
+  "seed_data": {
+    "organizations_created": 1,
+    "projects_created": 1,
+    "tasks_created": 1,
+    "executions_created": 1,
+    "events_inserted": 9,
+    "event_kinds": ["MessageEvent (x2)", "ActionEvent (x3: terminal, file-editor create, file-editor str_replace, finish)", "ObservationEvent (x2: terminal, file-editor)"],
+    "seed_mechanism": "Real HTTP calls against a running apps/api dev server (localhost:3001): POST /api/auth/sign-up/email -> direct Postgres UPDATE to set emailVerified=true (same bypass job-lifecycle.test.ts uses, no real email sent) -> POST /api/auth/sign-in/email -> POST /api/auth/organization/create -> POST /v1/projects -> direct Postgres INSERT into agent_profiles (no public create endpoint exists) -> POST /v1/jobs -> POST /v1/jobs/:id/fund -> POST /internal/executions/claim (Bearer INTERNAL_API_TOKEN) -> POST /internal/executions/:id/conversation -> POST /internal/executions/:id/events (x9, content adapted from Spike B's execution-events.synthetic.ts) -> POST /internal/executions/:id/complete. Zero LLM calls, zero Solana activity.",
+    "distinctive_objective_string": "[Spike-C probe 7f2a91] Add a rate-limited GET /health endpoint"
+  },
+  "browser_smoke_test": {
+    "tool": "Playwright (chromium, reused from Spike A's already-installed devDependency - no fresh install)",
+    "frontend_build": "npm run build:app (VITE_MOCK_API unset/false - the real, non-mock code path), served statically via sirv build/ --single, same pattern Spike A used for its own build:mock output",
+    "assertions": [
+      { "name": "homepage-renders-real-content", "pass": true, "detail": "rootInnerHTMLLength=51657, bodyTextLength=798, no error-boundary text" },
+      { "name": "homepage-shows-real-athernull-task-title", "pass": true, "detail": "the seeded distinctive objective string '[Spike-C probe 7f2a91] Add a rate-limited GET /health endpoint' is visible in the sidebar conversation list - proof this is real AtherNull data, not OpenHands' own mock fixtures" },
+      { "name": "click-through-to-conversation-detail", "pass": true, "detail": "clicked the real sidebar item (not a direct URL nav); navigated to /conversations/<real taskId>?backend=default-local and the detail view mounted (rootInnerHTMLLength=82316)" },
+      { "name": "conversation-detail-shows-real-seeded-events", "pass": true, "detail": "both the seeded agent MessageEvent text and the '3 actions completed' collapsed-group summary (built from the seeded ActionEvent/ObservationEvent pairs) are visible - proof GET /api/conversations/:id/events/search round-tripped real AtherNull execution_events through mapping.ts" },
+      { "name": "websocket-status-recorded", "pass": true, "detail": "9 attempts observed against 2 distinct socket paths (/sockets/bash-events, /sockets/events/:id), all failing with 'Unexpected response code: 404' - same limitation Spike A documented, not hidden or faked" }
+    ],
+    "all_pass": true,
+    "screenshots": ["01-homepage.png", "02-sidebar.png", "03-detail-view.png"]
+  },
+  "websocket_realtime_status": {
+    "attempted_fix": false,
+    "finding": "Identical to Spike A's already-documented limitation: a statically-served build has no WebSocket backend to connect to. This adapter implements no WebSocket endpoint at all (out of scope per the plan - AtherNull's own real architecture uses REST polling, not websockets, for this exact data: apps/web/lib/hooks/use-execution-events.ts). The UI correctly shows 'Disconnected' / an 'Unable to connect to server' banner rather than silently hanging - this is the expected, honest degraded state, not a bug introduced by the adapter."
+  },
+  "security_verification": {
+    "athernull_session_cookie_reaches_browser": false,
+    "session_api_key_referenced_anywhere_in_spike": false,
+    "adapter_performs_any_athernull_mutation_beyond_seed_step": false,
+    "notes": "Verified by code inspection: athernull-client.ts's session cookie is a module-level variable never returned from any Express route; grep for SESSION_API_KEY/session_api_key-as-a-real-value across adapter-server/src/ finds only the AppConversation stub (always null) and this documentation. athernullGet() is the only network-call path and accepts no method parameter beyond GET."
+  },
+  "deviations_from_plan": [
+    "The plan's 4-endpoint contract (drawn from conversation-handlers.ts's mocks) undercounted the real frontend's actual read surface by 2 endpoints (the plural batch GET /api/conversations, and the backend-registry health probe's GET /api/settings + GET /server_info) - discovered only by running the real, non-mock frontend end-to-end rather than reasoning from the mock module alone.",
+    "PATCH /api/settings was added (not GET-only) - but as a local, in-memory-only stub never forwarded to AtherNull, which does not violate the 'adapter is read-only against AtherNull's API' rule (that rule is specifically about AtherNull's own endpoints).",
+    "GET /api/conversations/:id (the plan's originally-scoped singular fetch) is implemented but, per the investigation above, is not actually on the real click-through code path - kept for contract completeness since other, unexercised parts of the UI may still call it."
+  ]
+}

@@ -1,0 +1,136 @@
+{
+  "spike": "A - standalone OpenHands frontend shell",
+  "generated": "2026-09-22",
+  "upstream_commit": "380fd839d6bcb1f9e1674ab0ff5c0225705118e8",
+  "upstream_commit_date": "2026-09-21T16:21:48+02:00",
+  "environment": {
+    "os": "Windows 11 Home Single Language 10.0.26200",
+    "node": "v24.21.0",
+    "npm": "11.19.0",
+    "npm_packageManager_declared_by_upstream": "npm@10.5.0",
+    "note": "upstream engines requires node >=24; local node v24.21.0 satisfies it. Local npm (11.19.0) is newer than upstream's pinned packageManager (10.5.0) but install completed without errors."
+  },
+  "checkout": {
+    "method": "git init + remote add + fetch --depth 1 <sha> + checkout FETCH_HEAD",
+    "fetch_wall_clock_seconds": 37.3,
+    "tree_size": "30M",
+    "file_count": 2335,
+    "frontend_location": "repo root (src/), package @openhands/agent-canvas - NOT under a frontend/ subfolder"
+  },
+  "install": {
+    "command": "npm install --ignore-scripts",
+    "wall_clock_seconds": 81.97,
+    "packages_added": 1394,
+    "packages_audited": 1395,
+    "node_modules_size": "894M",
+    "node_modules_top_level_dirs": 890,
+    "npm_audit_summary": "17 vulnerabilities (10 moderate, 7 high) reported by npm - not remediated, out of scope for this spike",
+    "deprecation_warnings": [
+      "inflight@1.0.6",
+      "rimraf@2.6.3",
+      "glob@7.2.3",
+      "boolean@3.2.0"
+    ]
+  },
+  "build_mock": {
+    "command": "npm run build:mock  (= make-i18n && cross-env VITE_MOCK_API=true react-router build)",
+    "wall_clock_seconds": 39.97,
+    "vite_reported_build_seconds_client": 21.59,
+    "vite_reported_build_seconds_ssr_manifest": 9.18,
+    "result": "success, 0 build errors",
+    "mode": "SPA mode (react-router.config ssr:false) - output written directly to build/, not build/client/",
+    "output_dir": "build/",
+    "output_size": "9.2M",
+    "output_file_count": 295,
+    "mock_service_worker_present": "build/mockServiceWorker.js",
+    "warnings": [
+      "INEFFECTIVE_DYNAMIC_IMPORT for add-backend-modal.tsx (statically + dynamically imported)",
+      "3x INEFFECTIVE_DYNAMIC_IMPORT for agent-profiles-service.api.ts, profiles-service.api.ts, secrets-service.ts",
+      "several chunks >500kB after minification (largest ~1.6MB uncompressed / 569kB gzip: src/i18n/translation.js)",
+      "5x React Router v8 future-flag deprecation warnings (non-fatal)"
+    ],
+    "routes_discovered_from_src_routes_ts": [
+      "/", "/conversations", "/conversations/:conversationId/panel", "/conversations/:conversationId",
+      "/launch", "/customize", "/skills", "/plugins", "/apps", "/extensions/:extensionName/*", "/mcp",
+      "/settings", "/settings (index)", "/settings/llm", "/settings/agent", "/settings/agents",
+      "/settings/condenser", "/settings/agent-context", "/settings/verification", "/settings/app",
+      "/settings/secrets", "/oauth/device/verify", "/automations", "/automations/git-sync",
+      "/automations/templates", "/automations/new/:automationId", "/automations/:automationId",
+      "/shared/conversations/:conversationId"
+    ]
+  },
+  "build_lib": {
+    "command": "npm run build:lib  (= make-i18n && react-router typegen && cross-env BUILD_LIB=true vite build && tsc -p tsconfig.lib.json)",
+    "wall_clock_seconds": 61.57,
+    "vite_reported_build_seconds": 18.7,
+    "result": "success, 0 build/type errors",
+    "output_dir": "dist/",
+    "output_size": "80M",
+    "output_file_count": 10607,
+    "largest_chunk": "dist/src/i18n/translation.cjs (1,608.91 kB / gzip 569.00 kB)"
+  },
+  "export_subpath_audit": {
+    "prior_report_status": "REPRODUCED - confirmed as a real, concrete bug, not a false report",
+    "method": "For every subpath in package.json's \"exports\" map, checked filesystem existence of the declared .d.ts, .js (import) and .cjs (require) paths, then independently confirmed via node require.resolve()/require() at runtime.",
+    "result": "8/8 declared export subpaths FAIL: the declared .d.ts file exists at the exact declared path, but the declared .js and .cjs files do NOT exist at their declared paths.",
+    "root_cause": "vite.config.ts's lib build uses rollupOptions.output.preserveModulesRoot: \"src\" intending to strip the src/ prefix from output paths, but it does not take effect for this entry graph - JS/CJS output lands one directory level deeper, under dist/src/... (e.g. dist/src/index.js, dist/src/components/browser/index.js). Meanwhile tsc -p tsconfig.lib.json (run separately for declarations) DOES honor its rootDir: \"src\" and correctly strips the prefix, producing dist/index.d.ts, dist/components/browser/index.d.ts, etc. The two build tools disagree on the output path convention, breaking every declared export.",
+    "runtime_reproduction": "node -e \"require('./dist/index.cjs')\" -> MODULE_NOT_FOUND: Cannot find module './dist/index.cjs'. node -e \"require('./dist/src/index.cjs')\" -> resolves and loads (fails only on missing browser `document`, i.e. module resolution itself succeeds).",
+    "per_subpath": [
+      { "subpath": ".", "types_declared": "./dist/index.d.ts", "types_exists": true, "js_declared": "./dist/index.js", "js_exists": false, "actual_js_location": "./dist/src/index.js", "cjs_declared": "./dist/index.cjs", "cjs_exists": false, "actual_cjs_location": "./dist/src/index.cjs", "verdict": "FAIL" },
+      { "subpath": "./browser", "types_declared": "./dist/components/browser/index.d.ts", "types_exists": true, "js_declared": "./dist/components/browser/index.js", "js_exists": false, "actual_js_location": "./dist/src/components/browser/index.js", "cjs_declared": "./dist/components/browser/index.cjs", "cjs_exists": false, "actual_cjs_location": "./dist/src/components/browser/index.cjs", "verdict": "FAIL" },
+      { "subpath": "./conversation", "types_declared": "./dist/components/conversation/index.d.ts", "types_exists": true, "js_declared": "./dist/components/conversation/index.js", "js_exists": false, "actual_js_location": "./dist/src/components/conversation/index.js", "cjs_declared": "./dist/components/conversation/index.cjs", "cjs_exists": false, "actual_cjs_location": "./dist/src/components/conversation/index.cjs", "verdict": "FAIL" },
+      { "subpath": "./files", "types_declared": "./dist/components/files/index.d.ts", "types_exists": true, "js_declared": "./dist/components/files/index.js", "js_exists": false, "actual_js_location": "./dist/src/components/files/index.js", "cjs_declared": "./dist/components/files/index.cjs", "cjs_exists": false, "actual_cjs_location": "./dist/src/components/files/index.cjs", "verdict": "FAIL" },
+      { "subpath": "./settings", "types_declared": "./dist/components/settings/index.d.ts", "types_exists": true, "js_declared": "./dist/components/settings/index.js", "js_exists": false, "actual_js_location": "./dist/src/components/settings/index.js", "cjs_declared": "./dist/components/settings/index.cjs", "cjs_exists": false, "actual_cjs_location": "./dist/src/components/settings/index.cjs", "verdict": "FAIL" },
+      { "subpath": "./sidebar", "types_declared": "./dist/components/sidebar/index.d.ts", "types_exists": true, "js_declared": "./dist/components/sidebar/index.js", "js_exists": false, "actual_js_location": "./dist/src/components/sidebar/index.js", "cjs_declared": "./dist/components/sidebar/index.cjs", "cjs_exists": false, "actual_cjs_location": "./dist/src/components/sidebar/index.cjs", "verdict": "FAIL" },
+      { "subpath": "./terminal", "types_declared": "./dist/components/terminal/index.d.ts", "types_exists": true, "js_declared": "./dist/components/terminal/index.js", "js_exists": false, "actual_js_location": "./dist/src/components/terminal/index.js", "cjs_declared": "./dist/components/terminal/index.cjs", "cjs_exists": false, "actual_cjs_location": "./dist/src/components/terminal/index.cjs", "verdict": "FAIL" },
+      { "subpath": "./i18n", "types_declared": "./dist/i18n/index.d.ts", "types_exists": true, "js_declared": "./dist/i18n/index.js", "js_exists": false, "actual_js_location": "./dist/src/i18n/index.js", "cjs_declared": "./dist/i18n/index.cjs", "cjs_exists": false, "actual_cjs_location": "./dist/src/i18n/index.cjs", "verdict": "FAIL" }
+    ],
+    "pass_count": 0,
+    "fail_count": 8,
+    "note_on_dist_package_js": "dist/package.js and dist/package.cjs are NOT the library entry - they are an incidentally-bundled copy of package.json (something in src imports package.json, e.g. for a version string), and happen to collide in name with what a naive glance might mistake for the library root."
+  },
+  "browser_smoke_test": {
+    "status": "PASS - all 3 assertions passed",
+    "tooling": "Playwright (@playwright/test 1.62.1, already an upstream devDependency) + chromium (Chrome for Testing 151.0.7922.34) installed via npx playwright install chromium",
+    "chromium_install_wall_clock_seconds": 67.45,
+    "served_via": "npx sirv-cli build/ --single --port 4173 (static-serving the build:mock output; npm run preview / vite preview was considered but sirv-cli mirrors upstream's own \"start\" script and was more reliable for a pure SPA-mode build)",
+    "required_workaround": "Fresh-browser localStorage has no configured backend, so the app shows an 'Add a backend' first-run wizard instead of the app shell. Seeded localStorage (openhands-backends, openhands-active-backend, openhands-onboarded, telemetry flags) before navigation, using the exact same keys/shape as upstream's own tests/e2e/support/onboarding-helpers.ts (showOnboarding helper) does for its own Playwright suite. This is a faithful 'already configured, first backend added' state (MSW intercepts */api/* regardless of the configured host), not a way of bypassing app behavior.",
+    "assertions": [
+      {
+        "name": "homepage-renders-real-content",
+        "pass": true,
+        "detail": "rootInnerHTMLLength=147747, bodyTextLength=3732, no error-boundary/stack-trace text detected"
+      },
+      {
+        "name": "sidebar-with-nav-item",
+        "pass": true,
+        "detail": "3 visible sidebar nav links matched a[data-testid^=\"sidebar-\"][data-testid$=\"-link\"] (sidebar-conversations-link, sidebar-skills-link, sidebar-automations-link)"
+      },
+      {
+        "name": "click-through-to-detail-view",
+        "pass": true,
+        "detail": "Clicked conversation list item \"My New Project\" (not a direct URL nav); navigated to /conversations/1?backend=default-local; conversation detail view mounted with chat interface, title, and sidebar highlighting the active item"
+      }
+    ],
+    "console_errors_captured": [
+      "WebSocket connection to 'ws://localhost:4173/sockets/bash-events' failed: Error during WebSocket handshake: Unexpected response code: 200",
+      "WebSocket connection to 'ws://localhost:4173/sockets/events/1?resend_mode=all' failed: Error during WebSocket handshake: Unexpected response code: 200"
+    ],
+    "limitation_found": "MSW mocks the REST API layer thoroughly (conversations list, sidebar, settings, etc. all render realistic mock data), but WebSocket connections are NOT mocked when the build is statically served via sirv-cli - the conversation view shows 'Unable to connect to server' / 'Disconnected'. This appears to be because WebSocket interception in this codebase's mock setup is wired for the Vite dev server (npm run dev:mock), not for a plain static file server on top of a production build. Full realtime interactivity (chat streaming, terminal, live events) was not verified end-to-end; static structural navigation was.",
+    "screenshots": [
+      "screenshots/01-homepage.png",
+      "screenshots/02-sidebar.png",
+      "screenshots/03-detail-view.png"
+    ]
+  },
+  "mock_fixture_data_locations_for_spike_b": {
+    "note": "Not fetched or processed here, per instructions - path pointers only.",
+    "handlers_dir": "src/mocks/ (handlers.ts aggregates: agent-profiles-handlers.ts, analytics-handlers.ts, auth-handlers.ts, automation-handlers.ts, canvas-extensions-handlers.ts, conversation-handlers.ts, feedback-handlers.ts, file-service-handlers.ts, git-repository-handlers.ts, mcp-handlers.ts, secrets-handlers.ts, settings-handlers.ts, workspaces-handlers.ts)",
+    "msw_browser_entry": "src/mocks/browser.ts",
+    "msw_node_entry": "src/mocks/node.ts",
+    "mock_gate": "src/mocks/should-start-mock-worker.ts (gates on import.meta.env.VITE_MOCK_API === 'true')",
+    "event_payload_fixtures": "src/mocks/conversation-handlers.ts (GET /events/search, /events/count mock handlers, pagination event generator with OpenHandsEvent shape) and src/fixtures/canvas-demo-conversation.ts (contains concrete sample events including kind: \"FileEditorAction\" and kind: \"FileEditorObservation\" plus function-call/message-shaped entries)",
+    "other_fixtures": "src/fixtures/table-demo-conversation.ts, src/fixtures/home-automations-demo.ts",
+    "e2e_mock_specs_for_reference": "tests/e2e/mock-llm/ (conversations/, home/, onboarding/, settings/, etc.) and tests/e2e/support/onboarding-helpers.ts"
+  }
+}

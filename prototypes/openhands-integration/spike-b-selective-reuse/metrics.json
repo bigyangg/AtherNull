@@ -1,0 +1,61 @@
+{
+  "spike": "B — selective reuse (2 vendored OpenHands components)",
+  "upstreamCommit": "380fd839d6bcb1f9e1674ab0ff5c0225705118e8",
+  "measurementMethod": "build-verified (next build + next start, headless Chromium via Playwright, console-error capture) — not statically traced",
+  "vendoredFiles": {
+    "total": 125,
+    "byteIdenticalCopies": 87,
+    "modifiedOrStubbed": 38,
+    "modifiedOrStubbedBreakdown": {
+      "stub": 19,
+      "modifiedForBlockerOrOtherReason": 13,
+      "partialVendor": 4,
+      "shim": 2
+    }
+  },
+  "adapterLinesOfCode": 147,
+  "fixturesLinesOfCode": {
+    "synthetic": 286,
+    "upstreamReal": 277,
+    "total": 563
+  },
+  "validationScriptLinesOfCode": 320,
+  "dependenciesAddedBeyondNextReact": {
+    "runtime": [
+      "clsx", "tailwind-merge", "zustand", "lucide-react", "react-markdown",
+      "remark-gfm", "remark-breaks", "rehype-raw", "rehype-sanitize",
+      "hast-util-sanitize", "unified", "react-syntax-highlighter",
+      "framer-motion", "@xterm/xterm", "@xterm/addon-fit",
+      "@openhands/typescript-client", "react-icons", "class-variance-authority"
+    ],
+    "buildTooling": ["tailwindcss", "@tailwindcss/postcss", "tsx"],
+    "droppedAfterInitialAdd": ["@heroui/react"],
+    "countRuntime": 18,
+    "countBuildTooling": 3
+  },
+  "shimsApplied": [
+    { "what": "react-i18next npm package", "how": "turbopack.resolveAlias + tsconfig paths -> vendor/openhands/_shims/react-i18next.tsx", "label": "scope-reduction shim" },
+    { "what": "vendor/openhands/i18n/index.ts (i18next instance)", "how": "local passthrough object with t()/exists()", "label": "scope-reduction shim" }
+  ],
+  "genuineNextBlockers": [
+    { "issue": "#/... TS path alias", "fix": "tsconfig.json paths mapping (#/* -> ./vendor/openhands/*)", "filesAffected": "all 125 (mechanical, no per-file edits)" },
+    { "issue": "*.svg?react SVG imports (Vite/SVGR-only)", "fix": "swapped to lucide-react icon components", "filesAffected": 11, "importLinesAffected": "~20" },
+    { "issue": "import.meta.env.MODE (Vite-only)", "fix": "file replaced for an unrelated reason (styled-tooltip.tsx); noted independently", "filesAffected": 1, "location": "components/shared/buttons/styled-tooltip.tsx:35 (upstream)" },
+    { "issue": "@xterm/xterm touches document/window at module scope", "fix": "next/dynamic(..., { ssr: false }) in app/harness/page.tsx", "filesAffected": 1 }
+  ],
+  "adapterDiscovery": "event-message.tsx's fallback branch (real, unmodified upstream file) crashes on an unrecognized-kind event with no llm_message field — TypeError caught during next build. Worked around in the adapter, not by patching the vendored file. See MANIFEST.md.",
+  "fixtures": {
+    "synthetic": { "count": 9, "renderedWithoutConsoleErrors": true },
+    "upstreamReal": { "count": 9, "renderedWithoutConsoleErrors": true, "genuineCount": 5, "handConstructedCount": 2, "note": "4 of the 9 events come from the genuine 3-event canvas-demo-conversation.ts sequence (user msg, action, observation) plus 1 more genuine agent msg = 5 total genuine event objects across 4 upstream-real record entries (one entry pairs an action+observation as 2 fixture rows); see execution-events.upstream-real.ts for the per-entry citations." },
+    "validationScript": { "totalChecks": 19, "passed": 19, "failed": 0 }
+  },
+  "render": {
+    "buildSucceeded": true,
+    "staticPrerenderSucceeded": true,
+    "consoleErrorsOnLoad": 0,
+    "consoleWarningsOnLoad": 0,
+    "malformedUnknownKindFixtureCrashed": false,
+    "unrecognizedToolFixtureFellBackGracefully": true,
+    "upstreamRealFinishAndPairedActionObservationRendered": true
+  }
+}

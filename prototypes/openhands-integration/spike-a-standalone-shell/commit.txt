@@ -1,0 +1,37 @@
+Spike A - Upstream OpenHands checkout record
+=============================================
+
+Pinned commit: 380fd839d6bcb1f9e1674ab0ff5c0225705118e8
+Commit date (from `git log -1 --format=%ci`): 2026-09-21 16:21:48 +0200
+Fetched into: prototypes/openhands-integration/spike-a-standalone-shell/upstream/ (gitignored)
+
+Exact commands run:
+
+  mkdir -p prototypes/openhands-integration/spike-a-standalone-shell/upstream
+  cd prototypes/openhands-integration/spike-a-standalone-shell/upstream
+  git init -q
+  git remote add origin https://github.com/OpenHands/OpenHands.git
+  git fetch --depth 1 origin 380fd839d6bcb1f9e1674ab0ff5c0225705118e8
+  git checkout -q FETCH_HEAD
+
+Timing:
+  git fetch --depth 1 ...  wall clock: 37.3s (real 0m37.318s)
+
+Resulting tree size (checked-out working tree, git history excluded from size since
+this is a --depth 1 shallow clone; `.git` dir itself is small - shallow, single commit):
+  du -sh .   => 30M
+  find . -type f | wc -l  => 2335 files
+
+Confirmed structure: the repository's frontend lives in ROOT-level src/, not under a
+frontend/ subfolder. The whole repo IS the frontend package at this commit:
+  package.json "name": "@openhands/agent-canvas"
+  package.json "version": "1.20.0"
+  package.json "bin": { "agent-canvas": "bin/agent-canvas.mjs" }
+  package.json "engines": { "node": ">=24" }
+
+Relevant scripts found in package.json (verified before running anything):
+  "build:mock": "npm run make-i18n && cross-env VITE_MOCK_API=true react-router build"
+  "build:lib":  "npm run make-i18n && react-router typegen && cross-env BUILD_LIB=true vite build && tsc -p tsconfig.lib.json"
+  "preview":    "vite preview"
+  "dev:mock":   "npm run make-i18n && cross-env VITE_MOCK_API=true react-router dev"
+  "start":      "npx sirv-cli build/ --single"

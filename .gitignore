@@ -17,6 +17,11 @@ venv/
 .pytest_cache/
 .ruff_cache/
 
+# openhands-agent-server's local persistence dir when run outside a container
+# (e.g. workers/coding-agent's own local PoC/dev runs) — conversation
+# transcripts and state, never source.
+workers/coding-agent/workspace/
+
 # Env / secrets
 .env
 .env.*
@@ -30,3 +35,7 @@ Thumbs.db
 
 # Infra
 infrastructure/**/*.local.yml
+
+# OpenHands integration prototype — spike A's full upstream checkout is
+# reproducible from spike-a-standalone-shell/commit.txt; never commit the clone.
+prototypes/openhands-integration/spike-a-standalone-shell/upstream/

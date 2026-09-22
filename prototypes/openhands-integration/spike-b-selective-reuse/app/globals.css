@@ -1,0 +1,56 @@
+@import "tailwindcss";
+@import "@xterm/xterm/css/xterm.css";
+
+/*
+ * Minimal, self-authored token set standing in for OpenHands' real theme
+ * system (HeroUI plugin + `hero.ts` + `tailwind.config.js` + per-theme
+ * `--oh-*` overrides in `themes/color-themes.ts`, ~1000 lines total).
+ * Reproducing that system was ruled out of scope for this spike — see
+ * MANIFEST.md "Styling / theming" row. These are flat, static values (one
+ * dark theme only) so vendored components' Tailwind utility classes
+ * (bg-surface-raised, text-foreground, text-muted, ...) resolve to *something*
+ * legible instead of being unstyled. Not pixel-faithful to production
+ * OpenHands.
+ */
+@theme inline {
+  --color-background: #0b0e14;
+  --color-surface: #161a23;
+  --color-surface-raised: #1f2430;
+  --color-surface-deep: #05070a;
+  --color-foreground: #f7f9fc;
+  --color-muted: #a3b0c4;
+  --color-text-dim: #7e8a9e;
+  --color-text-subtle: #626d82;
+  --color-border: #383f50;
+  --color-border-subtle: #2c313f;
+  --color-danger: #e5484d;
+  --color-success: #3dd68c;
+  --color-warning: #f5a623;
+  --color-accent: #6ea8fe;
+}
+
+body {
+  background-color: var(--color-background);
+  color: var(--color-foreground);
+}
+
+/* Vendored markdown renderer (features/markdown/*) targets `.markdown-body`
+   the same way the real OpenHands app's index.css does. */
+.markdown-body code {
+  padding: 0.2em 0.4em;
+  margin: 0;
+  font-size: 85%;
+  white-space: break-spaces;
+  background-color: var(--color-surface-raised);
+  border-radius: 4px;
+  border: 1px solid var(--color-surface-raised);
+}
+
+.markdown-body pre code {
+  padding: 0;
+  background-color: inherit;
+}
+
+.markdown-body {
+  white-space: pre-wrap;
+}

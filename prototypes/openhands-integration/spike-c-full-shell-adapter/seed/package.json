@@ -1,0 +1,19 @@
+{
+  "name": "spike-c-seed",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "description": "Standalone seed script for Spike C (full-shell OpenHands adapter). Not part of the AtherNull pnpm workspace - own deps, run with its own npm install. Seeds one real org/project/task/execution/events into the local dev Postgres (infrastructure/docker-compose.yml's athernull_dev) through apps/api's real HTTP + internal endpoints, the same zero-cost pattern apps/api/test/job-lifecycle.test.ts uses.",
+  "scripts": {
+    "seed": "tsx seed.ts"
+  },
+  "dependencies": {
+    "pg": "^8.23.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "@types/pg": "^8.11.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0"
+  }
+}
