@@ -10,8 +10,17 @@ dependencies = [
     # import smoke test against the pinned SDK, not guessed. See
     # workers/coding-agent/README.md.
     "openhands-workspace==1.41.0",
+    # Was only ever pulled in transitively by openhands-workspace, and at a
+    # stale 1.27.1 that doesn't import against sdk==1.42.1 (confirmed:
+    # ImportError on StartACPConversationRequest). Pinned explicitly at the
+    # version confirmed to actually work against the pins above.
+    "openhands-agent-server==1.42.1",
     "python-dotenv==1.2.2",
     "httpx==0.28.1",
+    # Already an openhands-sdk transitive dependency (confirmed installed at
+    # 15.0.1) — declared directly here because agent_server_adapter.py's
+    # resync_events() imports it itself, not just through the SDK's own use.
+    "websockets==15.0.1",
 ]
 
 [project.optional-dependencies]

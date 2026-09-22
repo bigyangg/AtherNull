@@ -2,7 +2,7 @@
 // accept, reject. Runs against a real Postgres database via Fastify
 // inject(), same style as tenant-authorization.test.ts — see that file's
 // header comment for how to create/migrate the test database (must include
-// 0005_verification_runs_task_fk.sql).
+// migrations through 0007_execution_events.sql).
 process.env.DATABASE_URL =
   process.env.TEST_DATABASE_URL ??
   "postgres://athernull:athernull@localhost:5433/athernull_test";
@@ -339,4 +339,44 @@ describe("job lifecycle: estimate, verify, accept, reject", () => {
       .execute();
     assert.equal(intents.length, 1);
   });
+});
+
+
+test("execution snapshots recover late events, deduplicate replay, and enforce ownership", async () => {
+  const { owner, projectId, agentProfileId } = await setUpOwnerWithOrg(randomUUID());
+  const { taskId, executionId } = await createFundedAndRunningTask(owner.jar.header, projectId, agentProfileId);
+  const execution = await db.selectFrom("executions").select("lease_owner")
+    .where("id", "=", executionId).executeTakeFirstOrThrow();
+  const internalHeaders = { authorization: `Bearer ${INTERNAL_TOKEN}` };
+  const eventsUrl = `/v1/jobs/${taskId}/executions/${executionId}/events`;
+  const event = (occurredAt: string) => ({
+    id: randomUUID(), kind: "MessageEvent", occurredAt, payload: { text: "test event" },
+  });
+  const newest = event("2026-01-02T00:00:00.000Z");
+  const older = event("2026-01-01T00:00:00.000Z");
+  const tied = event(newest.occurredAt);
+  const postEvents = (events: ReturnType<typeof event>[], workerId = execution.lease_owner) => app.inject({
+    method: "POST", url: `/internal/executions/${executionId}/events`,
+    headers: internalHeaders, payload: { workerId, events },
+  });
+  assert.equal((await postEvents([newest], "wrong-worker")).statusCode, 409);
+  assert.equal((await postEvents([newest])).statusCode, 204);
+  const first = await app.inject({ method: "GET", url: eventsUrl, headers: { cookie: owner.jar.header } });
+  assert.equal(first.statusCode, 200);
+  assert.deepEqual(first.json().map((row: { id: string }) => row.id), [newest.id]);
+
+  assert.equal((await postEvents([older, tied, newest])).statusCode, 204);
+  const replay = await app.inject({ method: "GET", url: eventsUrl, headers: { cookie: owner.jar.header } });
+  assert.equal(replay.statusCode, 200);
+  assert.deepEqual(replay.json().map((row: { id: string }) => row.id),
+    [older.id, ...[newest.id, tied.id].sort()]);
+  assert.equal((await app.inject({ method: "GET", url: eventsUrl })).statusCode, 401);
+
+  const other = await setUpOwnerWithOrg(randomUUID());
+  assert.equal((await app.inject({ method: "GET", url: eventsUrl,
+    headers: { cookie: other.owner.jar.header } })).statusCode, 404);
+  const mismatchedTask = await app.inject({ method: "GET",
+    url: `/v1/jobs/${randomUUID()}/executions/${executionId}/events`,
+    headers: { cookie: owner.jar.header } });
+  assert.equal(mismatchedTask.statusCode, 404);
 });

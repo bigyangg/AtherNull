@@ -187,6 +187,99 @@ export async function internalRoutes(app: FastifyInstance) {
     reply.send(updated);
   });
 
+  // Agent Server integration §2: the worker's agent_server_adapter.py calls
+  // this right after creating the OpenHands conversation, before .run()
+  // starts — so the mapping exists even if the run later fails.
+  app.post("/internal/executions/:id/conversation", async (request, reply) => {
+    if (!requireInternalToken(request, reply)) return;
+
+    const { id } = z.object({ id: z.string() }).parse(request.params);
+    const { workerId, conversationId } = z
+      .object({ workerId: z.string().min(1), conversationId: z.string().min(1) })
+      .parse(request.body);
+
+    const execution = await db
+      .selectFrom("executions")
+      .select(["id", "lease_owner"])
+      .where("id", "=", id)
+      .executeTakeFirst();
+
+    if (!execution) {
+      reply.status(404).send({ error: "Not found" });
+      return;
+    }
+    if (execution.lease_owner !== workerId) {
+      reply.status(409).send({ error: "Lease no longer owned by this worker" });
+      return;
+    }
+
+    const updated = await db
+      .updateTable("executions")
+      .set({ conversation_id: conversationId })
+      .where("id", "=", id)
+      .returningAll()
+      .executeTakeFirstOrThrow();
+
+    reply.send(updated);
+  });
+
+  // Agent Server integration §3: the worker forwards Agent Server events here
+  // via a callback registered on the OpenHands Conversation, batched. `id` is
+  // the Agent Server's own event uuid (not generated here) — ON CONFLICT DO
+  // NOTHING makes both normal forwarding and resync_events's gap-recovery
+  // replay (§4) idempotent without separate dedupe bookkeeping.
+  app.post("/internal/executions/:id/events", async (request, reply) => {
+    if (!requireInternalToken(request, reply)) return;
+
+    const { id } = z.object({ id: z.string() }).parse(request.params);
+    const { workerId, events } = z
+      .object({
+        workerId: z.string().min(1),
+        events: z
+          .array(
+            z.object({
+              id: z.string(),
+              kind: z.string(),
+              occurredAt: z.string(),
+              payload: z.unknown(),
+            }),
+          )
+          .min(1),
+      })
+      .parse(request.body);
+
+    const execution = await db
+      .selectFrom("executions")
+      .select(["id", "lease_owner"])
+      .where("id", "=", id)
+      .executeTakeFirst();
+
+    if (!execution) {
+      reply.status(404).send({ error: "Not found" });
+      return;
+    }
+    if (execution.lease_owner !== workerId) {
+      reply.status(409).send({ error: "Lease no longer owned by this worker" });
+      return;
+    }
+
+    await db
+      .insertInto("execution_events")
+      .values(
+        events.map((event) => ({
+          id: event.id,
+          execution_id: id,
+          kind: event.kind,
+          payload: JSON.stringify(event.payload),
+          occurred_at: event.occurredAt,
+        })),
+      )
+      .onConflict((oc) => oc.column("id").doNothing())
+      .execute();
+
+    reply.status(204).send();
+  });
+
   app.post("/internal/executions/:id/complete", async (request, reply) => {
     if (!requireInternalToken(request, reply)) return;
 

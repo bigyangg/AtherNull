@@ -462,6 +462,54 @@ export async function jobRoutes(app: FastifyInstance) {
     }
   });
 
+  // Agent Server integration §3/§5: the browser reads persisted events from
+  // here, never from an Agent Server container directly — the container's
+  // host/api_key (agent_server_adapter.py) never leave the worker process.
+  app.get("/v1/jobs/:id/executions/:executionId/events", async (request, reply) => {
+    try {
+      const { organizationId } = await requireOrgSession(request);
+      const { id, executionId } = z
+        .object({ id: z.string(), executionId: z.string() })
+        .parse(request.params);
+
+      const task = await loadOwnedTask(id, organizationId);
+      if (!task) {
+        reply.status(404).send({ error: "Not found" });
+        return;
+      }
+
+      const execution = await db
+        .selectFrom("executions")
+        .select(["id"])
+        .where("id", "=", executionId)
+        .where("task_id", "=", id)
+        .executeTakeFirst();
+      if (!execution) {
+        reply.status(404).send({ error: "Not found" });
+        return;
+      }
+
+      // Replayed events can arrive after newer events have already been read.
+      // Return a snapshot until a cursor based on ingestion order is available.
+      const events = await db
+        .selectFrom("execution_events")
+        .selectAll()
+        .where("execution_id", "=", executionId)
+        .orderBy("occurred_at", "asc")
+        .orderBy("id", "asc")
+        .execute();
+
+      reply.send(events);
+    } catch (err) {
+      if (sendHttpError(reply, err)) return;
+      if (err instanceof z.ZodError) {
+        reply.status(400).send({ error: err.message });
+        return;
+      }
+      throw err;
+    }
+  });
+
   app.get("/v1/jobs/:id", async (request, reply) => {
     try {
       const { organizationId } = await requireOrgSession(request);

@@ -62,6 +62,10 @@ export interface ExecutionsTable {
   lease_owner: string | null;
   lease_expires_at: NullableTimestamp;
   sandbox_id: string | null;
+  // The OpenHands Agent Server's own conversation id for this execution
+  // (0006_execution_conversation_id.sql) — set once the coding-agent worker's
+  // agent_server_adapter.py creates the conversation, before .run() starts.
+  conversation_id: string | null;
   status: Generated<string>;
   routing_tier: string | null;
   routing_score: number | null;
@@ -79,6 +83,18 @@ export interface UsageEventsTable {
   model: string;
   tokens: number;
   cost_minor: string;
+  created_at: Timestamp;
+}
+
+// The Agent Server's own event stream for an execution
+// (0007_execution_events.sql) — id is the OpenHands event's own uuid, not
+// generated here, so replayed/duplicate forwards are a plain upsert.
+export interface ExecutionEventsTable {
+  id: string;
+  execution_id: string;
+  kind: string;
+  payload: unknown; // jsonb — shape is whatever the Agent Server's event kind carries
+  occurred_at: Timestamp;
   created_at: Timestamp;
 }
 
@@ -129,6 +145,7 @@ export interface Database {
   tasks: TasksTable;
   executions: ExecutionsTable;
   usage_events: UsageEventsTable;
+  execution_events: ExecutionEventsTable;
   verification_runs: VerificationRunsTable;
   payment_intents: PaymentIntentsTable;
   member: MemberTable;

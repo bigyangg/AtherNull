@@ -7,6 +7,7 @@ import { agentProfileRoutes } from "./routes/agent-profiles.js";
 import { internalRoutes } from "./routes/internal.js";
 import { jobRoutes } from "./routes/jobs.js";
 import { projectRoutes } from "./routes/projects.js";
+import { usageRoutes } from "./routes/usage.js";
 
 // Split from index.ts so tests can build the app in-process (Fastify's
 // `inject()`) against a real test database, without binding a real port.
@@ -35,6 +36,7 @@ export async function buildApp(opts: { logger?: boolean } = {}): Promise<Fastify
   await app.register(projectRoutes);
   await app.register(jobRoutes);
   await app.register(agentProfileRoutes);
+  await app.register(usageRoutes);
   await app.register(internalRoutes);
 
   // Better Auth owns everything under /api/auth/* (ADR-0004). Fastify hands the

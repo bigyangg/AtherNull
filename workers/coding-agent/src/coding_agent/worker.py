@@ -39,6 +39,11 @@ INTERNAL_TOKEN = os.getenv("INTERNAL_API_TOKEN")
 WORKER_ID = os.getenv("WORKER_ID", f"coding-agent-{uuid.uuid4().hex[:8]}")
 POLL_INTERVAL_SECONDS = float(os.getenv("POLL_INTERVAL_SECONDS", "5"))
 HEARTBEAT_INTERVAL_SECONDS = float(os.getenv("HEARTBEAT_INTERVAL_SECONDS", "60"))
+# "direct" (default) is this file's own run_dispatch, unchanged. "agent_server"
+# opts into agent_server_adapter.run_dispatch_via_agent_server (Phase 1,
+# approved scope) — same contract, adds conversation-id/event persistence and
+# container auth. Rollback is flipping this back and restarting the worker.
+EXECUTION_ADAPTER = os.getenv("EXECUTION_ADAPTER", "direct")
 
 
 def log(message: str) -> None:
@@ -157,8 +162,20 @@ def main() -> None:
     if not INTERNAL_TOKEN:
         print("INTERNAL_API_TOKEN must be set (must match apps/api's own value).", file=sys.stderr)
         raise SystemExit(2)
+    if EXECUTION_ADAPTER not in ("direct", "agent_server"):
+        print(f"EXECUTION_ADAPTER must be 'direct' or 'agent_server', got {EXECUTION_ADAPTER!r}", file=sys.stderr)
+        raise SystemExit(2)
 
-    log(f"online, polling {API_URL} every {POLL_INTERVAL_SECONDS}s")
+    # Imported lazily so the "direct" default (production today) never pays
+    # for or depends on agent_server_adapter's extra imports (websockets,
+    # etc.) unless explicitly opted into.
+    dispatch_fn = run_dispatch
+    if EXECUTION_ADAPTER == "agent_server":
+        from coding_agent.agent_server_adapter import run_dispatch_via_agent_server
+
+        dispatch_fn = run_dispatch_via_agent_server
+
+    log(f"online, polling {API_URL} every {POLL_INTERVAL_SECONDS}s (adapter={EXECUTION_ADAPTER})")
     with httpx.Client(timeout=30.0) as client:
         while True:
             try:
@@ -174,7 +191,7 @@ def main() -> None:
 
             log(f"claimed job={dispatch['jobId']} execution={dispatch['executionId']}")
             try:
-                outcome = run_dispatch(client, dispatch)
+                outcome = dispatch_fn(client, dispatch)
             except MissingCredentialError as err:
                 log(f"missing credential, reporting failure: {err}")
                 outcome = "failure"
