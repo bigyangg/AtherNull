@@ -1,0 +1,81 @@
+{
+  "spike": "E",
+  "goal": "Test only real event display + genuine refresh (new data appearing after a refresh, not a one-shot snapshot) through both Spike B and Spike C.",
+  "out_of_scope": [
+    "attempt-selection",
+    "file-diffs",
+    "verification-status",
+    "return-to-review"
+  ],
+  "source_changes": {
+    "spike_a_standalone_shell": "none",
+    "spike_c_full_shell_adapter": "none",
+    "spike_b_selective_reuse": {
+      "file": "app/harness-live/page.tsx",
+      "change": "added refreshNonce state as the fetch effect's dependency, plus a 'Refresh' button (data-testid=refresh-button) that increments it, re-invoking the existing fetchLiveConversationAndEvents() call",
+      "lib/adapter/adapter-live-client.ts": "unchanged - already exported reusable fetch functions"
+    }
+  },
+  "adapter_uncached_passthrough_confirmed": {
+    "method": "curl'd GET /api/conversations/:id/events/count against the running adapter-server immediately after each new event insertion, with no adapter restart between calls",
+    "event_count_progression": [9, 10, 11, 12],
+    "conclusion": "adapter-server/src/routes/events.ts calls latestExecutionEvents() fresh on every request with no caching layer - confirms the plan's 'no spike-c change needed' analysis"
+  },
+  "worker_lease_finding": {
+    "endpoint": "POST /internal/executions/:id/events",
+    "requirement": "request body's workerId must equal executions.lease_owner",
+    "gap_found": "seed.ts's own seed-output.json never recorded the random worker-<uuid> value used at claim time, and completing an execution does not clear lease_owner",
+    "resolution": "seed-followup-event.mjs does one read-only SELECT lease_owner FROM executions WHERE id=$1 before POSTing, same direct-Postgres-bypass pattern seed.ts already uses for its own setup"
+  },
+  "spike_c_refresh_mechanism": {
+    "checked_files": [
+      "spike-a-standalone-shell/upstream/src/query-client-config.ts",
+      "spike-a-standalone-shell/upstream/src/hooks/query/use-conversation-history.ts"
+    ],
+    "query_client_config_defaults": "none set (no app-wide staleTime/refetchInterval/refetchOnWindowFocus)",
+    "conversation_history_query_options": {
+      "staleTime": 0,
+      "refetchOnMount": "always",
+      "refetchOnWindowFocus": false,
+      "refetchOnReconnect": false
+    },
+    "conclusion": "no polling, no WebSocket, no focus/reconnect refetch under a statically-served build - refetchOnMount only fires on a genuine React mount, so a full browser page reload is the honest, verified refresh mechanism used for this side's test (not an assumption)"
+  },
+  "smoke_test_b": {
+    "file": "smoke-test-b-refresh.mjs",
+    "target": "http://localhost:3902/harness-live",
+    "assertions": [
+      { "name": "new-event-absent-before-refresh", "pass": true },
+      { "name": "new-event-present-after-refresh", "pass": true },
+      { "name": "rendered-event-count-matches-db-after-refresh", "pass": true },
+      { "name": "zero-console-errors", "pass": true }
+    ],
+    "all_pass": true,
+    "db_event_count_before": 10,
+    "db_event_count_after": 11
+  },
+  "smoke_test_c": {
+    "file": "smoke-test-c-refresh.mjs",
+    "target": "http://localhost:4173 (Spike A build, served via sirv) through Spike C's adapter at http://127.0.0.1:4100",
+    "mechanism_used": "browser page.reload()",
+    "assertions": [
+      { "name": "click-through-to-conversation-detail", "pass": true },
+      { "name": "new-event-absent-before-reload", "pass": true },
+      { "name": "new-event-present-after-reload", "pass": true },
+      { "name": "still-on-conversation-detail-after-reload", "pass": true }
+    ],
+    "all_pass": true,
+    "db_event_count_before": 11,
+    "db_event_count_after": 12,
+    "known_preexisting_console_noise": [
+      "WebSocket connection failures (404) to /sockets/bash-events and /sockets/events/:id - documented pre-existing limitation from Spikes A/C, not a regression",
+      "workspace-session CORS/credentials failure - pre-existing, unrelated to this spike's scope"
+    ]
+  },
+  "final_seeded_execution_event_count": 12,
+  "execution_id": "7af4212f-2b57-4e8f-bac7-7ac1d566a3bb",
+  "task_id": "91ac88b0-825b-411a-bde6-e375c48191f9",
+  "no_llm_calls": true,
+  "no_solana_activity": true,
+  "no_commit_made": true
+}

@@ -1,0 +1,76 @@
+{
+  "results": [
+    {
+      "name": "click-through-to-conversation-detail",
+      "pass": true,
+      "detail": "finalUrl=http://localhost:4173/conversations/91ac88b0-825b-411a-bde6-e375c48191f9?backend=default-local"
+    },
+    {
+      "name": "new-event-absent-before-reload",
+      "pass": true,
+      "detail": "looked for \"[Spike-E followup c-33240770]\" before insertion; found=false"
+    },
+    {
+      "name": "new-event-present-after-reload",
+      "pass": true,
+      "detail": "looked for \"[Spike-E followup c-33240770] Genuinely new event inserted at 2026-09-24T12:43:02.555Z — proof this is a live refresh, not a cached render.\" after reload; found=true"
+    },
+    {
+      "name": "still-on-conversation-detail-after-reload",
+      "pass": true,
+      "detail": "url before=http://localhost:4173/conversations/91ac88b0-825b-411a-bde6-e375c48191f9?backend=default-local, url after=http://localhost:4173/conversations/91ac88b0-825b-411a-bde6-e375c48191f9?backend=default-local"
+    }
+  ],
+  "consoleErrors": [
+    "Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "Access to fetch at 'http://localhost:4100/api/auth/workspace-session' from origin 'http://localhost:4173' has been blocked by CORS policy: Response to preflight request doesn't pass access control check: The value of the 'Access-Control-Allow-Credentials' header in the response is '' which must be 'true' when the request's credentials mode is 'include'.",
+    "Failed to load resource: net::ERR_FAILED",
+    "WebSocket connection to 'ws://localhost:4100/sockets/bash-events' failed: Error during WebSocket handshake: Unexpected response code: 404",
+    "WebSocket connection to 'ws://localhost:4100/sockets/events/91ac88b0-825b-411a-bde6-e375c48191f9?resend_mode=since&after_timestamp=2026-09-24T10%3A51%3A59.928Z' failed: Error during WebSocket handshake: Unexpected response code: 404",
+    "Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "WebSocket connection to 'ws://localhost:4100/sockets/events/91ac88b0-825b-411a-bde6-e375c48191f9?resend_mode=since&after_timestamp=2026-09-24T10%3A51%3A59.928Z' failed: Error during WebSocket handshake: Unexpected response code: 404",
+    "Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "Access to fetch at 'http://localhost:4100/api/auth/workspace-session' from origin 'http://localhost:4173' has been blocked by CORS policy: Response to preflight request doesn't pass access control check: The value of the 'Access-Control-Allow-Credentials' header in the response is '' which must be 'true' when the request's credentials mode is 'include'.",
+    "Failed to load resource: net::ERR_FAILED",
+    "Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "WebSocket connection to 'ws://localhost:4100/sockets/bash-events' failed: Error during WebSocket handshake: Unexpected response code: 404",
+    "WebSocket connection to 'ws://localhost:4100/sockets/events/91ac88b0-825b-411a-bde6-e375c48191f9?resend_mode=since&after_timestamp=2026-09-24T12%3A43%3A02.664Z' failed: Error during WebSocket handshake: Unexpected response code: 404",
+    "Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "Failed to load resource: the server responded with a status of 404 (Not Found)"
+  ]
+}

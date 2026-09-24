@@ -51,15 +51,21 @@ type LoadState =
 
 export default function HarnessLivePage() {
   const [state, setState] = useState<LoadState>({ status: "loading" });
+  // SPIKE E: bumped on every manual refresh click, purely to give the
+  // "Refresh" button's own click handler a fresh `cancelled` closure per
+  // invocation (same cancellation-guard shape the mount effect already
+  // uses) — never read for rendering.
+  const [refreshNonce, setRefreshNonce] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
 
     // Reset the command store on every (re)fetch — including the very
-    // first mount — so this live route and the existing fixture-only
-    // /harness route (app/harness/page.tsx) can never leak terminal state
-    // into each other if both are visited in the same browser session
-    // (e.g. during a Playwright run that loads both pages).
+    // first mount and every SPIKE E manual refresh — so this live route and
+    // the existing fixture-only /harness route (app/harness/page.tsx) can
+    // never leak terminal state into each other if both are visited in the
+    // same browser session (e.g. during a Playwright run that loads both
+    // pages).
     useCommandStore.setState({ commands: [] });
     setState({ status: "loading" });
 
@@ -95,7 +101,15 @@ export default function HarnessLivePage() {
       // Reset again on unmount — same isolation reason as above.
       useCommandStore.setState({ commands: [] });
     };
-  }, []);
+    // SPIKE E: `refreshNonce` is intentionally a dependency — it is the ONLY
+    // thing the "Refresh" button changes, purely so this effect re-runs and
+    // re-invokes the exact same fetch logic
+    // (`fetchLiveConversationAndEvents`) a second (or Nth) time. Before this
+    // spike, this effect had an empty dependency array and ran exactly
+    // once per mount — confirmed during Spike D — which is the gap this
+    // spike's genuine refresh test targets.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refreshNonce]);
 
   const events = state.status === "ready" ? state.events : [];
   const messages = useMemo(() => toUiMessages(events), [events]);
@@ -114,9 +128,26 @@ export default function HarnessLivePage() {
         coding-agent execution — see README.md&apos;s &quot;Spike D&quot;
         section for the exact provenance.
       </p>
-      <p className="text-xs text-muted mb-8" data-testid="adapter-target">
+      <p className="text-xs text-muted mb-4" data-testid="adapter-target">
         adapter: {ADAPTER_BASE} · conversation: {CONVERSATION_ID || "(unset)"}
       </p>
+
+      {/* SPIKE E: manual refresh — the only affordance this route had none
+          of before (Spike D: fetch-once effect, empty dependency array).
+          Re-invokes the exact same fetch logic
+          (fetchLiveConversationAndEvents, via the mount effect's
+          refreshNonce dependency above) rather than duplicating it. Disabled
+          while a fetch is already in flight so rapid double-clicks can't
+          race two overlapping requests against the same state. */}
+      <button
+        type="button"
+        data-testid="refresh-button"
+        disabled={state.status === "loading"}
+        onClick={() => setRefreshNonce((n) => n + 1)}
+        className="mb-8 rounded border border-border bg-surface px-3 py-1.5 text-sm font-medium text-foreground disabled:opacity-50"
+      >
+        {state.status === "loading" ? "Refreshing…" : "Refresh"}
+      </button>
 
       {state.status === "loading" && (
         <p data-testid="load-status" data-load-status="loading" className="text-sm text-muted mb-8">

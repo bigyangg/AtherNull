@@ -342,3 +342,69 @@ specifically because of no production credentials + single approved dev
 dataset, not because of loopback binding, which turns out not to hold.
 See `spike-b-selective-reuse/README.md`'s "Spike D" section and
 `spike-b-selective-reuse/live-metrics.json` for the full detail.
+
+## 12. Spike E: refresh/live-data workflow (narrowed scope)
+
+The user asked for a "complete execution-review workflow" test through both
+Spike B and Spike C, following the peer `docs/prototype-study/report.md`'s
+suggestion. Exploration before committing to a build found that 4 of the 5
+originally-envisioned pieces have **no real OpenHands-side mechanism at
+all**: attempt-selection (OpenHands has no concept of "attempts," only a
+conversation — nothing to vendor), file-diffs (OpenHands' real diff
+mechanism needs a **live** Agent Server session running `git diff` against
+a running sandbox; AtherNull destroys the task's container after execution,
+so this is architecturally inapplicable on *both* spikes, not a
+vendoring-effort question), verification-status (AtherNull has real data
+but OpenHands' UI has no equivalent concept anywhere), and "return to
+review" (neither prototype hosts AtherNull's real `review-panel.tsx`).
+These four are documented, not silently dropped — see
+`spike-e-refresh-workflow/README.md`'s "Out of scope" section for the full
+reasoning.
+
+What remained in scope, and what this spike tested: **real event display
+plus genuine refresh** — new data appearing after a refresh, not a one-shot
+snapshot — through both spikes, using the same zero-cost internal endpoint
+(`POST /internal/executions/:id/events`) spikes C/D already used to insert
+one additional, uniquely-labeled real event into the *same* already-seeded
+execution after each harness's initial page load.
+
+**No source changes were needed in `spike-c-full-shell-adapter/` or
+`spike-a-standalone-shell/`** — confirmed, not assumed: the adapter's
+`GET /:id/events/search` route re-reads AtherNull fresh on every request
+(no caching layer), and curling it immediately after each insertion showed
+the count update with no adapter restart (9 → 10 → 11 → 12 across this
+spike). The only code change was in Spike B's own
+`app/harness-live/page.tsx`: a `refreshNonce` dependency plus a "Refresh"
+button that re-invokes the existing fetch function — no duplicated logic,
+no change to `lib/adapter/adapter-live-client.ts`.
+
+**Spike C's refresh mechanism was checked, not assumed**, per the plan's
+instruction. `query-client-config.ts` sets no app-wide
+`staleTime`/`refetchInterval`/`refetchOnWindowFocus`. The actual per-query
+options, in `use-conversation-history.ts`, are `staleTime: 0`,
+`refetchOnMount: "always"`, with `refetchOnWindowFocus`/`refetchOnReconnect`
+both explicitly disabled. Under a statically-served build there is no
+WebSocket and no polling (confirmed identically by Spikes A/C), so nothing
+ever triggers a remount on its own — the honest, verified refresh mechanism
+for this side is a full browser **page reload**, which genuinely remounts
+the route and is what makes `refetchOnMount: "always"` fire again.
+
+| | Spike B (`/harness-live`) | Spike C (full shell) |
+|---|---|---|
+| Refresh mechanism | New "Refresh" button (this spike's own addition) | Browser page reload (no in-app affordance exists — verified via `query-client-config.ts`/`use-conversation-history.ts`, not assumed) |
+| New event absent before refresh | Yes (asserted) | Yes (asserted) |
+| New event present after refresh | Yes (asserted) | Yes (asserted) |
+| Rendered count matches DB after refresh | Yes (asserted: "Loaded N real events" text) | Not separately counted (asserted via exact new-event text instead) |
+| Smoke test result | 4/4 assertions PASS | 4/4 assertions PASS |
+
+**Both sides genuinely reflected new data after their respective refresh
+action** — this is a real data-freshness result, not a re-render of a
+cached snapshot. Spike C's run also surfaced pre-existing, already-known
+console noise (WebSocket 404s, a `workspace-session` CORS/credentials
+failure) consistent with Spikes A/C's own prior findings — not a
+regression, not newly discovered by this spike.
+
+No architecture-winner conclusion is drawn here, consistent with §8/§10/§11.
+Full detail, screenshots, and raw Playwright results are in
+`spike-e-refresh-workflow/README.md`, `metrics.json`,
+`smoke-test-b-refresh-results.json`, and `smoke-test-c-refresh-results.json`.

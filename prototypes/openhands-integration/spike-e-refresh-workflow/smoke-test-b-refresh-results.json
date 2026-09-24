@@ -1,0 +1,25 @@
+{
+  "results": [
+    {
+      "name": "new-event-absent-before-refresh",
+      "pass": true,
+      "detail": "looked for \"[Spike-E followup b-5983a759]\" before insertion; found=false"
+    },
+    {
+      "name": "new-event-present-after-refresh",
+      "pass": true,
+      "detail": "looked for \"[Spike-E followup b-5983a759] Genuinely new event inserted at 2026-09-24T10:51:59.842Z — proof this is a live refresh, not a cached render.\" after clicking Refresh; found=true"
+    },
+    {
+      "name": "rendered-event-count-matches-db-after-refresh",
+      "pass": true,
+      "detail": "db countAfter=11, rendered count=\"11\" (countBefore was 10)"
+    },
+    {
+      "name": "zero-console-errors",
+      "pass": true,
+      "detail": "(none)"
+    }
+  ],
+  "consoleErrors": []
+}

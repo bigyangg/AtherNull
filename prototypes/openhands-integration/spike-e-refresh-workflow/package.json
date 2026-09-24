@@ -1,0 +1,18 @@
+{
+  "name": "spike-e-refresh-workflow",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Spike E: genuine refresh/live-data-freshness test through Spike B (Next harness) and Spike C (adapted OpenHands shell). Own deps, own npm install — not in the pnpm workspace, same isolation pattern as spikes A/B/C/D.",
+  "scripts": {
+    "seed-followup": "node seed-followup-event.mjs",
+    "smoke-test-b": "node smoke-test-b-refresh.mjs",
+    "smoke-test-c": "node smoke-test-c-refresh.mjs"
+  },
+  "dependencies": {
+    "pg": "^8.13.1"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.62.1"
+  }
+}
