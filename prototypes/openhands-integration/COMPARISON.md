@@ -408,3 +408,67 @@ No architecture-winner conclusion is drawn here, consistent with §8/§10/§11.
 Full detail, screenshots, and raw Playwright results are in
 `spike-e-refresh-workflow/README.md`, `metrics.json`,
 `smoke-test-b-refresh-results.json`, and `smoke-test-c-refresh-results.json`.
+
+## 13. Spike F: one execution-review journey through both approaches
+
+Spikes A-E each tested one narrow facet at a time. Spike F is the first to
+put both approaches through a single, real, multi-facet journey on the SAME
+seeded data — attempt-switching, a real file diff, real
+status/verification, terminal output, and a "return to review" link — one
+task with 2 real execution attempts (1st failed and auto-retried per
+`apps/api`'s real `MAX_EXECUTION_ATTEMPTS` policy, 2nd reached
+SETTLED with a real verification PASS), seeded via the same zero-cost
+internal/test-only endpoints every prior spike used.
+
+**Adapter work (Phase 1, prerequisite to this section):** `mapping.ts` now
+maps one `AppConversation` per execution attempt
+(`execution.conversationId ?? execution.id`, not one per task), populates
+real `old_content`/`new_content`/`old_str`/`new_str` on file-editor events,
+and attaches the task's real status + matched verification outcome as
+`AppConversation.tags`. Zero OpenHands source changes were needed for any of
+this — it is entirely adapter mapping/routing work, same category as the
+original security fix.
+
+**Result: full feature parity across all 5 facets, with real, unequal
+underlying costs.**
+
+| Facet | Spike C (full shell) | Spike B (harness) |
+|---|---|---|
+| Attempt-switching | **Free** — native sidebar already lists one card per conversation once each execution has its own id (Phase 1 adapter change only) | Required **new custom UI** (an attempt-selector) — Spike B never vendored a conversation-list/sidebar component in its original 125-file pass |
+| Real file diff | Free — real, unmodified `file-editor.tsx`/`diff-view.tsx` already in the untouched app; only needed real content from the adapter | Required vendoring the same 2 real files + 6 small direct dependencies (8 new files total, 7 byte-identical) into `vendor/openhands/`, plus a 2-line dispatcher change to call the visualizer directly instead of the unvendored full registry |
+| Status/verification badge | Free — real sidebar tag chips (`showTagsMetadata`, confirmed default-on) | Required rendering the same raw tag values as one badge string (no tag-chip component vendored) |
+| Terminal output (chat feed) | Free — real, unmodified `bashVisualizer` | Renders via the pre-existing markdown fallback (bash visualizer was never vendored; not needed since the terminal *panel* below covers replay) |
+| Terminal output (dedicated panel) | **Not available** — the real Terminal tab is live-PTY-only by upstream design; it shows its own real empty state under a statically-served build, not a bug | Works — Spike B's xterm panel is replay-by-design (built for exactly this in Spikes B/D) |
+| "Return to review" link | URL-correctness only, via an injected fixture (upstream source is never modified, so there is no in-app slot) | URL-correctness only, via a real rendered link on the harness page itself |
+| Smoke test result | 13/13 assertions PASS | 12/12 assertions PASS |
+
+**Zero OpenHands source files were changed by either side for this spike.**
+Every "free" row above was free because Phase 1's adapter change fed real
+data into logic the real upstream app already had; every "required" row on
+Spike B's side was new vendoring or new harness-page code, not a workaround
+or a degraded substitute — the diff view rendering on both sides is the
+literal same unmodified upstream algorithm.
+
+**The one genuine asymmetry Spike F could not close either way**: OpenHands'
+real Terminal tab has no replay mechanism for historical events (it is fed
+exclusively by a live Agent-Server PTY websocket, confirmed empirically, not
+assumed). This is intrinsic to the real component's design, not a gap either
+spike's adapter or vendoring work could fix without inventing new upstream
+behavior — genuinely out of scope for a read-only integration spike.
+
+**What this does and does not license as a conclusion.** This spike gives
+the first same-scope, same-data, same-viewport, same-assertion-checklist
+evidence comparing effort across a realistic product journey, not just a
+single screen: Spike C paid for this journey's facets almost entirely in
+*already-done adapter work* (zero new frontend code once the mapping
+changed); Spike B paid in a mix of vendoring (bounded, one-time: 8 files)
+and harness-page code (one new route). Neither side was blocked, degraded,
+or forced into a fabricated substitute on any of the 5 facets. This is real
+signal for an architecture decision going forward, but it is still a
+2-attempt, 9-event, single-task journey — it does not, by itself, prove
+either approach's cost curve at the scale of the full
+Scope→Estimate→Fund→Build→Verify→Accept→Settle→Deploy product flow the user
+described as the next phase of work. Full detail, the shared assertion
+checklist, screenshots, and raw Playwright results are in
+`spike-f-execution-review-journey/README.md`, `metrics.json`,
+`smoke-test-b-journey-results.json`, and `smoke-test-c-journey-results.json`.

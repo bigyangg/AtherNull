@@ -13,7 +13,7 @@
 // README: the library build's exports are broken 8/8), so importing from it
 // is not a viable option; this keeps the adapter a fully standalone package
 // per the spike's isolation rule.
-import type { RepoProject, Task, TaskDetail, ExecutionEvent } from "./athernull-types.js";
+import type { RepoProject, Task, TaskDetail, Execution, ExecutionEvent, VerificationRun } from "./athernull-types.js";
 
 // --- OpenHands target types (transcribed subset) --------------------------
 
@@ -29,6 +29,13 @@ export interface AppConversation {
   trigger: string | null;
   pr_number: number[];
   agent_kind: "openhands" | "acp" | null;
+  // Spike F addition. Real shape per
+  // agent-server-conversation-service.types.ts's AppConversation.tags:
+  // Record<string,string> | null, server-side key-value tags — NOT a bare
+  // string array. Rendered as chips by conversation-tag-chips.tsx
+  // (Object.entries(tags)), gated by conversation-panel-preferences-store.ts's
+  // showTagsMetadata (confirmed default true, not assumed).
+  tags?: Record<string, string> | null;
   llm_model: string | null;
   metrics: null;
   created_at: string;
@@ -188,10 +195,132 @@ export function mapTasksToAppConversationPage(
   return { items, next_page_id: null };
 }
 
+// --- Execution -> AppConversation (Spike F) --------------------------------
+//
+// One AtherNull EXECUTION (an attempt), not one task, mapped to one
+// AppConversation - so OpenHands' real, already-working sidebar can list
+// every retry attempt as its own card ("attempt-switching for free"), using
+// AtherNull's own Execution.conversationId (stamped by the real
+// coding-agent worker via POST /internal/executions/:id/conversation) as the
+// id wherever it's set, falling back to the execution's own id otherwise
+// (e.g. an execution a worker claimed but hasn't stamped a conversation for
+// yet). This deliberately diverges from mapTaskToAppConversation above,
+// which still keys AppConversation.id on task.id for GET
+// /api/conversations/:id and the batch GET /api/conversations?ids[]=
+// endpoint - see service-contract.md's "id" row for the resulting, honestly
+//-recorded inconsistency this introduces (out of this phase's scope to
+// reconcile; Phase 2/Spike B work will need to account for it).
+export function computeAttemptInfo(
+  execution: Execution,
+  allExecutionsForTask: Execution[],
+): { attemptNumber: number; attemptCount: number } {
+  const chronological = [...allExecutionsForTask].sort(
+    (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime(),
+  );
+  const index = chronological.findIndex((e) => e.id === execution.id);
+  return {
+    attemptNumber: index === -1 ? allExecutionsForTask.length : index + 1,
+    attemptCount: allExecutionsForTask.length,
+  };
+}
+
+// tags is a Record<string,string> (see the AppConversation.tags comment
+// above) - "status" always carries the task's real, un-collapsed FSM value
+// (see packages/contracts/src/tasks.ts), replacing the lossy 16->7
+// execution_status collapse as the place a human actually reads task state
+// from in the sidebar. "verification_outcome" is added only when a
+// verification_runs row exists for THIS SPECIFIC execution (matched by
+// verificationRun.executionId, not just "the task's latest run") - PASS/FAIL,
+// AtherNull's own real enum (packages/database's verification_runs.outcome),
+// never invented.
+export function buildStatusTags(
+  task: Task | TaskDetail,
+  execution: Execution,
+  verificationRuns: VerificationRun[],
+): Record<string, string> {
+  const tags: Record<string, string> = { status: task.status };
+  const runForThisExecution = verificationRuns.find((run) => run.executionId === execution.id);
+  if (runForThisExecution) {
+    tags.verification_outcome = runForThisExecution.outcome;
+  }
+  return tags;
+}
+
+export function mapExecutionToAppConversation(
+  execution: Execution,
+  task: TaskDetail,
+  project: RepoProject | null,
+): AppConversation {
+  const { selectedRepository, gitProvider } = splitRepository(project?.permittedRepository ?? null);
+  const { attemptNumber, attemptCount } = computeAttemptInfo(execution, task.executions);
+
+  return {
+    id: execution.conversationId ?? execution.id,
+    created_by_user_id: null,
+    selected_repository: selectedRepository,
+    selected_branch: task.repositoryRevision || null,
+    git_provider: gitProvider,
+    // Attempt distinguisher appended so multiple attempts of the same task
+    // are visually distinguishable in a sidebar that lists them as separate
+    // cards (task.requirements alone would render N identical-looking
+    // titles).
+    title: `${task.requirements} (attempt ${attemptNumber} of ${attemptCount})`,
+    trigger: null,
+    pr_number: [],
+    agent_kind: "openhands",
+    tags: buildStatusTags(task, execution, task.verificationRuns),
+    // Per-execution now, not "latestExecution among executions[0]" - this
+    // AppConversation already IS one specific execution.
+    llm_model: execution.resolvedModel ?? null,
+    metrics: null,
+    created_at: execution.createdAt,
+    updated_at: execution.endedAt ?? execution.createdAt,
+    execution_status: taskStatusToExecutionStatus(task.status),
+    conversation_url: null,
+    session_api_key: null,
+    sandbox_id: null,
+    workspace: null,
+    sub_conversation_ids: [],
+    public: false,
+  };
+}
+
+export function mapTaskExecutionsToAppConversationPage(
+  tasks: TaskDetail[],
+  projectsById: Map<string, RepoProject>,
+): AppConversationPage {
+  const items = tasks.flatMap((task) =>
+    task.executions.map((execution) =>
+      mapExecutionToAppConversation(execution, task, projectsById.get(task.projectId) ?? null),
+    ),
+  );
+  return { items, next_page_id: null };
+}
+
 // --- ExecutionEvent -> OpenHandsEvent --------------------------------------
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
+}
+
+// Mirrors apps/web/lib/execution-events.ts's ParsedFileEdit extraction
+// (read, not reinvented): pulls old_str/new_str/file_text off a
+// FileEditorAction's own action body, with the same typeof guards that file
+// uses (a non-string field is treated as absent, never coerced). Returns
+// null for anything that isn't a FileEditorAction so callers can use it as
+// a single guard.
+function extractFileEditorActionFields(
+  actionEvent: ExecutionEvent,
+): { command: string | null; oldStr: string | null; newStr: string | null; fileText: string | null } | null {
+  if (!isRecord(actionEvent.payload)) return null;
+  const actionBody = actionEvent.payload.action;
+  if (!isRecord(actionBody) || actionBody.kind !== "FileEditorAction") return null;
+  return {
+    command: typeof actionBody.command === "string" ? actionBody.command : null,
+    oldStr: typeof actionBody.old_str === "string" ? actionBody.old_str : null,
+    newStr: typeof actionBody.new_str === "string" ? actionBody.new_str : null,
+    fileText: typeof actionBody.file_text === "string" ? actionBody.file_text : null,
+  };
 }
 
 // Every AtherNull-inserted fixture event in this spike is one of these three
@@ -201,7 +330,17 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 // PauseEvent, etc.) - those pass through unmapped (see the final branch
 // below): logged and dropped, never fabricated into one of the three known
 // shapes.
-export function mapExecutionEventToOpenHandsEvent(event: ExecutionEvent): OpenHandsEvent | null {
+//
+// `actionsById` (Spike F addition) maps an ActionEvent's own `id` to that
+// event - needed so a paired FileEditorObservation can look back at the
+// action that produced it (ObservationEvent.action_id === the action's own
+// id, same relationship apps/web/lib/execution-events.ts's
+// pairActionsWithObservations() uses) to populate old_content/new_content,
+// which AtherNull's own ObservationEvent payload never carries directly.
+export function mapExecutionEventToOpenHandsEvent(
+  event: ExecutionEvent,
+  actionsById: Map<string, ExecutionEvent> = new Map(),
+): OpenHandsEvent | null {
   if (!isRecord(event.payload)) {
     console.warn(`[mapping] event ${event.id} (kind=${event.kind}) has a non-object payload - dropped`);
     return null;
@@ -224,6 +363,19 @@ export function mapExecutionEventToOpenHandsEvent(event: ExecutionEvent): OpenHa
   }
 
   if (event.kind === "ActionEvent") {
+    const actionBody = payload.action;
+    // Spike F: in-flight FileEditorAction events already carry old_str/
+    // new_str verbatim in AtherNull's own payload.action (the worker
+    // forwards the Agent Server SDK's event body unmodified) - this
+    // explicitly re-derives them with the same typeof guard
+    // extractFileEditorActionFields()/ParsedFileEdit use, rather than
+    // trusting a blind object spread, so a malformed upstream value (e.g. a
+    // non-string) surfaces as an honest null instead of passing through.
+    const fileEditorFields = extractFileEditorActionFields(event);
+    const enrichedAction =
+      fileEditorFields && isRecord(actionBody)
+        ? { ...actionBody, old_str: fileEditorFields.oldStr, new_str: fileEditorFields.newStr }
+        : actionBody;
     return {
       id: event.id,
       timestamp: event.occurredAt,
@@ -237,7 +389,7 @@ export function mapExecutionEventToOpenHandsEvent(event: ExecutionEvent): OpenHa
       // included them.
       reasoning_content: typeof payload.reasoning_content === "string" ? payload.reasoning_content : null,
       thinking_blocks: [],
-      action: payload.action,
+      action: enrichedAction,
       tool_name: typeof payload.tool_name === "string" ? payload.tool_name : "unknown",
       // Stubbed: no real LLM tool-call id exists for fixture-seeded content.
       tool_call_id: `stub-${event.id}`,
@@ -256,6 +408,41 @@ export function mapExecutionEventToOpenHandsEvent(event: ExecutionEvent): OpenHa
         : observationKind === "FileEditorObservation"
           ? "file_editor"
           : "unknown";
+
+    // Spike F: populate old_content/new_content so OpenHands' real, unmodified
+    // file-editor.tsx / diff-view.tsx (upstream/src/components/features/chat/
+    // tool-visualizers/file-editor/file-editor.tsx) can render its own
+    // hand-rolled diff instead of falling back to the plain-content path.
+    // AtherNull's raw FileEditorObservation payload never carries
+    // old_content/new_content itself (confirmed against seed.ts's fixture
+    // shape) - both are reconstructed from the PAIRED ActionEvent's own
+    // old_str/new_str/file_text (looked up via action_id, mirroring
+    // pairActionsWithObservations()), the same source apps/web's own
+    // ParsedFileEdit reads from.
+    let enrichedObservation: Record<string, unknown> = observation;
+    if (observationKind === "FileEditorObservation" && typeof payload.action_id === "string") {
+      const pairedAction = actionsById.get(payload.action_id);
+      const fields = pairedAction ? extractFileEditorActionFields(pairedAction) : null;
+      if (fields) {
+        const command = typeof observation.command === "string" ? observation.command : fields.command;
+        if (fields.newStr !== null) {
+          // str_replace/insert: old_content/new_content are the replaced
+          // snippet, not the whole file's before/after content - AtherNull
+          // never persists a whole-file snapshot around an edit, so this is
+          // a documented, lossy-but-honest approximation (see
+          // service-contract.md), not a fabricated full-file diff.
+          enrichedObservation = { ...observation, old_content: fields.oldStr ?? "", new_content: fields.newStr };
+        } else if (command === "create" && fields.fileText !== null) {
+          // create: no old_content (there is no "before" for a new file) -
+          // left absent so the real file-editor.tsx's `old_content != null &&
+          // new_content != null` diff-view gate correctly stays off and it
+          // falls through to its own new_content-preferring plain-content
+          // path instead, exactly like a real "create" observation would.
+          enrichedObservation = { ...observation, new_content: fields.fileText };
+        }
+      }
+    }
+
     return {
       id: event.id,
       timestamp: event.occurredAt,
@@ -266,7 +453,7 @@ export function mapExecutionEventToOpenHandsEvent(event: ExecutionEvent): OpenHa
       // a consumer that does try to correlate them at least gets a
       // consistent (if fabricated) id rather than two unrelated stubs.
       tool_call_id: typeof payload.action_id === "string" ? `stub-${payload.action_id}` : `stub-${event.id}`,
-      observation: payload.observation,
+      observation: enrichedObservation,
       action_id: payload.action_id,
     };
   }
@@ -279,7 +466,16 @@ export function mapExecutionEventsToOpenHandsEventPage(
   events: ExecutionEvent[],
   opts: { limit?: number; sortOrder?: "TIMESTAMP_ASC" | "TIMESTAMP_DESC" } = {},
 ): OpenHandsEventPage {
-  const mapped = events.map(mapExecutionEventToOpenHandsEvent).filter((e): e is OpenHandsEvent => e !== null);
+  // Built once per page so the ObservationEvent branch above can resolve a
+  // FileEditorObservation's paired action (by the action's own event id)
+  // without an O(n) scan per event.
+  const actionsById = new Map<string, ExecutionEvent>();
+  for (const event of events) {
+    if (event.kind === "ActionEvent") actionsById.set(event.id, event);
+  }
+  const mapped = events
+    .map((event) => mapExecutionEventToOpenHandsEvent(event, actionsById))
+    .filter((e): e is OpenHandsEvent => e !== null);
   const sorted = [...mapped].sort((a, b) =>
     opts.sortOrder === "TIMESTAMP_DESC"
       ? b.timestamp.localeCompare(a.timestamp)

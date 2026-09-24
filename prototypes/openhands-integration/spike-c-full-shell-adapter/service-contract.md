@@ -37,7 +37,7 @@ Source: `Task`/`TaskDetail` (`GET /v1/jobs`, `GET /v1/jobs/:id`) +
 
 | AppConversation field | AtherNull source | Mapping | Notes |
 |---|---|---|---|
-| `id` | `task.id` | direct | The adapter treats one AtherNull **task** as one OpenHands **conversation** — a deliberate simplification. AtherNull's own `Execution.conversationId` (a real OpenHands conversation id, stamped by `POST /internal/executions/:id/conversation`, used by the real coding-agent worker) is *not* used as `AppConversation.id` here; using the task id instead means `GET /api/conversations/:id`/the batch endpoint can resolve directly from a task id with no reverse lookup. |
+| `id` | `task.id` | direct — **superseded for `/search` by the Spike F note after this table** | The adapter treats one AtherNull **task** as one OpenHands **conversation** — a deliberate simplification. AtherNull's own `Execution.conversationId` (a real OpenHands conversation id, stamped by `POST /internal/executions/:id/conversation`, used by the real coding-agent worker) is *not* used as `AppConversation.id` here; using the task id instead means `GET /api/conversations/:id`/the batch endpoint can resolve directly from a task id with no reverse lookup. |
 | `created_by_user_id` | *(none)* | stubbed `null` | Task rows carry `organizationId`/`projectId`/`agentProfileId`, not a "created by" user id. `projects.owner_user_id` is one hop away (not fetched here, to keep each read a single round trip) — an honest gap, not fetched-then-hidden. |
 | `selected_repository` | `project.permittedRepository` | `"host/owner/repo"` → `"owner/repo"` (`splitRepository()`) | Only recognizes `github.com`/`gitlab.com`/`bitbucket.org` as hosts; anything else falls back to the raw string with `git_provider: null`. |
 | `selected_branch` | `task.repositoryRevision` | direct | **Lossy**: AtherNull snapshots a *revision* (commit-ish string, e.g. `"abc123"`) at task creation (`0004_task_reproducibility_snapshot.sql`), not a branch name. It is surfaced as-is; in the real OpenHands UI this can read like a commit sha where a human expects a branch name. |
@@ -46,7 +46,8 @@ Source: `Task`/`TaskDetail` (`GET /v1/jobs`, `GET /v1/jobs/:id`) +
 | `trigger` | *(none)* | stubbed `null` | AtherNull tasks have no "how was this created" trigger concept (`resolve`/`slack`/`api`/etc.). |
 | `pr_number` | *(none)* | stubbed `[]` | No PR-linkage concept in AtherNull's task model. |
 | `agent_kind` | *(constant)* | always `"openhands"` | Every AtherNull execution that runs an Agent Server conversation does so via OpenHands, never ACP (`internal.ts`'s `/conversation` endpoint). Not derived per-task because there is nothing per-task to derive it from — it is a fleet-wide constant in AtherNull today. |
-| `llm_model` | `task.executions[0].resolvedModel` | direct (latest execution only) | `null` if the task has no executions yet (still `QUEUED`/`AWAITING_FUNDING`). |
+| `tags` | *(none, task/`/search` only)* | *(not populated by `mapTaskToAppConversation`)* | **Spike F addition, `/search` only** — see the dedicated note after this table. `mapTaskToAppConversation()` (still used by `GET /api/conversations/:id` and the batch endpoint) does not set this field at all (left `undefined`, distinct from `mapExecutionToAppConversation()`'s populated `Record<string,string>`). |
+| `llm_model` | `task.executions[0].resolvedModel` | direct (latest execution only) | `null` if the task has no executions yet (still `QUEUED`/`AWAITING_FUNDING`). **Spike F note:** `mapExecutionToAppConversation()` (used by `/search`) instead reads `execution.resolvedModel` directly off the specific execution being mapped, not `executions[0]` — see the note after this table. |
 | `metrics` | *(none)* | stubbed `null` | **No AtherNull equivalent at all.** `MetricsSnapshot` (`accumulated_cost`, per-model `token_usage`, `context_window`) is Agent-Server-runtime telemetry, never persisted by `apps/api`. AtherNull's own `usage_events`/`budgetSpentMinor` exist but are shaped completely differently (a running spend total in minor currency units) — deliberately left `null` rather than force-fit an incompatible shape. |
 | `created_at` / `updated_at` | `task.createdAt` / `task.updatedAt` | direct | |
 | `execution_status` | `task.status` | `taskStatusToExecutionStatus()`, a 16→7 collapse (table below) | **Lossy, many-to-one.** AtherNull's task FSM and OpenHands' agent-loop status enum model different things (payment/lifecycle vs. live-agent-loop). |
@@ -69,6 +70,173 @@ Source: `Task`/`TaskDetail` (`GET /v1/jobs`, `GET /v1/jobs/:id`) +
 `paused`, `waiting_for_confirmation`, `stuck` (3 of OpenHands' 7 values) have
 **no AtherNull source state that maps to them at all** — a live-agent-loop
 concept AtherNull's payment/lifecycle FSM has no equivalent for.
+
+## Spike F addition: one `AppConversation` per execution (`/search` only)
+
+`GET /api/conversations/search` was changed from "one `AppConversation` per
+AtherNull **task**" (`mapTaskToAppConversation()`, fed by bare `Task[]` from
+`GET /v1/jobs`) to "one `AppConversation` per AtherNull **execution**"
+(`mapExecutionToAppConversation()`, fed by each task's full `TaskDetail`,
+`executions[]` included). This lets OpenHands' real, already-working
+sidebar list every retry attempt as its own card — "attempt-switching for
+free" — with zero OpenHands source changes.
+
+- **`id`**: `execution.conversationId ?? execution.id` (the real id the
+  coding-agent worker stamps via `POST /internal/executions/:id/conversation`,
+  falling back to the execution's own id for an execution a worker claimed
+  but hasn't stamped one for yet) — **not** `task.id`.
+- **`title`**: `` `${task.requirements} (attempt ${n} of ${count})` `` — an
+  attempt distinguisher is appended (via `computeAttemptInfo()`, ordering the
+  task's executions by `createdAt`) because `task.requirements` alone would
+  render N identical-looking sidebar cards for N attempts of the same task.
+- **`llm_model`**: `execution.resolvedModel` directly off *this* execution,
+  not `executions[0]` — each attempt can in principle have used a different
+  routing tier/model.
+- **`tags`** (new field, `Record<string,string>`, confirmed rendered as
+  chips by `conversation-tag-chips.tsx`, gated by
+  `conversation-panel-preferences-store.ts`'s `showTagsMetadata`, confirmed
+  default `true`): built by `buildStatusTags()`.
+  - `tags.status` is always present: the task's real, un-collapsed
+    `TaskStatus` (e.g. `"SETTLED"`, `"VERIFYING"`) — this is now the place a
+    human reads task state from in the sidebar, replacing the lossy 16→7
+    `execution_status` collapse (still used for the enum field, unchanged,
+    since OpenHands has no chip-friendly way to show 16 raw values there).
+  - `tags.verification_outcome` (`"PASS"`/`"FAIL"`) is present **only** when
+    a `verification_runs` row exists whose `execution_id` matches *this
+    specific execution* — matched by id, not "the task's latest run" — so a
+    failed-then-retried task's first (failed) attempt card does not
+    incorrectly inherit the second attempt's later PASS outcome. Measured
+    directly against Spike F's own seeded 2-attempt journey: attempt 1
+    (`outcome:"failure"`, no verification run against it) shows only
+    `{"status":"SETTLED"}`; attempt 2 (the one a `verification_runs` row's
+    `execution_id` actually points at) shows
+    `{"status":"SETTLED","verification_outcome":"PASS"}`.
+
+**Fixed (was an honestly-recorded inconsistency in an earlier revision of
+this spike):** `GET /api/conversations/:id` and the batch `GET
+/api/conversations?ids[]=` endpoint initially were left unchanged when
+`/search` switched to per-execution ids above, still calling
+`mapTaskToAppConversation()` and resolving by **task id** only — passing one
+of `/search`'s new execution-derived ids to either of them did not resolve
+(`getTaskDetail()` called with a non-task id 404s internally), breaking
+Spike C's own click-through-to-detail smoke test.
+
+Both endpoints now share a single `resolveConversationById()` helper
+(`routes/conversations.ts`) that tries execution-id resolution first —
+reusing `routes/events.ts`'s exported `resolveExecutionOwner()`, the exact
+same "which task owns this execution" scan `.../events` already used, rather
+than a second, divergent lookup — and, only if that scan finds no owning
+task, falls back to the original pre-Spike-F behavior: treat the id as a
+task id directly and return a task-keyed `AppConversation` via
+`mapTaskToAppConversation()` (`id = task.id`, no attempt suffix). This keeps
+**both** id shapes working through the same two endpoints: an
+execution-derived id (from `/search`, the real click-through path) resolves
+to that specific attempt's `AppConversation`; a bare task id (e.g. Spike D's
+hardcoded `NEXT_PUBLIC_CONVERSATION_ID`, seeded before `/search`'s
+per-execution change and never updated) still resolves exactly as before.
+Measured directly: `GET /api/conversations?ids[]=<a conversationId from
+/search>` now returns that attempt's `AppConversation` (not `[null]`), and
+`GET /api/conversations?ids[]=<a task id>` is unchanged from its original
+task-keyed response.
+
+## Spike F addition: `old_content`/`new_content`/`old_str`/`new_str`
+
+Previously, `ActionEvent`/`ObservationEvent` mapping passed
+`FileEditorAction`/`FileEditorObservation` payloads through close to
+verbatim, without ever populating `old_content`/`new_content` (on the
+observation) or `old_str`/`new_str` (on the in-flight action) — fields
+OpenHands' own real, unmodified `file-editor.tsx`/`diff-view.tsx` visualizer
+needs to render its hand-rolled diff instead of falling back to a plain-text
+path. AtherNull's raw `FileEditorObservation` payload never carries these
+directly (confirmed against both spikes' seed fixture shapes).
+
+- **`ActionEvent.action.old_str`/`new_str`**: for a `FileEditorAction`,
+  re-derived from the action's own payload via
+  `extractFileEditorActionFields()` (same `typeof`-guarded extraction
+  `apps/web/lib/execution-events.ts`'s `ParsedFileEdit` uses) rather than a
+  blind object spread, so a malformed upstream value surfaces as an honest
+  `null` instead of silently passing through.
+- **`ObservationEvent.observation.old_content`/`new_content`**: reconstructed
+  from the **paired** `ActionEvent`'s own `old_str`/`new_str`/`file_text`,
+  looked up via `ObservationEvent.action_id` against a same-page
+  `actionsById` map (mirroring `apps/web`'s `pairActionsWithObservations()`),
+  since AtherNull's `ObservationEvent` payload has no before/after content of
+  its own:
+  - `str_replace`/`insert` (a `new_str` is present): `old_content` /
+    `new_content` are the replaced **snippet**, not a whole-file
+    before/after — AtherNull never persists a whole-file snapshot around an
+    edit, so this is a documented, lossy-but-honest approximation, not a
+    fabricated full-file diff.
+  - `create` (no `new_str`, but a `file_text` is present): only
+    `new_content` is set (from `file_text`); `old_content` is left absent so
+    `file-editor.tsx`'s `old_content != null && new_content != null`
+    diff-view gate correctly stays off, falling through to its own
+    new-content-preferring plain path — the same as a real "create"
+    observation would.
+  - Measured directly against Spike F's own seeded journey: a `create` event
+    for `/workspace/project/src/routes/metrics.ts` returns `new_content` set
+    and no `old_content` key at all; a `str_replace` event for
+    `/workspace/project/src/app.ts` returns both
+    `old_content: "app.get('/status', statusHandler);"` and
+    `new_content: "app.get('/status', statusHandler);\nmetricsRoute(app);"`.
+
+## Spike F addition: `routes/events.ts` resolves by execution, not "latest"
+
+Previously, both `.../events/count` and `.../events/search` always resolved
+"the conversation's events" as `task.executions[0]`'s events (AtherNull
+orders `TaskDetail.executions` newest-first) — correct only because `/search`
+used to emit one `AppConversation` per **task**, so there was only ever one
+conversation id per task to ask about. Now that `/search` emits one per
+**execution**, the requested `:id` identifies a specific execution (via
+`execution.conversationId ?? execution.id`, same as above), and "always
+`executions[0]`" would silently return the wrong (latest) attempt's events
+for every attempt except the newest one.
+
+`routes/events.ts` now resolves the owning task first via
+`resolveExecutionOwner()`: a **linear scan across the org's tasks** (`GET
+/v1/jobs`, then one `GET /v1/jobs/:id` per task, matching each execution's
+own `conversationId ?? id` against the requested id) before calling
+AtherNull's real per-execution events endpoint (`GET
+/v1/jobs/:taskId/executions/:executionId/events`, which needs the owning
+task id, not just an execution id). This is `O(tasks)` extra reads per
+`events` request — a **documented prototype-scale simplification**, fine at
+1-2 seeded tasks; a production adapter would maintain an execution-id →
+task-id index instead of scanning per request. Measured directly against
+Spike F's 2-attempt seeded journey: attempt 1's conversation id resolves to
+its own 4 events, attempt 2's conversation id resolves to its own (different)
+9 events — not the same set for both, confirming the fix actually
+distinguishes attempts rather than coincidentally still returning the latest
+execution's events for every id.
+
+**Follow-up fix (same phase):** the first version of `resolveExecutionOwner()`
+had no fallback — a requested id that didn't match *any* execution's
+`conversationId ?? id` (i.e. a **task id**, not an execution id) resolved to
+zero events, silently breaking Spike D's `/harness-live` page, whose
+`NEXT_PUBLIC_CONVERSATION_ID` is a task id by design (read from the original
+`seed-output.json`, seeded before `/search` had any notion of per-execution
+ids). Fixed by wrapping it in `resolveConversationTarget()`: try
+`resolveExecutionOwner()` first, and if it finds no owning task, fall back to
+`getTaskDetail(requestedId)` directly and use that task's own
+`executions[0]` — the exact `executions[0]` behavior `.../events` used
+*before* Spike F's per-execution change. `routes/conversations.ts`'s
+`resolveConversationById()` (above) mirrors this same two-step
+execution-id-then-task-id fallback shape, deliberately built on the same
+exported `resolveExecutionOwner()` rather than a second scan.
+
+## Scaling limitations introduced by Spike F (documented, not solved)
+
+- **`/search`'s N+1 calls** (unchanged from the original note, restated
+  here for completeness now that this endpoint's output shape changed too):
+  one `GET /v1/jobs` + one `GET /v1/jobs/:id` per task. Fine at 1-2 seeded
+  tasks; would need batching/caching at real scale.
+- **`routes/events.ts`'s linear scan** (new in Spike F, see above): one
+  `GET /v1/jobs` + one `GET /v1/jobs/:id` per task, per events request, to
+  resolve which task owns a requested execution id. Same order of cost as
+  `/search`, paid again on every events call instead of once per page load.
+- Neither limitation is hidden behind a fake fast path — both are plain,
+  visible loops in the adapter's own source, called out here so a reader of
+  this contract doesn't have to rediscover them by reading `routes/*.ts`
+  directly.
 
 ## Security-critical stub: `session_api_key`
 
@@ -152,3 +320,5 @@ Beyond what this spike measured:
 - A `created_by_user_id` fetch (one more read per task, from `projects.owner_user_id`).
 - WebSocket/realtime support — explicitly out of scope, see `README.md`.
 - Handling for AtherNull tasks belonging to multiple projects/orgs per adapter instance (this spike hard-codes one seeded org via `ATHERNULL_ORGANIZATION_ID`).
+- ~~**(Spike F)** Reconciling `/search`'s execution-keyed ids with the still-task-keyed `GET /api/conversations/:id` and batch `GET /api/conversations?ids[]=` endpoints.~~ **Fixed** — both endpoints now accept either id shape via `resolveConversationById()` (see that section above).
+- **(Spike F)** An execution-id → task-id index, to replace `routes/events.ts`'s (and now also `routes/conversations.ts`'s) linear scan (see above) with a direct lookup — still an open scaling item, not attempted here.

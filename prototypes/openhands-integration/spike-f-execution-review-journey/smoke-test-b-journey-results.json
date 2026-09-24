@@ -1,0 +1,65 @@
+{
+  "results": [
+    {
+      "name": "1-attempt-selector-shows-2-attempts",
+      "pass": true,
+      "detail": "found 2 tab(s)"
+    },
+    {
+      "name": "1-attempt-titles-carry-attempt-distinguisher",
+      "pass": true,
+      "detail": "tabTexts=[\"[Spike-F journey 3c91de] Add a request-count /metrics endpoint (retried once) (attempt 1 of 2)\",\"[Spike-F journey 3c91de] Add a request-count /metrics endpoint (retried once) (attempt 2 of 2)\"]"
+    },
+    {
+      "name": "1-attempt-1-shows-its-own-event-count",
+      "pass": true,
+      "detail": "expected 4, got 4 (status text: \"Loaded 4 real events for attempt 2b7c383c-401f-4931-b239-c322b2b3e4a0.\")"
+    },
+    {
+      "name": "3-attempt-1-status-badge-settled-no-pass",
+      "pass": true,
+      "detail": "badge text: \"Status: SETTLED\""
+    },
+    {
+      "name": "1-attempt-2-shows-its-own-distinct-event-count",
+      "pass": true,
+      "detail": "expected 9 (and distinct from attempt 1's 4), got 9"
+    },
+    {
+      "name": "3-attempt-2-status-badge-settled-and-pass",
+      "pass": true,
+      "detail": "badge text: \"Status: SETTLED · PASS\""
+    },
+    {
+      "name": "2-real-diff-view-renders-not-markdown-fallback",
+      "pass": true,
+      "detail": "found 1 diff-row element(s) with the vendored DiffView's own row-coloring classes"
+    },
+    {
+      "name": "2-file-path-chip-renders-alongside-diff",
+      "pass": true,
+      "detail": "expected >=2 (create + str_replace events), found 2"
+    },
+    {
+      "name": "4-terminal-command-and-output-visible-in-chat-feed",
+      "pass": true,
+      "detail": "command found=true, output found=true"
+    },
+    {
+      "name": "4-terminal-replay-panel-shows-real-content",
+      "pass": true,
+      "detail": "xterm element count=14"
+    },
+    {
+      "name": "5-return-to-review-href-matches-real-route-pattern",
+      "pass": true,
+      "detail": "expected \"http://localhost:3000/projects/30d02805-f11e-431d-a887-ad1cd3b472c6/tasks/4030f47b-42ca-422f-ac0b-41a513fdd01b\", got \"http://localhost:3000/projects/30d02805-f11e-431d-a887-ad1cd3b472c6/tasks/4030f47b-42ca-422f-ac0b-41a513fdd01b\""
+    },
+    {
+      "name": "6-zero-unexpected-console-errors",
+      "pass": true,
+      "detail": "0 known-noise message(s) ignored"
+    }
+  ],
+  "consoleErrors": []
+}

@@ -16,7 +16,7 @@
 // anything - the only non-GET call in the whole spike is the seed script's
 // one-time setup (../seed/seed.ts), a separate process that never runs
 // alongside this server in normal operation.
-import type { RepoProject, Task, TaskDetail, Execution, ExecutionEvent } from "./athernull-types.js";
+import type { RepoProject, Task, TaskDetail, Execution, ExecutionEvent, VerificationRun } from "./athernull-types.js";
 
 // --- raw (snake_case, straight off the DB rows) -> camelCase -------------
 // apps/api never applies a camelCase plugin to its Kysely instance (db.ts),
@@ -65,9 +65,25 @@ interface RawTask {
   updated_at: string;
 }
 
+// Spike F addition - GET /v1/jobs/:id's real response (apps/api/src/routes/
+// jobs.ts) does include a real verification_runs row set (confirmed by
+// reading that route, and by apps/api/test/job-lifecycle.test.ts's own
+// assertions on `verificationRuns`), snake_case straight off the DB same as
+// every other raw type here.
+interface RawVerificationRun {
+  id: string;
+  task_id: string | null;
+  execution_id: string | null;
+  verifier_version: string;
+  tests: { name: string; passed: boolean }[];
+  outcome: "PASS" | "FAIL";
+  evidence: Record<string, unknown>;
+  created_at: string;
+}
+
 interface RawTaskDetail extends RawTask {
   executions: RawExecution[];
-  verificationRuns: unknown[];
+  verificationRuns: RawVerificationRun[];
   budgetSpentMinor: number;
 }
 
@@ -121,6 +137,19 @@ function toTask(raw: RawTask): Task {
     status: raw.status,
     createdAt: raw.created_at,
     updatedAt: raw.updated_at,
+  };
+}
+
+function toVerificationRun(raw: RawVerificationRun): VerificationRun {
+  return {
+    id: raw.id,
+    taskId: raw.task_id,
+    executionId: raw.execution_id,
+    verifierVersion: raw.verifier_version,
+    tests: raw.tests,
+    outcome: raw.outcome,
+    evidence: raw.evidence,
+    createdAt: raw.created_at,
   };
 }
 
@@ -274,7 +303,11 @@ export async function getTaskDetail(taskId: string): Promise<TaskDetail | null> 
   return {
     ...toTask(raw),
     executions: raw.executions.map(toExecution),
-    verificationRuns: [],
+    // Spike F fix: this was previously hardcoded to [] (Spike C never seeded
+    // verification data, so the gap was invisible) - now maps the real rows
+    // GET /v1/jobs/:id already returns, needed for mapping.ts's
+    // buildStatusTags() to surface a real verification_outcome tag.
+    verificationRuns: raw.verificationRuns.map(toVerificationRun),
     budgetSpentMinor: raw.budgetSpentMinor,
   };
 }

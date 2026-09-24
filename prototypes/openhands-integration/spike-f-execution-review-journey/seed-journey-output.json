@@ -1,0 +1,27 @@
+{
+  "createdAt": "2026-09-24T14:45:31.141Z",
+  "apiBase": "http://localhost:3001",
+  "reusedOwnerEmail": "spike-c-eb81ec80@example.com",
+  "organizationId": "64dcb46e-eb48-4dee-8ddc-5b407caa9919",
+  "projectId": "30d02805-f11e-431d-a887-ad1cd3b472c6",
+  "agentProfileId": "a0c2934b-064a-4dcb-93d9-ae875e7c9ca0",
+  "taskId": "4030f47b-42ca-422f-ac0b-41a513fdd01b",
+  "distinctiveObjective": "[Spike-F journey 3c91de] Add a request-count /metrics endpoint (retried once)",
+  "attempts": [
+    {
+      "executionId": "3e46380c-46d6-46d5-bb4a-3e67f9b082b1",
+      "conversationId": "2b7c383c-401f-4931-b239-c322b2b3e4a0",
+      "outcome": "failure",
+      "eventCount": 4
+    },
+    {
+      "executionId": "9f20e27b-8324-4d37-a186-60dfd4f15b30",
+      "conversationId": "9cf524d3-27ea-4f1f-8edc-6c65a396f574",
+      "outcome": "success",
+      "eventCount": 9
+    }
+  ],
+  "maxExecutionAttempts": 3,
+  "autoRetryConfirmed": "apps/api/src/routes/internal.ts's real FAILED->QUEUED cap, triggered live (not simulated)",
+  "finalTaskStatus": "SETTLED"
+}

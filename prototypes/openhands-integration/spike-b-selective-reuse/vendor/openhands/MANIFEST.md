@@ -5,6 +5,32 @@ Source: `https://github.com/OpenHands/OpenHands` @ pinned commit
 frontend root `src/`. `LICENSE` in this directory is the upstream repo's
 `LICENSE` at that commit, copied verbatim.
 
+**Spike F addendum (execution-review journey):** 8 new files vendored, at
+the same pinned commit, to bring in OpenHands' real file-editor diff
+visualizer (`file-editor.tsx` + `diff-view.tsx`) — the two target reuse
+units this addendum exists for — plus their direct, previously-unvendored
+dependencies. 2 already-vendored files (`dispatcher.tsx`,
+`markdown-file-preview.tsx`) were also modified further; see their rows
+below for what changed and why. New file count: 133 total (93 byte-identical
++ 40 modified/stubbed/partial). No file vendored in the original A-E pass
+was removed or reverted.
+
+**Dispatcher-vs-direct-call decision (documented in `dispatcher.tsx`'s row
+below):** rather than vendoring upstream's full `./index` visualizer
+registry (which would additionally pull in `bash/`, `search/`, `task/` — 3
+more multi-file trees, none needed for this spike's diff-view goal), this
+addendum special-cases the 4 file-editor action/observation kinds inside the
+existing `dispatcher.tsx` stub and calls the newly-vendored
+`fileEditorVisualizer.Body` directly. This is the task brief's explicitly
+offered simpler alternative to vendoring the full dispatch mechanism, and is
+equally faithful: the `Body` component invoked is the same real, unmodified,
+byte-identical `file-editor.tsx` upstream itself would resolve through that
+registry for these exact 4 kinds. Terminal (bash) events are unaffected —
+neither this spike nor the original pass vendors `bashVisualizer`; both
+Spike B's harness pages render terminal content via the separate Terminal/
+xterm panel (`components/features/terminal/terminal.tsx`, already vendored)
+plus, in the chat feed, the pre-existing markdown fallback path.
+
 Fetched via a shallow, sparse `git fetch --depth 1 origin
 380fd839d6bcb1f9e1674ab0ff5c0225705118e8` (GitHub allows fetching a public
 repo by exact commit SHA) into a scratch clone, sparse-checked-out to `src`,
@@ -38,10 +64,17 @@ auth, or a real Agent Server websocket connection.** Specifically:
   harness is a snapshot render, not an integration test against real
   backend behavior.
 
-## Modified / stubbed / partial-vendor files (38 of 125)
+## Modified / stubbed / partial-vendor files (40 of 133)
 
-Every file below is annotated in place with a `SPIKE-B ...` comment
-explaining the change (`grep -rn "SPIKE-B" vendor/openhands` finds all 38).
+Most files below are annotated in place with a `SPIKE-B ...` comment
+explaining the change (`grep -rln "SPIKE-B" vendor/openhands` finds 39 of the
+40; the exception, `i18n/declaration.ts`, is instead documented inline via
+its own `*(generated, not tracked upstream)*` category, same as in the
+original pass). The 2 Spike-F-modified rows are marked in place as
+`SPIKE-B UPGRADED FROM PARTIAL VENDOR — Spike F` (`markdown-file-preview.tsx`)
+and `SPIKE-B MODIFIED (see MANIFEST.md ...)` (`dispatcher.tsx`); the new
+`file-path-chip.tsx` carries a `SPIKE-B MODIFIED (blocker fix ...)` comment,
+same convention as the rest of this table.
 Categories:
 
 - **STUB** — not copied from upstream; a small harness-local replacement
@@ -80,8 +113,8 @@ Categories:
 | `components/features/chat/goal-status-content.tsx` | same path | STUB | Renders `status` as plain text | Real file needs `useGoalStore` (zustand), `useOptionalConversationId`, toast dispatch. Not exercised by any of the 9 required fixtures (none is a `GoalConversationStateUpdate` event). |
 | `components/features/chat/model-messages.tsx` | same path | STUB | Always returns `null` | Real file needs `useModelStore` (seeded empty, see `stores/model-store.ts`) + a live `useFreeModels` query; upstream's own component already returns `null` when the store has nothing for this conversation — this stub reproduces exactly that branch. |
 | `components/features/chat/plan-preview.tsx` | same path | STUB | Renders `planContent` as plain text | Real file needs 3 routing/panel-state hooks. Not exercised by any required fixture (no `PlanningFileEditorObservation`). |
-| `components/features/chat/tool-visualizers/dispatcher.tsx` | same path | STUB | `resolveVisualizerBody()` always returns `null` | Real file's `./index` fans out into `bash/`, `file-editor/`, `search/`, `task/` subdirectories — each its own multi-file tree with its own icons/i18n — roughly doubling this spike's vendored-file count for the specialized diff/terminal-styled tool bodies. Upstream's own doc comment already specifies `null` as the intended "fall back to the markdown pipeline" signal, so this stub exercises a real, upstream-designed degradation path, not an invented one. Terminal/file-editor action bodies render as plain text instead of the specialized visualizer as a result. |
-| `components/features/chat/tool-visualizers/primitives/markdown-file-preview.tsx` | same path | PARTIAL VENDOR | Kept only the pure `isMarkdownFileEditorEvent` predicate (and its 2 helpers), verbatim; dropped the `MarkdownFilePreview` UI component | No vendored caller renders the UI component (`generic-event-message-wrapper.tsx`/`group-events.ts` only call the predicate); keeping it would have pulled in `plan-components.tsx` (used only by the stubbed `PlanPreview`). |
+| `components/features/chat/tool-visualizers/dispatcher.tsx` | same path | MODIFIED (Spike F, was STUB) | `resolveVisualizerBody()` special-cases `FileEditorAction`/`StrReplaceEditorAction`/`FileEditorObservation`/`StrReplaceEditorObservation` and calls the newly-vendored `fileEditorVisualizer.Body` directly for those 4 kinds; every other kind still returns `null` (unchanged pre-Spike-F behavior) | Original A-E pass stubbed this to always return `null` rather than vendor upstream's full `./index` registry (which fans out into `bash/`, `file-editor/`, `search/`, `task/` — each its own multi-file tree). Spike F needs a real diff view for file-editor events specifically; rather than now vendoring the full registry (and `bash`/`search`/`task` alongside it, none needed here), this calls the one needed visualizer's `Body` directly — the task brief's own offered "simpler, equally faithful" alternative. Terminal/search/task actions still render via the markdown fallback, unchanged. |
+| `components/features/chat/tool-visualizers/primitives/markdown-file-preview.tsx` | same path | MODIFIED (Spike F, was PARTIAL VENDOR) | Now also vendors the real `MarkdownFilePreview` UI component (previously dropped), verbatim except the same icon swap as `file-path-chip.tsx` below (`#/icons/file.svg?react` → lucide-react `File`) | Spike F's real, unmodified `file-editor.tsx` imports `MarkdownFilePreview` directly (for `create`d `.md` artifacts) — a real compile-time dependency the original A-E pass never had, since no vendored caller rendered it back then. Not exercised by the seeded str_replace journey fixture (a non-Markdown file), but present so the component compiles and behaves identically to upstream for any `.md` `create` event. Pulled in `plan-components.tsx` (new file, below) as a result — the same file the original pass's row here predicted this component would need. |
 | `components/features/images/image-carousel.tsx` | same path | MODIFIED (other) | Replaced `ImagePreview`/`ImageLightbox`/`Thumbnail`/`RemoveButton` chain with a plain `<img>` grid, same prop signature | That chain is unrelated to either target reuse unit and no fixture carries image attachments; vendoring it would have added 4+ more files for a path never exercised. |
 | `components/shared/buttons/conversation-confirmation-buttons.tsx` | same path | STUB | Always returns `null` | Real file needs 5 live-state hooks/stores for a pending-confirmation UI. Upstream's own component already returns `null` when nothing is pending — reproduces that branch. |
 | `components/shared/buttons/styled-tooltip.tsx` | same path | MODIFIED (other) | Re-implemented with a native `title` attribute instead of `@heroui/react`'s `<Tooltip>` | Avoids pulling in HeroUI's whole theming plugin (`hero.ts`, `tailwind.config.js`, ~300 lines of `--heroui-*` CSS vars) for one tooltip, in a harness that already declined to reproduce OpenHands' real theme system (see "Styling / theming" below). The real file's line `const disableAnimation = import.meta.env.MODE === "test";` is also a **genuine Next.js blocker** (Vite-only `import.meta.env`; Next uses `process.env`) — moot here since the whole file was replaced for the HeroUI reason, but logged since it's a real, independent finding. |
@@ -100,8 +133,9 @@ Categories:
 | `utils/constants.ts` | same path | PARTIAL VENDOR | Kept only `METADATA_PREFIXES`, verbatim | Real file is 785 lines of unrelated app-wide constants. |
 | `utils/custom-toast-handlers.ts` | same path | STUB | `displayErrorToast()` logs to console | Real file dispatches a styled UI-chrome toast; only reachable from the never-firing "branch from here" error path. |
 | `utils/utils.ts` | same path | PARTIAL VENDOR | Kept only `cn()`, verbatim | Real file is 785 lines of unrelated app-wide helpers with their own app-specific type imports (settings, git providers, i18n-keyed status formatting, ...). |
+| `components/features/chat/tool-visualizers/primitives/file-path-chip.tsx` | same path | MODIFIED (blocker fix, Spike F) | `#/icons/file.svg?react` → lucide-react `File` | Same `?react` SVG-import blocker as the original pass's 11 icon-swap rows above (Vite/SVGR-only, no Next/Turbopack equivalent configured) — new row because this file itself is new to this vendoring pass (a real, direct dependency of the newly-vendored `file-editor.tsx`). |
 
-## Byte-identical files (87 of 125)
+## Byte-identical files (93 of 133)
 
 Every file below was copied unmodified from the pinned commit at the exact
 same relative path under `src/` (only the `#/*` → `./vendor/openhands/*`
@@ -142,6 +176,11 @@ components/features/chat/mono-component.tsx
 components/features/chat/path-component.tsx
 components/features/chat/pending-stop-icon.tsx
 components/features/chat/success-indicator.tsx
+components/features/chat/tool-visualizers/define.ts
+components/features/chat/tool-visualizers/file-editor/file-editor.tsx
+components/features/chat/tool-visualizers/primitives/code-block.tsx
+components/features/chat/tool-visualizers/primitives/diff-view.tsx
+components/features/chat/tool-visualizers/text-content.ts
 components/features/chat/user-message-body.tsx
 components/features/chat/waiting-for-runtime-message.tsx
 components/features/conversation-panel/runtime-waiting-state.tsx
@@ -155,6 +194,7 @@ components/features/markdown/list.tsx
 components/features/markdown/markdown-renderer.tsx
 components/features/markdown/markdown-table-scroll.tsx
 components/features/markdown/paragraph.tsx
+components/features/markdown/plan-components.tsx
 components/features/markdown/remark-github-alerts.ts
 components/features/markdown/syntax-highlighter.ts
 components/features/markdown/table.tsx
@@ -191,6 +231,7 @@ types/agent-state.tsx
 ui/typography.tsx
 utils/event-logger.ts
 utils/format-event-timestamp.ts
+utils/get-language-from-path.ts
 utils/is-markdown-file-path.ts
 utils/parse-terminal-output.ts
 utils/path-utils.ts

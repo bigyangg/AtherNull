@@ -1,0 +1,15 @@
+{
+  "name": "spike-f-execution-review-journey",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Spike F: one real execution-review journey (attempts, file diffs, verification/acceptance status, terminal output) driven through both Spike B (Next harness) and Spike C (adapted OpenHands shell) against the same seeded data. Own deps, own npm install — not in the pnpm workspace, same isolation pattern as spikes A-E.",
+  "scripts": {
+    "seed": "node seed-journey-data.mjs",
+    "smoke-test-b": "node smoke-test-b-journey.mjs",
+    "smoke-test-c": "node smoke-test-c-journey.mjs"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.62.1"
+  }
+}

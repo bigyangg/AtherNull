@@ -1,0 +1,109 @@
+{
+  "results": [
+    {
+      "name": "1-sidebar-shows-2-real-attempt-cards",
+      "pass": true,
+      "detail": "attempt1 cards=1, attempt2 cards=1"
+    },
+    {
+      "name": "1-click-through-to-attempt-2-detail",
+      "pass": true,
+      "detail": "url=http://localhost:4173/conversations/9cf524d3-27ea-4f1f-8edc-6c65a396f574?backend=default-local"
+    },
+    {
+      "name": "1-attempt-2-detail-shows-its-own-content",
+      "pass": true,
+      "detail": "looked for attempt 2's distinctive MessageEvent text"
+    },
+    {
+      "name": "3-attempt-2-sidebar-shows-settled-and-pass-chips",
+      "pass": true,
+      "detail": "SETTLED found=true, PASS found=true"
+    },
+    {
+      "name": "2-real-diff-view-renders-not-markdown-fallback",
+      "pass": true,
+      "detail": "expanded 3 row(s); found 1 diff-row element(s) with the real DiffView's own row-coloring classes"
+    },
+    {
+      "name": "2-file-path-chip-renders-alongside-diff",
+      "pass": true,
+      "detail": "expected >=2 (create + str_replace events), found 2"
+    },
+    {
+      "name": "4-terminal-command-and-output-visible-in-chat-feed",
+      "pass": true,
+      "detail": "command found=true, output found=true"
+    },
+    {
+      "name": "4-terminal-tab-shows-real-behavior-live-only-empty-state",
+      "pass": true,
+      "detail": "real, unmodified live-PTY-only empty state shown (expected — see README.md)"
+    },
+    {
+      "name": "5-return-to-review-href-matches-real-route-pattern",
+      "pass": true,
+      "detail": "expected \"http://localhost:3000/projects/30d02805-f11e-431d-a887-ad1cd3b472c6/tasks/4030f47b-42ca-422f-ac0b-41a513fdd01b\", got \"http://localhost:3000/projects/30d02805-f11e-431d-a887-ad1cd3b472c6/tasks/4030f47b-42ca-422f-ac0b-41a513fdd01b\" (fixture page, not upstream source — see README.md)"
+    },
+    {
+      "name": "1-click-through-to-attempt-1-detail-distinct-from-attempt-2",
+      "pass": true,
+      "detail": "url=http://localhost:4173/conversations/2b7c383c-401f-4931-b239-c322b2b3e4a0?backend=default-local"
+    },
+    {
+      "name": "1-attempt-1-detail-shows-its-own-distinct-content",
+      "pass": true,
+      "detail": "looked for attempt 1's distinctive failure MessageEvent text"
+    },
+    {
+      "name": "3-attempt-1-sidebar-shows-settled-tag",
+      "pass": true,
+      "detail": "SETTLED found=true"
+    },
+    {
+      "name": "6-zero-unexpected-console-errors",
+      "pass": true,
+      "detail": "38 known-noise message(s) ignored"
+    }
+  ],
+  "consoleErrors": [
+    "Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "Access to fetch at 'http://localhost:4100/api/auth/workspace-session' from origin 'http://localhost:4173' has been blocked by CORS policy: Response to preflight request doesn't pass access control check: The value of the 'Access-Control-Allow-Credentials' header in the response is '' which must be 'true' when the request's credentials mode is 'include'.",
+    "Failed to load resource: net::ERR_FAILED",
+    "WebSocket connection to 'ws://localhost:4100/sockets/bash-events' failed: Error during WebSocket handshake: Unexpected response code: 404",
+    "WebSocket connection to 'ws://localhost:4100/sockets/events/9cf524d3-27ea-4f1f-8edc-6c65a396f574?resend_mode=since&after_timestamp=2026-09-24T14%3A40%3A45.013Z' failed: Error during WebSocket handshake: Unexpected response code: 404",
+    "Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "WebSocket connection to 'ws://localhost:4100/sockets/events/9cf524d3-27ea-4f1f-8edc-6c65a396f574?resend_mode=since&after_timestamp=2026-09-24T14%3A40%3A45.013Z' failed: Error during WebSocket handshake: Unexpected response code: 404",
+    "WebSocket connection to 'ws://localhost:4100/sockets/events/9cf524d3-27ea-4f1f-8edc-6c65a396f574?resend_mode=since&after_timestamp=2026-09-24T14%3A40%3A45.013Z' failed: Error during WebSocket handshake: Unexpected response code: 404",
+    "Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "Access to fetch at 'http://localhost:4100/api/auth/workspace-session' from origin 'http://localhost:4173' has been blocked by CORS policy: Response to preflight request doesn't pass access control check: The value of the 'Access-Control-Allow-Credentials' header in the response is '' which must be 'true' when the request's credentials mode is 'include'.",
+    "Failed to load resource: net::ERR_FAILED",
+    "Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "WebSocket connection to 'ws://localhost:4100/sockets/bash-events' failed: Error during WebSocket handshake: Unexpected response code: 404",
+    "WebSocket connection to 'ws://localhost:4100/sockets/events/2b7c383c-401f-4931-b239-c322b2b3e4a0?resend_mode=since&after_timestamp=2026-09-24T14%3A35%3A38.925Z' failed: Error during WebSocket handshake: Unexpected response code: 404"
+  ]
+}

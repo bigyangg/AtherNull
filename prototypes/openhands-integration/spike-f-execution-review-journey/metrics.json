@@ -1,0 +1,79 @@
+{
+  "spike": "F — execution-review journey (Phase 2: Spike B frontend + both smoke tests)",
+  "methodology": {
+    "sharedViewport": "1440x900",
+    "sharedSeededDataset": "seed-journey-output.json (taskId 4030f47b-..., 2 execution attempts, 1st failed/retried, 2nd SETTLED+PASS)",
+    "assertionChecklist": "README.md 'Methodology' section, referenced identically by both smoke tests"
+  },
+  "vendoring": {
+    "approach": "dispatcher.tsx special-cases the 4 file-editor action/observation kinds and calls fileEditorVisualizer.Body directly, instead of vendoring upstream's full ./index visualizer registry (which would also pull in bash/, search/, task/)",
+    "newFilesVendored": 8,
+    "newFilesByteIdentical": 7,
+    "newFilesModified": 1,
+    "existingFilesFurtherModified": 2,
+    "totalVendoredFilesAfterSpikeF": 133,
+    "totalByteIdenticalAfterSpikeF": 93,
+    "totalModifiedStubbedPartialAfterSpikeF": 40,
+    "openHandsSourceFilesChanged": 0,
+    "note": "file-editor.tsx and diff-view.tsx themselves (the 2 target reuse units) are byte-identical vendors — zero modification to the actual diff algorithm or rendering logic."
+  },
+  "adapterChanges": {
+    "phase": 1,
+    "filesModified": ["mapping.ts", "routes/conversations.ts", "routes/events.ts", "service-contract.md"],
+    "note": "Phase 2 made zero further adapter changes; no bug was found in Phase 1's work."
+  },
+  "findings": {
+    "attemptSwitching": {
+      "spikeC": "free — native sidebar already lists one card per AppConversation once each execution maps to its own conversation id (Phase 1)",
+      "spikeB": "required new custom UI (attempt-selector tabs) because Spike B never vendored a conversation-list/sidebar component",
+      "asymmetryConfirmed": true
+    },
+    "fileDiff": {
+      "rendersRealDiffOnBothSides": true,
+      "newComponentsInvented": 0,
+      "openHandsSourceChanged": 0,
+      "detectionMethod": "presence of DiffView's own bg-status-success-bg / bg-status-fail-bg row-coloring classes after expanding the seeded str_replace event, on both sides"
+    },
+    "statusTag": {
+      "showTagsMetadataDefault": true,
+      "spikeCMechanism": "real sidebar tag chips (conversation-tag-chips.tsx), zero new UI",
+      "spikeBMechanism": "raw tag values rendered as one badge string, no vendored tag-chip component",
+      "distinctPerAttemptConfirmed": true,
+      "attempt1Badge": "SETTLED",
+      "attempt2Badge": "SETTLED · PASS"
+    },
+    "terminal": {
+      "chatFeedCommandAndOutputVisibleBothSides": true,
+      "spikeBDedicatedPanelReplaysHistory": true,
+      "spikeCDedicatedTabIsLivePtyOnlyNoReplay": true,
+      "spikeCEmptyStateText": "No terminal output yet. Commands run by the agent will appear here.",
+      "asymmetryConfirmed": true,
+      "asymmetryIsUpstreamDesignNotABug": true
+    },
+    "returnToReview": {
+      "realRoutePattern": "/projects/:projectId/tasks/:taskId",
+      "routeFileRead": "apps/web/app/(app)/projects/[projectId]/tasks/[taskId]/page.tsx",
+      "spikeBLinkIsRealRenderedUI": true,
+      "spikeCLinkIsInjectedFixtureNotUpstreamSource": true,
+      "urlCorrectnessOnlyBothSides": true,
+      "reviewPanelNeverRendered": true
+    },
+    "remainingAsymmetries": [
+      "Spike C is a full real app (nav chrome, sidebar, settings); Spike B's /harness-journey is still a single harness page",
+      "Spike B's terminal panel replays history; Spike C's dedicated Terminal tab does not (live-PTY-only by upstream design)",
+      "Spike B's event feed shows untranslated i18n keys (pre-existing passthrough i18n shim, not a Spike F regression)"
+    ]
+  },
+  "smokeTests": {
+    "smokeTestBJourney": {
+      "assertions": 12,
+      "passed": 12,
+      "failed": 0
+    },
+    "smokeTestCJourney": {
+      "assertions": 13,
+      "passed": 13,
+      "failed": 0
+    }
+  }
+}
