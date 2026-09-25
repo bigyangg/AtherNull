@@ -361,7 +361,223 @@ re-diffed against the new `DockerWorkspace._start_container` and the
 empirical checks above re-run before the version pin is bumped** — the
 assertion must not be silenced or removed to unblock an upgrade.
 
-Phases 3B–3E remain not started.
+## Phase 3B status: complete (2026-09-26)
+
+Phase 3B (worker -> apps/api outbound relay, no browser-facing surface) has
+landed. Scope held exactly to the plan: `apps/api` gained a new route/plugin,
+an in-memory registry, and a shared event-persistence helper;
+`workers/coding-agent` gained a new relay-client module and
+`agent_server_adapter.py` wiring; `apps/web`, Solana/payment code,
+`packages/database` (no migration — this is in-memory state), and vendored
+OpenHands source were untouched.
+
+**Transport: WebSocket, confirmed against the audit, not assumed.** SSE was
+rejected (one-way; this leg needs no bidirectional traffic yet, but a
+one-way transport would need replacing the moment Phase 3C+ needs
+server->worker messages — the ADR's own requirement not to design something
+that "structurally can't support" that). Plain long-polling was rejected: it
+cannot hold a single live registration open the way a heartbeat/liveness
+check needs, and would reintroduce request-per-poll overhead for what is
+fundamentally a continuous event stream. Raw TCP was rejected: WebSocket
+already gives framing, a standard close handshake, ping/pong, and (on the
+`apps/api` side) `@fastify/websocket`'s hook into Fastify's own request
+lifecycle — reimplementing any of that over raw TCP would be strictly worse
+for no benefit here. `@fastify/websocket@11.3.1` (peer: `fastify: '5.x'`,
+confirmed by reading its own `fp()` registration, not just its README)
+paired with Fastify `^5.12.5`; the Python side reuses `websockets==15.0.1`
+(already a direct dependency for `resync_events`), specifically
+`websockets.sync.client`, matching the worker's synchronous, non-asyncio
+style (`ADR-0007`'s own grounding audit).
+
+**Authentication and lease verification, as implemented.** `GET
+/internal/relay/:executionId?workerId=<id>` with `Authorization: Bearer
+<INTERNAL_API_TOKEN>`. `apps/api/src/routes/relay.ts` runs
+`requireInternalToken()` (reused verbatim), then queries
+`executions.lease_owner`/`status` by id — the execution's own `status`
+column (confirmed: it is set to `'RUNNING'` at claim and to
+`'SUCCEEDED'`/`'FAILED'` at complete; this is the correct column to check,
+not the parent task's `status`, which can legitimately be `RUNNING` across
+retries while an individual execution attempt is not) — inside a
+`preValidation` hook, matching `internal.ts`'s existing per-route
+duplicated-check convention rather than extracting a shared helper. Because
+`@fastify/websocket` only performs the actual WebSocket upgrade
+(`wss.handleUpgrade`) from inside the route's `handler`, and Fastify's
+request lifecycle runs `preValidation` before `handler`, a `reply.status(...)
+.send()` from `preValidation` prevents the 101 Switching Protocols response
+from ever being sent — confirmed by reading
+`@fastify/websocket`'s own source, not assumed. An unauthorized attempt
+never gets a live socket.
+
+**Lease-change handling: periodic re-validation deferred, with the exact
+race documented.** Rereading `internal.ts`'s claim handler settled a
+question the original ADR text left ambiguous: `lease_owner` is never
+`UPDATE`d for an existing `executions` row — a reclaim after lease expiry
+always inserts a *new* execution row (its own id) and only flips the old
+row's `status` to `'LEASE_EXPIRED'`. So "the lease changes owner for the
+same execution id" cannot happen in this codebase as implemented; what
+actually happens is "this execution id's status moves off `RUNNING` while a
+zombie worker might still hold a relay open for it." Phase 3B mitigates this
+reactively rather than with a polling loop: the claim handler's reclaim
+branch now calls `relayRegistry.closeAndRemove(oldExecutionId,
+"lease-expired")` the moment it reclaims an orphaned lease, and
+`POST .../complete` calls `relayRegistry.closeAndRemove(id,
+"execution-completed")` unconditionally. The residual race this leaves open:
+between the actual lease timeout and the moment another worker's `claim()`
+call reclaims it, a genuinely-still-alive zombie worker's relay keeps
+working, undetected, for up to `EXECUTION_LEASE_SECONDS` (default 300s).
+This is accepted for Phase 3B specifically because the blast radius is
+worker-internal bookkeeping only — a few opportunistically-persisted
+`execution_events` rows for an execution that's about to be superseded — not
+customer-facing control, since no browser can attach to any relay in this
+phase. Full periodic re-validation of an open relay's lease is deferred to
+Phase 3D/3E, alongside the browser-facing connection lifecycle it will need
+anyway.
+
+**Message envelope, exact shape** (`apps/api/src/realtime/envelope.ts`;
+`workers/coding-agent/src/coding_agent/relay_client.py` implements the
+identical JSON shape independently in Python — duplicated by necessity, not
+shared code, kept in sync by hand):
+
+```json
+{
+  "version": 1,
+  "type": "execution.event",
+  "executionId": "<uuid>",
+  "eventId": "<the OpenHands event's own id>",
+  "payload": { "id": "<same id>", "kind": "...", "occurredAt": "...", "payload": { ... } }
+}
+```
+
+`type` is one of `worker.ready`, `execution.event`, `execution.completed`,
+`relay.heartbeat` (the latter three are lifecycle-only in this phase — the
+worker sends `worker.ready` on connect and `execution.completed` before
+closing; `relay.heartbeat` is defined but not yet emitted, since WebSocket
+close/error detection was sufficient for every test scenario exercised —
+left as an available message type for Phase 3C+ rather than wired up
+speculatively). `eventId` reuses `execution_events.id` (the OpenHands
+event's own uuid) — no second event-identity scheme, per the ADR's own
+requirement.
+
+**Relay registry and lifecycle, as implemented**
+(`apps/api/src/realtime/relay-registry.ts`): an in-memory `Map<executionId,
+connection>`. Single-gateway-instance assumption carried over unchanged from
+the ADR's original text — this map lives in exactly one `apps/api` process's
+memory; cross-instance routing is not solved here. **Replacement policy
+(explicit choice): a second successful registration for an executionId
+REPLACES the previous connection** (closed with code 4000), rather than
+being rejected. Justification: only the execution's actual current
+`lease_owner` can ever pass registration, and `lease_owner` is immutable per
+row (see above) — so a second registration for the same executionId can only
+be the same worker reconnecting after a network blip, never a second,
+distinct worker. Replacing a presumptively-stale socket is what keeps "one
+active relay per execution" true at every instant, which is the property
+that actually matters. Disconnect (`close`/`terminate`) and execution
+completion both deterministically remove the registration (verified by
+tests 7/8 below); `unregister()` only removes a registration if the closing
+socket is still the one currently registered, guarding against a stale
+handler from an already-replaced connection deleting a newer one.
+
+**Failure/backpressure, as implemented.** Gateway unreachable or
+registration rejected at connect time: `RelayClient.start()` is
+non-blocking and every failure is caught and logged — `run_dispatch_via_
+agent_server` proceeds identically either way. Relay disconnects mid-run:
+`send_event()` becomes a silent no-op once `_connected` clears; no
+reconnect is attempted for the rest of that dispatch (matching the worker's
+single-attempt, non-asyncio style — a future dispatch gets a fresh
+`RelayClient`). Slow gateway/event burst: a bounded `collections.deque
+(maxlen=200)` on the worker side drops the oldest queued message once full
+(`dropped_count` tracks this, observable but never consulted by dispatch
+logic) — `send_event()` never blocks on network I/O, so a stalled relay can
+never slow the agent run itself. Malformed message at the gateway: caught at
+three layers (oversized frame, invalid JSON, schema mismatch) and logged and
+ignored — the connection and process are never affected (verified by test
+suite's malformed-message case, which confirms a later valid event on the
+same socket still persists). Duplicate event id: the relay's opportunistic
+persistence goes through the exact same `persistExecutionEvents()` helper
+(`apps/api/src/execution-events.ts`) and the same `ON CONFLICT (id) DO
+NOTHING` the authoritative HTTP path already used — extracted into one
+shared function specifically so there is never a second, competing dedupe
+mechanism. Worker shutdown: `RelayClient.close()` flushes what it can, sends
+`execution.completed` if ever connected, and joins its thread with a bounded
+timeout — never blocks dispatch completion.
+
+**Test results.** All 14 required scenarios pass — 12 as automated
+`node:test` cases in `apps/api/test/relay.test.ts` (registration success;
+missing/invalid token; workerId/lease mismatch; unknown executionId;
+non-RUNNING execution; replacement policy; disconnect removes registration;
+completion removes registration; event envelope reaches and persists at the
+gateway; duplicate event ids collapse to one row; a relay failure does not
+affect the ordinary claim/events/complete path; the SESSION_API_KEY
+source-level assertion) plus a matching Python suite in `workers/
+coding-agent/tests/test_relay_client.py` (connect/send/close semantics,
+drop-oldest queueing, `RelayEventCallback` bridging, and the equivalent
+SESSION_API_KEY source-level assertions scoped to `relay_client.py` and to
+`agent_server_adapter.py`'s `RelayClient(...)` construction site). The
+remaining two (no new listening port; Phase 3A loopback containment holds)
+were verified empirically, not just by test, against a real Docker
+container and a real dev Postgres — see below. Full existing suites:
+`apps/api` — 40/40 `node:test` cases pass (26 pre-existing + 14 new),
+`tsc --noEmit` and `tsc -p tsconfig.test.json` both clean. `workers/
+coding-agent` — 25/25 `pytest` cases pass (13 pre-existing + 12 new); no
+`[tool.ruff]`/`[tool.mypy]` config exists in `pyproject.toml` (re-confirmed;
+still true as of Phase 3A).
+
+**Real execution evidence**, gathered against a real `apps/api` dev server
+(`postgres://athernull@localhost:5433/athernull_dev`) and real Docker
+containers, using the same cheap test model Phase 3A used
+(`nvidia_nim/nvidia/nemotron-3-super-120b-a12b`):
+
+- Three independent real dispatches through `run_dispatch_via_agent_server`
+  with the relay wired in, each ending `outcome=success`, task status
+  `VERIFYING`, container stopped/removed (`docker ps` confirmed empty
+  afterward each time).
+- Execution `4848121c-d1b7-40bb-8410-2169b454418e`: relay registered
+  (gateway log: `"relay registered"` with the correct executionId/workerId),
+  stayed open for the full ~34s run, cleanly disconnected at dispatch end
+  (`"relay disconnected"`); 24 events persisted in total after the post-run
+  `resync_events()` gap-fill.
+- Execution `07c33b75-45cd-4de2-9ca3-a80306d1c4db` (with per-event relay
+  logging added): **20 events observed arriving through the relay** at the
+  gateway (`"relay event persisted"` log lines) vs. **21 events persisted in
+  total** in `execution_events`. The one-event difference is exactly the
+  gap `resync_events()` exists to close — its own code comment
+  ("Replay all events: the SDK can deliver older events late") already
+  anticipated this, and `EventForwarder`'s HTTP path independently confirms
+  it: this is expected, not a defect, per this phase's own instruction not
+  to expect these two counts to be equal.
+- Execution `3d6cd39b-f068-4639-b04a-18277103884f` (same instrumentation,
+  run specifically to capture `netstat` mid-dispatch — see below): 17
+  relay-observed vs. 18 persisted — the same one-event pattern.
+- `SESSION_API_KEY` confirmed absent from every surface across all three
+  runs: zero (case-insensitive) matches in the `apps/api` dev server log;
+  the only matches in the worker's own stdout are the SDK's pre-existing
+  redacted `docker run` argument echo (`SESSION_API_KEY=<redacted>`, from
+  `execute_command`'s own logging, unrelated to this phase) and the Agent
+  Server container's own pre-existing deprecation warning about the
+  `session_api_key` *parameter name* (never the value); a direct query
+  against the persisted `execution_events.payload` for both instrumented
+  executions confirmed no row contains the string.
+- Empirical no-new-listening-port check (test 13): `netstat -ano` captured
+  while the third dispatch's container was live and healthy showed the
+  container's own port only as `127.0.0.1:<port>` (owned by Docker's own
+  port-forwarding process, not the worker), `apps/api`'s dev server on
+  `0.0.0.0:3001` (pre-existing, expected), and Postgres on `5433`
+  (pre-existing, expected) — neither worker `python.exe` process (confirmed
+  by PID via `Get-CimInstance Win32_Process`) owned any `LISTENING` entry.
+  Cross-checked against source: `workers/coding-agent/src` contains zero
+  `.listen(`/`socket.socket(`/`HTTPServer`/`socketserver` occurrences.
+- Empirical Phase 3A regression check (test 14): the same `netstat`/`docker
+  ps` capture showed the container's port bound to `127.0.0.1` only across
+  all three runs — no `0.0.0.0` or `[::]` entry for any container port —
+  confirming Phase 3A's loopback containment was not disturbed by this
+  phase's changes.
+- All throwaway DB rows (3 tasks + their executions/events, 3 scratch
+  projects, 3 scratch agent profiles), scratch git repos, the temporary dev
+  `apps/api/.env`, and all launched processes/containers were removed after
+  verification; `tasks` count in the dev DB returned to its pre-verification
+  baseline (26).
+
+Phases 3C–3E remain not started.
 
 ## Consequences
 

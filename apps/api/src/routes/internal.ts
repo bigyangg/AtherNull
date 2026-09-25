@@ -4,7 +4,9 @@ import { sql } from "kysely";
 import { z } from "zod";
 
 import { db } from "../db.js";
+import { persistExecutionEvents } from "../execution-events.js";
 import { requireInternalToken } from "../internal-auth.js";
+import { relayRegistry } from "../realtime/relay-registry.js";
 import { resolveRouting } from "../routing.js";
 
 const MAX_EXECUTION_ATTEMPTS = 3;
@@ -66,6 +68,7 @@ export async function internalRoutes(app: FastifyInstance) {
       const task = candidate.rows[0];
       if (!task) return null;
 
+      let reclaimedExecutionId: string | null = null;
       if (task.status === "RUNNING" && task.latest_execution_id) {
         // Orphaned lease from a crashed/restarted worker — the task stays
         // RUNNING (no FSM transition happens), only the stale execution
@@ -75,6 +78,7 @@ export async function internalRoutes(app: FastifyInstance) {
           .set({ status: "LEASE_EXPIRED" })
           .where("id", "=", task.latest_execution_id)
           .execute();
+        reclaimedExecutionId = task.latest_execution_id;
       } else {
         assertTransition(task.status as TaskStatus, "RUNNING");
         await trx
@@ -96,7 +100,7 @@ export async function internalRoutes(app: FastifyInstance) {
         .returningAll()
         .executeTakeFirstOrThrow();
 
-      return { task, execution };
+      return { task, execution, reclaimedExecutionId };
     });
 
     if (!claimed) {
@@ -104,7 +108,19 @@ export async function internalRoutes(app: FastifyInstance) {
       return;
     }
 
-    const { task, execution } = claimed;
+    const { task, execution, reclaimedExecutionId } = claimed;
+
+    // ADR-0007 Phase 3B: if this claim reclaimed an orphaned (lease-expired)
+    // execution, that execution id's relay registration (if a zombie worker
+    // somehow still holds one open) is no longer current — close it
+    // proactively rather than leaving it registered indefinitely. This
+    // narrows, but does not fully close, the "lease reassigned while a relay
+    // is open" race documented in relay-registry.ts and the ADR's Phase 3B
+    // status section: between the actual lease timeout and this reclaim,
+    // a still-alive zombie worker's relay keeps working undetected.
+    if (reclaimedExecutionId) {
+      relayRegistry.closeAndRemove(reclaimedExecutionId, "lease-expired");
+    }
     const acceptanceCriteriaCount = Array.isArray(task.acceptance_criteria)
       ? task.acceptance_criteria.length
       : 0;
@@ -263,19 +279,10 @@ export async function internalRoutes(app: FastifyInstance) {
       return;
     }
 
-    await db
-      .insertInto("execution_events")
-      .values(
-        events.map((event) => ({
-          id: event.id,
-          execution_id: id,
-          kind: event.kind,
-          payload: JSON.stringify(event.payload),
-          occurred_at: event.occurredAt,
-        })),
-      )
-      .onConflict((oc) => oc.column("id").doNothing())
-      .execute();
+    await persistExecutionEvents(
+      id,
+      events.map((event) => ({ id: event.id, kind: event.kind, occurredAt: event.occurredAt, payload: event.payload })),
+    );
 
     reply.status(204).send();
   });
@@ -321,6 +328,12 @@ export async function internalRoutes(app: FastifyInstance) {
       })
       .where("id", "=", id)
       .execute();
+
+    // ADR-0007 Phase 3B: execution completion is server-driven and must
+    // close any relay registered for it — a relay must never outlive the
+    // execution it was relaying, regardless of whether the worker's own
+    // relay-side "execution.completed" lifecycle message already arrived.
+    relayRegistry.closeAndRemove(id, "execution-completed");
 
     if (outcome === "success") {
       // A worker reports results; it cannot self-approve or release funds

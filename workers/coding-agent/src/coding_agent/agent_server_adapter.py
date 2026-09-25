@@ -42,8 +42,10 @@ from openhands.tools.terminal import TerminalTool
 
 from coding_agent.llm import require_api_key
 from coding_agent.loopback_docker_workspace import LoopbackDockerWorkspace
+from coding_agent.relay_client import RelayClient
 from coding_agent.worker import (
     API_URL,
+    INTERNAL_TOKEN,
     WORKER_ID,
     api_headers,
     build_task_message,
@@ -145,6 +147,43 @@ class EventForwarder:
                     return
 
 
+class RelayEventCallback:
+    """Registered as a second `Conversation` callback alongside (never
+    instead of) EventForwarder — see `run_dispatch_via_agent_server`'s
+    `callbacks=[forwarder, relay_callback]`. RemoteConversation invokes both
+    callbacks synchronously on the same thread driving `.run()`, for the
+    same events, off the one WebSocket subscription the SDK already opens
+    (ADR-0007: this worker never opens a second, competing subscriber
+    against the container's own event socket).
+
+    Builds the exact same {id, kind, occurredAt, payload} record shape
+    EventForwarder already builds (deliberately duplicated rather than
+    shared, to keep EventForwarder — the authoritative, well-tested path —
+    completely untouched by this best-effort, additive one) and hands it to
+    RelayClient.send_event(), which never blocks and never raises.
+
+    __call__ itself also never raises: a relay problem must never surface as
+    a Conversation callback exception, which the SDK would otherwise treat
+    as a real callback failure during `.run()`.
+    """
+
+    def __init__(self, relay: RelayClient) -> None:
+        self._relay = relay
+
+    def __call__(self, event: Event) -> None:
+        try:
+            payload = event.model_dump(mode="json")
+            record = {
+                "id": str(event.id),
+                "kind": payload.get("kind", type(event).__name__),
+                "occurredAt": event.timestamp,
+                "payload": payload,
+            }
+            self._relay.send_event(record)
+        except Exception as err:  # noqa: BLE001 - must never affect the dispatch
+            log(f"relay: failed to forward event to relay callback (non-fatal): {err!r}")
+
+
 def resync_events(host: str, api_key: str | None, conversation_id: str, after_timestamp: str | None) -> list[dict]:
     """Ask the container's Agent Server to resend events since the last one
     this worker successfully persisted — the exact resend_mode mechanism
@@ -209,6 +248,7 @@ def run_dispatch_via_agent_server(client: httpx.Client, dispatch: dict) -> str:
     repo_dir = Path(tempfile.mkdtemp(prefix="athernull-worker-"))
     docker_workspace: LoopbackDockerWorkspace | None = None
     forwarder: EventForwarder | None = None
+    relay: RelayClient | None = None
     conversation = None
 
     # A random per-execution key so this container's Agent Server actually
@@ -243,10 +283,22 @@ def run_dispatch_via_agent_server(client: httpx.Client, dispatch: dict) -> str:
 
         forwarder = EventForwarder(client, execution_id, WORKER_ID)
         forwarder.start()
+
+        # ADR-0007 Phase 3B: best-effort outbound relay to apps/api's
+        # realtime gateway, additive alongside (never instead of) the
+        # authoritative EventForwarder above. start() is non-blocking and
+        # never raises — a gateway that's unreachable, or a registration
+        # apps/api rejects (lease/status mismatch), degrades silently to "no
+        # relay for this dispatch," exactly as if this code didn't exist.
+        # INTERNAL_API_TOKEN is reused as-is; SESSION_API_KEY is never passed
+        # to RelayClient and never appears anywhere in relay_client.py.
+        relay = RelayClient(API_URL, INTERNAL_TOKEN, WORKER_ID, execution_id, log=log)
+        relay.start()
+
         conversation = Conversation(
             agent=agent,
             workspace=docker_workspace,
-            callbacks=[forwarder],
+            callbacks=[forwarder, RelayEventCallback(relay)],
         )
         _report_conversation_id(client, execution_id, WORKER_ID, str(conversation.id))
 
@@ -264,6 +316,15 @@ def run_dispatch_via_agent_server(client: httpx.Client, dispatch: dict) -> str:
         # container. Recovery errors must not change the agent's outcome.
         if forwarder is not None:
             forwarder.close()
+        if relay is not None:
+            try:
+                # Best-effort flush + clean close (sends execution.completed
+                # if the relay ever connected). Bounded by RelayClient's own
+                # internal timeout — never blocks dispatch completion on a
+                # slow/dead gateway.
+                relay.close()
+            except Exception as relay_close_err:  # noqa: BLE001
+                log(f"relay close warning: {relay_close_err!r}")
         if conversation is not None and docker_workspace is not None:
             try:
                 # Replay all events: the SDK can deliver older events late.

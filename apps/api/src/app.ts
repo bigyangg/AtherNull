@@ -1,4 +1,5 @@
 import cors from "@fastify/cors";
+import websocket from "@fastify/websocket";
 import { fromNodeHeaders } from "better-auth/node";
 import Fastify, { type FastifyInstance } from "fastify";
 
@@ -8,6 +9,7 @@ import { internalRoutes } from "./routes/internal.js";
 import { jobRoutes } from "./routes/jobs.js";
 import { openhandsCompatRoutes } from "./routes/openhands-compat.js";
 import { projectRoutes } from "./routes/projects.js";
+import { MAX_RELAY_MESSAGE_BYTES, relayRoutes } from "./routes/relay.js";
 import { usageRoutes } from "./routes/usage.js";
 
 // Split from index.ts so tests can build the app in-process (Fastify's
@@ -39,6 +41,14 @@ export async function buildApp(opts: { logger?: boolean } = {}): Promise<Fastify
   await app.register(agentProfileRoutes);
   await app.register(usageRoutes);
   await app.register(internalRoutes);
+  // ADR-0007 Phase 3B — worker -> apps/api outbound relay tunnel.
+  // @fastify/websocket must be registered before relayRoutes (it decorates
+  // the fastify instance with the `websocket: true` route option and the
+  // request lifecycle hooks relayRoutes relies on). maxPayload bounds every
+  // relay message's size at the transport level; routes/relay.ts applies
+  // the same bound again at the application level for defense in depth.
+  await app.register(websocket, { options: { maxPayload: MAX_RELAY_MESSAGE_BYTES } });
+  await app.register(relayRoutes);
   // Phase 2 — OpenHands compatibility layer (ADR-0006). Registers its own
   // literal `/api/conversations/*`, `/api/settings`, `/server_info` paths
   // directly; it doesn't collide with Better Auth's `/api/auth/*` catch-all
