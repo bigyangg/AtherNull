@@ -6,6 +6,7 @@ import { auth } from "./auth.js";
 import { agentProfileRoutes } from "./routes/agent-profiles.js";
 import { internalRoutes } from "./routes/internal.js";
 import { jobRoutes } from "./routes/jobs.js";
+import { openhandsCompatRoutes } from "./routes/openhands-compat.js";
 import { projectRoutes } from "./routes/projects.js";
 import { usageRoutes } from "./routes/usage.js";
 
@@ -38,6 +39,11 @@ export async function buildApp(opts: { logger?: boolean } = {}): Promise<Fastify
   await app.register(agentProfileRoutes);
   await app.register(usageRoutes);
   await app.register(internalRoutes);
+  // Phase 2 — OpenHands compatibility layer (ADR-0006). Registers its own
+  // literal `/api/conversations/*`, `/api/settings`, `/server_info` paths
+  // directly; it doesn't collide with Better Auth's `/api/auth/*` catch-all
+  // below.
+  await app.register(openhandsCompatRoutes);
 
   // Better Auth owns everything under /api/auth/* (ADR-0004). Fastify hands the
   // raw Node request/response straight to auth.handler via the Fetch API
