@@ -60,3 +60,18 @@ internally over the same REST/WebSocket API this integration now taps into direc
 - Any future move to Firecracker/gVisor (ADR-0002) or to a subclassed `DockerWorkspace` with
   loopback-only publishing composes cleanly with this decision — neither changes where the session
   key is generated or how the worker authenticates to its own container.
+
+## Addendum (2026-09-26): the port-binding residual gap is closed
+
+The residual gap named above — `DockerWorkspace._start_container` publishing the container's port
+to all host interfaces — is fixed, as ADR-0007 Phase 3A. `coding_agent.loopback_docker_workspace.
+LoopbackDockerWorkspace` (a local subclass, not an SDK fork, exactly as this ADR anticipated)
+overrides `_start_container` to bind `127.0.0.1:{host_port}:8000` instead of `{host_port}:8000`,
+and both of `workers/coding-agent`'s own `DockerWorkspace` call sites (`worker.py::run_dispatch`,
+`agent_server_adapter.py::run_dispatch_via_agent_server`) now construct that subclass. Verified
+empirically against real containers: before the fix, `netstat` showed `0.0.0.0`/`[::]` LISTENING
+on the mapped port and a LAN-IP connection to the container succeeded; after the fix, `netstat`
+shows only a `127.0.0.1` listener, a LAN-IP connection fails, and a localhost connection still
+succeeds. Full before/after evidence, the exact pinned `openhands-workspace` version this override
+is coupled to, and the required upgrade-check procedure are recorded in
+docs/adr/0007-secure-realtime-execution.md's Phase 3A completion addendum.

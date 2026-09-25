@@ -28,9 +28,9 @@ from dotenv import load_dotenv
 from openhands.sdk import LLM, Agent, Conversation, Tool
 from openhands.tools.file_editor import FileEditorTool
 from openhands.tools.terminal import TerminalTool
-from openhands.workspace import DockerWorkspace
 
 from coding_agent.llm import MissingCredentialError, require_api_key
+from coding_agent.loopback_docker_workspace import LoopbackDockerWorkspace
 
 load_dotenv(Path(__file__).resolve().parents[2] / ".env")
 
@@ -123,7 +123,7 @@ def run_dispatch(client: httpx.Client, dispatch: dict) -> str:
     heartbeat_thread.start()
 
     repo_dir = Path(tempfile.mkdtemp(prefix="athernull-worker-"))
-    docker_workspace: DockerWorkspace | None = None
+    docker_workspace: LoopbackDockerWorkspace | None = None
     try:
         clone_repository(dispatch["repositorySnapshot"], repo_dir)
 
@@ -135,7 +135,7 @@ def run_dispatch(client: httpx.Client, dispatch: dict) -> str:
         )
 
         log(f"starting isolated container for execution {execution_id} (model={dispatch['resolvedModel']})")
-        docker_workspace = DockerWorkspace(volumes=[f"{repo_dir}:/workspace"])
+        docker_workspace = LoopbackDockerWorkspace(volumes=[f"{repo_dir}:/workspace"])
 
         conversation = Conversation(agent=agent, workspace=docker_workspace)
         message = build_task_message(dispatch["objective"], dispatch["acceptanceCriteria"])

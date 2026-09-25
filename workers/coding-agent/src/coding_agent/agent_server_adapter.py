@@ -39,9 +39,9 @@ from openhands.sdk import LLM, Agent, Conversation, Tool
 from openhands.sdk.event.base import Event
 from openhands.tools.file_editor import FileEditorTool
 from openhands.tools.terminal import TerminalTool
-from openhands.workspace import DockerWorkspace
 
 from coding_agent.llm import require_api_key
+from coding_agent.loopback_docker_workspace import LoopbackDockerWorkspace
 from coding_agent.worker import (
     API_URL,
     WORKER_ID,
@@ -207,7 +207,7 @@ def run_dispatch_via_agent_server(client: httpx.Client, dispatch: dict) -> str:
     heartbeat_thread.start()
 
     repo_dir = Path(tempfile.mkdtemp(prefix="athernull-worker-"))
-    docker_workspace: DockerWorkspace | None = None
+    docker_workspace: LoopbackDockerWorkspace | None = None
     forwarder: EventForwarder | None = None
     conversation = None
 
@@ -232,7 +232,7 @@ def run_dispatch_via_agent_server(client: httpx.Client, dispatch: dict) -> str:
         )
 
         log(f"starting isolated container for execution {execution_id} (model={dispatch['resolvedModel']})")
-        docker_workspace = DockerWorkspace(volumes=[f"{repo_dir}:/workspace"])
+        docker_workspace = LoopbackDockerWorkspace(volumes=[f"{repo_dir}:/workspace"])
         # DockerWorkspace forwards SESSION_API_KEY into the container but
         # hardcodes its own outer client's api_key to None after container
         # start (confirmed in openhands/workspace/docker/workspace.py) —

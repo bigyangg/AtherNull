@@ -206,7 +206,7 @@ def test_failed_run_flushes_before_container_cleanup(monkeypatch) -> None:
     monkeypatch.setattr(adapter, "require_api_key", lambda *args: "test-key")
     monkeypatch.setattr(adapter, "LLM", MagicMock())
     monkeypatch.setattr(adapter, "Agent", MagicMock())
-    monkeypatch.setattr(adapter, "DockerWorkspace", lambda **kwargs: workspace)
+    monkeypatch.setattr(adapter, "LoopbackDockerWorkspace", lambda **kwargs: workspace)
     monkeypatch.setattr(adapter, "Conversation", make_conversation)
     monkeypatch.setattr(adapter, "resync_events", lambda *args: [])
     with make_client(handler) as client:
