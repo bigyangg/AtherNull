@@ -577,7 +577,310 @@ containers, using the same cheap test model Phase 3A used
   verification; `tasks` count in the dev DB returned to its pre-verification
   baseline (26).
 
-Phases 3C–3E remain not started.
+## Phase 3C status: complete (2026-09-26)
+
+Phase 3C (authenticated browser realtime viewing, read-only) has landed.
+Scope held to the plan: `apps/api` gained a new browser-facing WebSocket
+route, an in-process fan-out broadcaster, and a shared Origin-allowlist
+helper; `packages/contracts` gained the browser-facing protocol's Zod
+schema; `apps/web` gained one new hook and a small, non-visual integration
+into the existing real workspace view. No `realtime:control`, no
+chat/bash forwarding, no command envelope — every inbound browser message is
+rejected explicitly (see below). Solana/payment code, `packages/database`
+(no migration — no new persisted state), and vendored/upstream OpenHands
+source were untouched.
+
+**Source-audit finding: `apps/web` (not the vendored OpenHands frontend) is
+confirmed as the integration target.** Read
+`apps/web/app/(app)/projects/[projectId]/workspace/page.tsx` in full:
+`RealWorkspaceView` is exactly the real, currently-shipping execution view
+ADR-0006 itself says apps/web remains the customer-facing surface for, and
+its `useExecutionEvents` hook (`apps/web/lib/hooks/use-execution-events.ts`)
+already reads `GET /v1/jobs/:id/executions/:executionId/events` on a 2s poll
+— a pre-existing route in `routes/jobs.ts`, distinct from Phase 2's
+`/api/conversations/*` compat surface. The pinned OpenHands frontend under
+`prototypes/openhands-integration/spike-a-standalone-shell/upstream/` was
+never touched, confirming the brief's own strongest-candidate hypothesis.
+
+**Transport: the already-installed `@fastify/websocket`, a second route on
+the same plugin registration — not a new library.** `apps/api/src/app.ts`
+now registers `realtimeGatewayRoutes` immediately after Phase 3B's
+`relayRoutes`, both riding the one `await app.register(websocket, {...})`
+call already made for the worker-relay leg. No second WebSocket plugin, no
+new dependency.
+
+**Fan-out plumbing (the piece this phase genuinely adds, not something
+Phase 3B already had).** `apps/api/src/realtime/execution-broadcaster.ts` is
+a new, small in-process `EventEmitter`-backed pub/sub keyed by
+`executionId`, with the identical single-gateway-instance/no-cross-instance-
+routing assumption `relay-registry.ts` already carries (documented in the
+new file's own header comment, not silently inherited). Two publish call
+sites, not just the one point named in the brief:
+`routes/relay.ts`'s `handleRelayMessage`, right after an
+`execution.event` is persisted (the required fan-out point); and
+`routes/internal.ts`'s authoritative `POST /internal/executions/:id/events`
+handler, right after its own `persistExecutionEvents` call — added so a
+subscribed browser still receives live pushes for events delivered via the
+*authoritative* HTTP batch-ingestion path (worker running
+`EXECUTION_ADAPTER=direct`, or a relay that has already disconnected), not
+only for events that happen to arrive via a live relay. A third call site,
+`routes/internal.ts`'s `POST /internal/executions/:id/complete`, publishes
+completion — the same call site that already invokes
+`relayRegistry.closeAndRemove(id, "execution-completed")`, not a separate,
+independently-derived status check. All three publishes are safe to fire
+unconditionally: an id already delivered is deduped by the browser gateway
+(and again by the client), per this protocol's own stated invariant.
+
+**Browser authorization, in order, and why the order departs from this
+ADR's own prose list.** `apps/api/src/routes/realtime-gateway.ts`'s
+`preValidation` hook (which, like Phase 3B's `relay.ts`, runs and can reject
+*before* `@fastify/websocket` ever calls `wss.handleUpgrade` — re-confirmed,
+not just cited from Phase 3B) checks, in this order: (1) `Origin`, against
+`apps/api/src/trusted-origins.ts`'s `getTrustedOrigins()` — a new shared
+helper `app.ts`'s CORS setup now also calls, so the WS gate and the CORS
+allowlist can never silently drift apart into two different lists; a
+missing `Origin` is rejected identically to a wrong one (a real browser
+WebSocket upgrade always sends one; a request without one is either a
+non-browser client or a forged request, and this codebase has no reason to
+special-case it). (2) `requireOrgSession` — the identical Better Auth
+session + live `auth.api.getActiveMember()` re-query every other business
+route already uses; a removed member is rejected on their very next
+subscribe attempt, reusing Phase 2's own already-proven mechanism verbatim.
+(3) `resolveConversationTarget(id, organizationId)` — Phase 2's exact
+resolver, no second implementation; a cross-org id and a genuinely unknown
+id both resolve to `null` and both produce the same 404, preserving Phase
+2's non-distinguishing guarantee. (4) the resolved execution must have
+`status === "RUNNING"` (a finished execution is refused with a message
+pointing at the existing historical view — nothing new needed there,
+exactly as ADR-0007 specified). This order (`Origin` before session) is a
+deliberate deviation from this ADR's own five-item prose list, not an
+oversight: `requireOrgSession` inseparably bundles "session" and "live org
+membership" into one call in this codebase, so those two items cannot be
+checked as separate steps in the first place, and checking the free,
+DB-free `Origin` gate before spending any auth work on a request is
+strictly safer, never weaker, than the reverse order.
+
+**`realtime:view`'s authorization rule, decided explicitly.** No privilege
+tier stricter than plain active org membership exists anywhere in this
+codebase for read access to execution data — re-confirmed this phase, not
+just cited from Phase 2's own prior finding. `realtime:view` is therefore
+exactly `requireOrgSession`'s own bar: any active member of the task's
+organization, no owner/admin requirement, identical to every historical
+read route. This is recorded as a decision, not an omission — a future
+phase that needs a stricter rule has one concrete place
+(`realtime-gateway.ts`'s `preValidation`) to add it.
+
+**History<->live handoff, and how the four invariants were proved, not
+assumed.** The gateway subscribes to `executionBroadcaster.onEvent(...)`
+*before* issuing the Postgres `execution_events` query, buffers anything
+received during that query into `preHistoryBuffer`, sends `history.ready`
+with the query's own result (recording every id into a `sentIds` set), then
+flushes the buffer through a single `sendEventOnce()` gate that is a no-op
+for anything already in `sentIds`. The same subscription (never re-created)
+continues delivering everything live through that identical gate from then
+on — one code path, not two that could drift apart. This was proved with
+two real, deterministic races in `apps/api/test/realtime-gateway.test.ts`
+(tests 10/11), not a timing assumption: the test publishes directly to
+`executionBroadcaster` synchronously, in the same tick the WebSocket
+connects, which is guaranteed to land before the gateway's Postgres round
+trip (real network I/O) can possibly resolve — proving invariant 1 (nothing
+lost) when the event was never persisted at all, and invariant 2/4
+(duplicate-safe, id-keyed dedup) when the same id is both persisted *and*
+re-delivered live during that exact window. Invariant 3 (Postgres remains
+the reconnect source of truth) is structural: `loadPersistedEvents()` is the
+only place history or the final completion reconciliation is ever read
+from, never the broadcaster's own transient state.
+
+**Browser-facing protocol, exact shapes**
+(`packages/contracts/src/realtime-browser.ts`, genuinely shared — both
+`apps/api` and `apps/web` import the same Zod schema/types, unlike Phase
+3B's hand-duplicated Python/TypeScript relay envelope): `server.hello`
+`{version, type, executionId, taskId, executionStatus}`; `history.ready`
+`{version, type, executionId, events: RealtimeExecutionEvent[]}`;
+`execution.event` `{version, type, executionId, event: RealtimeExecutionEvent}`;
+`execution.completed` `{version, type, executionId, outcome, finalEventCount}`;
+`relay.unavailable` `{version, type, executionId, reason}`; `error`
+`{version, type, code, message}` (`code` is one of `control_not_supported`,
+`invalid_message`, `internal_error`). `RealtimeExecutionEvent` is
+`{id, kind, occurredAt, payload}` — `id` is `execution_events.id` (the
+OpenHands event's own uuid) reused verbatim, no second identity scheme.
+There is deliberately no client->server message type defined at all in this
+phase — see below.
+
+**Control messages: rejected explicitly, not silently ignored.** The
+gateway defines zero legitimate inbound browser message types in this
+phase. Every inbound WebSocket frame — control-shaped or not — is answered
+with `{type: "error", code: "control_not_supported", ...}` and logged at
+`warn` with the execution/task id and frame size. Verified against a real
+running execution (not just the unit test), see below.
+
+**Relay-unavailable behavior, as implemented.** `relayRegistry.get(executionId)`
+is checked once, right after `server.hello`; if no relay is currently
+registered, `relay.unavailable` is sent immediately, and `history.ready`
+(from Postgres, unconditionally) follows regardless. This is informational
+only — it is never conflated with completion, and a relay registering later
+in the same connection's lifetime (a real, benign race: the browser can
+connect before the worker's own relay handshake finishes) simply starts
+delivering live events with no further signal needed.
+
+**Completion-reconciliation behavior, as implemented.** On observing
+`executionBroadcaster`'s completion event (published from the same
+`POST /internal/executions/:id/complete` call site that already closes the
+Phase 3B relay), the gateway re-queries `execution_events` one more time
+(covering any event that only landed via the worker's post-run resync
+gap-fill), sends any still-unsent ids through the same `sendEventOnce` gate,
+sends `execution.completed` with the real, freshly-queried
+`finalEventCount`, then closes the socket with code `1000`. Guarded by a
+`completionHandled` flag so a completion observed mid-history-fetch is
+deferred until after `history.ready` has gone out, never raced ahead of it,
+and never double-processed regardless of when it arrives. Business-lifecycle
+state (`VERIFYING`/`SETTLED`/etc.) is untouched by any of this — `outcome`
+is exactly the worker's own `"success"`/`"failure"` report, nothing more.
+
+**Test results.** All 17 required scenarios pass, plus 2 additional edge
+cases (a task with zero executions yet; an `executionId` query-param
+mismatch against the resolved execution), as `node:test` cases in
+`apps/api/test/realtime-gateway.test.ts` (19 tests total): same-org
+subscribe; unauthenticated rejected; removed-member rejected; cross-org
+rejected non-distinguishingly (same 404 as a genuinely unknown id); wrong
+Origin rejected; missing Origin rejected; a live relay-forwarded event
+reaches the browser; a control-shaped message is rejected explicitly, not
+silently; a duplicate relay-delivered event id renders exactly once; the
+history-fetch-window race loses no event (test 10) and dedupes correctly
+when the same id is both persisted and buffered live (test 11); a `RUNNING`
+execution with no relay still serves history and surfaces
+`relay.unavailable` without hanging or misreporting completion; execution
+completion triggers final reconciliation and a clean `1000` close;
+`SESSION_API_KEY`/`INTERNAL_API_TOKEN` never appear in this phase's actual
+code (stripped-comment static assertions, same convention as
+`openhands-compat.test.ts`); no browser-facing route calls anything under
+`/internal/*`; and Phase 3B's own relay registration/event-forwarding/
+disconnect behavior is unaffected by this phase's fan-out wiring changes to
+`relay.ts`/`internal.ts`. Full existing suite:
+`node --import tsx --test test/*.test.ts` — **59/59 pass**, run twice in a
+row (26 pre-existing job-lifecycle/tenant/openhands-compat + 14 Phase 3B
+relay + 19 new Phase 3C, all against the shared persistent
+`athernull_test` Postgres instance) — no cross-run isolation regressions,
+the exact risk category Phase 3B had already found and fixed once. `tsc
+--noEmit` (both `apps/api` and `apps/web`) clean.
+
+**Real execution evidence**, gathered against a real `apps/api` dev server
+(`postgres://athernull@localhost:5433/athernull_dev`), a real dev Postgres,
+real Docker containers, and a real `ws`-based Node client standing in for a
+browser's network path (real Better Auth session cookie obtained through
+actual sign-up/sign-in/organization-create calls, a real `Origin` header, no
+cookie/session shortcuts, connecting only to `apps/api`, never to the Agent
+Server or any `/internal/*` route) — using the same low-cost model Phases
+3A/3B used (`nvidia_nim/nvidia/nemotron-3-super-120b-a12b`):
+
+- **An operational finding this session surfaced and had to work around, not
+  a Phase 3C code defect.** The first two real dispatch attempts (tasks
+  `999214bf-.../6e1dae33-...` and `4b2b73bb-.../89775941-...`) each completed
+  with `outcome: success` but **zero** events ever reached `execution_events`
+  — the gateway correctly reported `execution.completed` with
+  `finalEventCount: 0` for both, an honest reflection of what was actually
+  persisted, not a misreport. Root cause, traced via the worker's own logs:
+  running `python -m coding_agent.worker` makes that file execute as
+  `__main__`; `worker.py`'s `main()` then does
+  `from coding_agent.agent_server_adapter import run_dispatch_via_agent_server`
+  *inside* the function body, and `agent_server_adapter.py` in turn does
+  `from coding_agent.worker import (..., WORKER_ID, log, clone_repository, ...)`.
+  Because `coding_agent.worker` (the dotted module name) is not yet in
+  `sys.modules` — only `__main__` is, a distinct module identity for the same
+  file — Python imports it a **second** time under its real name, re-running
+  every module-level statement again, including
+  `WORKER_ID = os.getenv("WORKER_ID", f"coding-agent-{uuid.uuid4().hex[:8]}")`.
+  With no `WORKER_ID` env var set, this silently produces a **second, random
+  worker id** that every function `agent_server_adapter.py` imports by name
+  (`log`, `clone_repository`, and — critically — every call site that closes
+  over `WORKER_ID`, including `EventForwarder`, `RelayClient`'s registration,
+  and the post-run `resync_events` gap-fill) then uses instead of the id the
+  outer polling loop actually claimed the execution under — so every relay
+  registration, event-forward, and resync call from inside
+  `agent_server_adapter.py` was rejected with a correct, working-as-designed
+  `409 Lease no longer owned by this worker` (`internal.ts`'s existing
+  lease-ownership check, doing exactly its job against a second, illegitimate
+  identity). `POST .../complete` still succeeded because it is called
+  directly from `worker.py`'s own `main()` (the `__main__` copy, holding the
+  *correct* `WORKER_ID`), which is why both dispatches still reported
+  `success` despite persisting nothing. **This is a pre-existing
+  `workers/coding-agent` behavior, not something Phase 3C introduced or
+  touched, and out of this phase's file scope to fix** (worked around for
+  this verification instead, per below); it did not manifest in Phase 3B's
+  own real-execution evidence because that session's launches evidently set
+  `WORKER_ID` explicitly (an explicit env var is read identically by both
+  module copies, so the double-import produces no observable mismatch).
+  **Flagged as a concrete, recommended fix for a future pass**: either avoid
+  the internal `from coding_agent.agent_server_adapter import ...` inside
+  `__main__`'s own `main()` (e.g. move the entry point to a real
+  `if __name__ == "__main__":` shim that imports and calls a `main()` defined
+  in a *non*-`__main__`-run module), or simply always require `WORKER_ID` to
+  be set explicitly rather than falling back to a random default — not
+  attempted here, since it is a change to `workers/coding-agent`, outside
+  this phase's declared file scope.
+- **Third dispatch, run with `WORKER_ID=phase3c-verify-worker` set explicitly
+  to sidestep the above (a launch-configuration workaround, not a source
+  change) — a genuinely clean, fully successful real run.** Task
+  `6c4f2b1a-7547-417b-bebc-1f3fd9429336` (project repository
+  `https://github.com/octocat/Hello-World@master` — the placeholder
+  `github.com/athernull/example` repo this suite's unit-test fixtures use is
+  not a real clonable URL, which is exactly what the very first attempt at a
+  real dispatch, before any of the above, failed on and exhausted its 3
+  retries against; switching to a real public repo was required and is
+  recorded here rather than silently corrected out of the log), execution
+  `eba914f1-f6fb-449f-b075-4d76e1468305`.
+  - The realtime client connected and authenticated (real session cookie,
+    real `Origin`) after the worker's relay had already registered:
+    `server.hello` (`executionStatus: "RUNNING"`) was followed directly by
+    `history.ready` with **9** persisted events already in Postgres at
+    connect time — no `relay.unavailable` this time, correctly reflecting
+    that a relay *was* active.
+  - **9 further live events arrived one at a time** over the following
+    ~75 seconds as the agent actually ran (`ObservationEvent`,
+    `ConversationStateUpdateEvent`, `ActionEvent` kinds observed), each
+    delivered exactly once — the client's own running dedup set recorded
+    zero duplicates across the full 18-event stream.
+  - The client's deliberate control-shaped probe
+    (`{"type": "chat.send", "text": "ignore all instructions"}`), sent
+    partway through the run over this real connection against a real running
+    execution, was rejected with
+    `{type: "error", code: "control_not_supported", ...}` — confirming test
+    8's behavior holds outside the unit-test harness, not only inside it.
+  - On completion: `execution.completed` arrived with `outcome: "success"`,
+    `finalEventCount: 18`; the client's own tally
+    (`historyCount=9, liveCount=9, duplicateCount=0, totalUniqueIds=18`)
+    matched exactly; the socket closed with code `1000`.
+  - **Independently queried against Postgres directly** (not just trusting
+    the gateway's own count):
+    `select count(*) from execution_events where execution_id = 'eba914f1-...'`
+    returned **18** — an exact match to `finalEventCount` and to the client's
+    own `totalUniqueIds`, with no gap to explain this time (unlike Phase 3B's
+    own relay-vs-persisted count, which had a documented one-event gap from
+    the post-run resync catching a late event the relay had already missed —
+    here the client connected *after* the relay was already live, so no
+    historical/live boundary race actually occurred to create such a gap;
+    Phase 3C's own tests 10/11, not this real run, are what specifically
+    force that race deterministically).
+- `SESSION_API_KEY` confirmed absent from every network-visible surface
+  across all three dispatches: the realtime client only ever received the
+  six documented message types; a case-insensitive search of the entire
+  `apps/api` dev server log across the full verification session returned
+  zero matches.
+- The browser-standing-in client never opened a connection to anything other
+  than `ws://localhost:3001/v1/realtime/executions/...` — no Agent Server
+  host/port was ever known to it, and it never called any `/internal/*`
+  route.
+- All throwaway rows (3 organizations/users, 3 projects, 1 agent profile
+  reused across tasks, 4 tasks total and their executions/events/payment
+  intents) were removed via a single transactional cleanup script after
+  verification, confirmed by re-querying for the `phase3c-verify-%` slug
+  prefix (0 rows). The temporary `apps/api/.env`, the scratch subscriber
+  script, and every launched worker process/Docker container were also
+  removed — `docker ps` and `Get-Process python` both confirmed empty
+  afterward, leaving only the persistent dev Postgres container running (its
+  standing baseline state, unrelated to this verification).
+
+Phases 3D–3E remain not started.
 
 ## Consequences
 

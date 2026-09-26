@@ -19,7 +19,9 @@ import { FileChangesPanel } from "@/components/workspace/file-changes-panel";
 import { useWorkspaceState } from "@/lib/hooks/use-workspace-state";
 import { useTask } from "@/lib/hooks/use-task";
 import { useExecutionEvents } from "@/lib/hooks/use-execution-events";
+import { useExecutionRealtime } from "@/lib/hooks/use-execution-realtime";
 import { api } from "@/lib/api";
+import type { ExecutionEvent } from "@/lib/types";
 
 // Phase 2's real live-agent-workspace view — a task + one of its executions,
 // read from apps/api's real event feed. Kept entirely separate from
@@ -39,7 +41,17 @@ function RealWorkspaceView({
   const { data: task, isLoading, isError } = useTask(taskId);
   const execution = task?.executions.find((e) => e.id === executionId);
   const isExecutionRunning = execution?.status === "RUNNING";
-  const { data: events } = useExecutionEvents(taskId, executionId, isExecutionRunning);
+  // ADR-0007 Phase 3C: the 2s poll remains the fallback/historical data
+  // source (also what re-fetches once, immediately, when the execution
+  // stops being active — see that hook's own comment). The realtime
+  // subscription below coexists with it rather than replacing it: while a
+  // relay is available it delivers new events without waiting for the next
+  // poll tick, and when it isn't (relay.unavailable, connecting, or a
+  // socket error), the page silently falls back to whatever the poll last
+  // returned — the same UI code path either way, since both resolve to one
+  // `eventList` array below.
+  const { data: polledEvents } = useExecutionEvents(taskId, executionId, isExecutionRunning);
+  const realtime = useExecutionRealtime(taskId, executionId, isExecutionRunning);
 
   if (isLoading) {
     return (
@@ -57,7 +69,26 @@ function RealWorkspaceView({
     );
   }
 
-  const eventList = events ?? [];
+  // Prefer the realtime subscription's own events (already deduped by id,
+  // already merged with persisted history via the gateway's history.ready
+  // handoff) once it has delivered at least one history.ready — otherwise
+  // fall back to whatever the poll has. `executionId` is stamped onto each
+  // realtime event here since the gateway's browser protocol intentionally
+  // omits it per-event (RealtimeExecutionEvent has no executionId field —
+  // it's implied by the one subscription the whole message stream belongs
+  // to) but lib/types.ts's ExecutionEvent shape, shared with the polled
+  // path, expects one.
+  const eventList: ExecutionEvent[] =
+    realtime.events?.map((e) => ({
+      id: e.id,
+      executionId,
+      kind: e.kind,
+      payload: e.payload,
+      occurredAt: e.occurredAt,
+      createdAt: e.occurredAt,
+    })) ??
+    polledEvents ??
+    [];
   const conversation = <LiveConversationPanel events={eventList} />;
   const terminal = <TerminalActivityPanel events={eventList} />;
   const files = <FileChangesPanel events={eventList} />;

@@ -9,7 +9,9 @@ import { internalRoutes } from "./routes/internal.js";
 import { jobRoutes } from "./routes/jobs.js";
 import { openhandsCompatRoutes } from "./routes/openhands-compat.js";
 import { projectRoutes } from "./routes/projects.js";
+import { realtimeGatewayRoutes } from "./routes/realtime-gateway.js";
 import { MAX_RELAY_MESSAGE_BYTES, relayRoutes } from "./routes/relay.js";
+import { getTrustedOrigins } from "./trusted-origins.js";
 import { usageRoutes } from "./routes/usage.js";
 
 // Split from index.ts so tests can build the app in-process (Fastify's
@@ -17,10 +19,7 @@ import { usageRoutes } from "./routes/usage.js";
 export async function buildApp(opts: { logger?: boolean } = {}): Promise<FastifyInstance> {
   const app = Fastify({ logger: opts.logger ?? true });
 
-  const trustedOrigins = (process.env.TRUSTED_ORIGINS ?? process.env.WEB_APP_URL ?? "")
-    .split(",")
-    .map((origin) => origin.trim())
-    .filter(Boolean);
+  const trustedOrigins = getTrustedOrigins();
 
   // The web app calls this API cross-origin (different port in dev, different
   // subdomain in prod) and needs the session cookie sent back, so this can't
@@ -49,6 +48,11 @@ export async function buildApp(opts: { logger?: boolean } = {}): Promise<Fastify
   // the same bound again at the application level for defense in depth.
   await app.register(websocket, { options: { maxPayload: MAX_RELAY_MESSAGE_BYTES } });
   await app.register(relayRoutes);
+  // ADR-0007 Phase 3C — authenticated browser realtime viewing gateway.
+  // Registered on the same already-installed @fastify/websocket plugin
+  // instance as relayRoutes above (no second websocket plugin registration
+  // needed — @fastify/websocket decorates the whole Fastify instance once).
+  await app.register(realtimeGatewayRoutes);
   // Phase 2 — OpenHands compatibility layer (ADR-0006). Registers its own
   // literal `/api/conversations/*`, `/api/settings`, `/server_info` paths
   // directly; it doesn't collide with Better Auth's `/api/auth/*` catch-all

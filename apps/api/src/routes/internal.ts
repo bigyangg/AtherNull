@@ -6,6 +6,7 @@ import { z } from "zod";
 import { db } from "../db.js";
 import { persistExecutionEvents } from "../execution-events.js";
 import { requireInternalToken } from "../internal-auth.js";
+import { executionBroadcaster } from "../realtime/execution-broadcaster.js";
 import { relayRegistry } from "../realtime/relay-registry.js";
 import { resolveRouting } from "../routing.js";
 
@@ -279,10 +280,28 @@ export async function internalRoutes(app: FastifyInstance) {
       return;
     }
 
-    await persistExecutionEvents(
-      id,
-      events.map((event) => ({ id: event.id, kind: event.kind, occurredAt: event.occurredAt, payload: event.payload })),
-    );
+    const normalizedEvents = events.map((event) => ({
+      id: event.id,
+      kind: event.kind,
+      occurredAt: event.occurredAt,
+      payload: event.payload,
+    }));
+    await persistExecutionEvents(id, normalizedEvents);
+
+    // ADR-0007 Phase 3C fan-out: this is the *authoritative* HTTP batch
+    // ingestion path (EventForwarder's own periodic flush, plus the
+    // worker's post-run resync_events() gap-fill) — publishing here too
+    // (not just from routes/relay.ts's opportunistic relay path) means a
+    // subscribed browser still gets live pushes for events delivered this
+    // way even when no Phase 3B relay is registered at all (worker running
+    // EXECUTION_ADAPTER=direct, or a relay that has already disconnected).
+    // Safe to publish unconditionally: an eventId already delivered via the
+    // relay path is deduped client-side (and again gateway-side) by its own
+    // id, per this protocol's stated invariant — publishing it twice is
+    // never incorrect, only occasionally redundant.
+    for (const event of normalizedEvents) {
+      executionBroadcaster.publishEvent(id, event);
+    }
 
     reply.status(204).send();
   });
@@ -334,6 +353,12 @@ export async function internalRoutes(app: FastifyInstance) {
     // execution it was relaying, regardless of whether the worker's own
     // relay-side "execution.completed" lifecycle message already arrived.
     relayRegistry.closeAndRemove(id, "execution-completed");
+    // ADR-0007 Phase 3C: this is also the single authoritative signal any
+    // subscribed browser gateway connection uses to close out its
+    // subscription (server-driven completion, never client-inferred, per
+    // the ADR). Deliberately the same call site as the relay teardown line
+    // above, not a duplicated/independent status check.
+    executionBroadcaster.publishCompletion(id, outcome);
 
     if (outcome === "success") {
       // A worker reports results; it cannot self-approve or release funds

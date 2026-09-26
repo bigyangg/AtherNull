@@ -5,6 +5,7 @@ import { z } from "zod";
 import { db } from "../db.js";
 import { persistExecutionEvents } from "../execution-events.js";
 import { requireInternalToken } from "../internal-auth.js";
+import { executionBroadcaster } from "../realtime/execution-broadcaster.js";
 import { RelayEnvelopeSchema, RelayExecutionEventPayloadSchema } from "../realtime/envelope.js";
 import { relayRegistry } from "../realtime/relay-registry.js";
 
@@ -177,6 +178,13 @@ async function handleRelayMessage(request: FastifyRequest, executionId: string, 
     // relay, or arriving via both paths, never produces a second row).
     await persistExecutionEvents(executionId, [record]);
     request.log.info({ executionId, eventId: record.id, kind: record.kind }, "relay event persisted");
+    // ADR-0007 Phase 3C fan-out: notify any subscribed browser gateway
+    // connection for this execution. Best-effort/non-authoritative, exactly
+    // like the persistence line above — a browser gateway that isn't
+    // currently subscribed simply has no listener registered on this
+    // channel, which is a normal no-op (EventEmitter.emit with zero
+    // listeners), not an error.
+    executionBroadcaster.publishEvent(executionId, record);
   } catch (err) {
     // A DB hiccup on this opportunistic write must never crash the socket
     // or the process — the HTTP path is unaffected and remains the real
