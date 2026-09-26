@@ -441,5 +441,14 @@ describe("tenant authorization", () => {
       .execute();
     assert.equal(paymentIntents.length, 1, "exactly one payment intent must exist for this job");
     assert.equal(paymentIntents[0]?.status, "CONFIRMED");
+
+    // taskId must stay QUEUED for the assertion above — this file never
+    // claims it (this suite doesn't touch /internal/executions/claim at
+    // all), so left alone it would sit QUEUED in the shared `tasks` table
+    // indefinitely: a landmine for any other test file's genuine
+    // claim-endpoint coverage sharing the same global FIFO queue (see
+    // job-lifecycle.test.ts's header comment on this exact class of bug).
+    // Neutralize it now that the assertion is done with it.
+    await db.updateTable("tasks").set({ status: "FAILED" }).where("id", "=", taskId).execute();
   });
 });

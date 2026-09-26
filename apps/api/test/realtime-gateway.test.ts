@@ -470,13 +470,24 @@ describe("realtime gateway: authentication and Origin", () => {
   test("4. cross-org execution access is rejected the same non-distinguishing way as a genuinely unknown id", async () => {
     const suffixA = randomUUID();
     const suffixB = randomUUID();
-    const { taskId } = await createRunningTaskForNewOrg(suffixA);
+    const { taskId, executionId, workerId } = await createRunningTaskForNewOrg(suffixA);
     const { owner: ownerB } = await setUpOwnerWithOrg(suffixB);
 
     // Real cross-org task and a genuinely nonexistent id must both 404 —
     // same status, same body shape, no distinguishing signal.
     await expectRealtimeRejected(taskId, { cookie: ownerB.jar.header }, 404);
     await expectRealtimeRejected(randomUUID(), { cookie: ownerB.jar.header }, 404);
+
+    // Pre-existing gap found while auditing the shared claim-queue race
+    // (unrelated to this test's own assertions, which never needed
+    // executionId/workerId before): this test's execution was left RUNNING
+    // with a real lease and never completed. Once that lease expires it
+    // becomes reclaimable by ANY test file's genuine claim-endpoint
+    // coverage (POST /internal/executions/claim also picks up RUNNING tasks
+    // whose lease has expired, not just QUEUED ones) — the same class of
+    // shared-queue landmine as an uncompleted QUEUED row, just on a delay.
+    // Complete it now that this test is done with it.
+    await completeExecution(executionId, workerId);
   });
 
   test("5. a wrong Origin is rejected", async () => {
@@ -708,6 +719,15 @@ describe("realtime gateway: relay/execution resolution edge cases", () => {
     const { owner, projectId, agentProfileId } = await setUpOwnerWithOrg(suffix);
     const taskId = await createFundedTask(owner.jar.header, projectId, agentProfileId);
     await expectRealtimeRejected(taskId, { cookie: owner.jar.header }, 409);
+
+    // taskId must stay QUEUED (unclaimed) for the assertion above — nothing
+    // else in this suite ever claims/completes it, so left alone it would
+    // sit QUEUED in the shared `tasks` table indefinitely: a landmine for
+    // any other test file's genuine claim-endpoint coverage drawing from
+    // the same shared FIFO queue (see job-lifecycle.test.ts's header
+    // comment on this exact class of bug). Neutralize it now that the
+    // assertion is done with it.
+    await db.updateTable("tasks").set({ status: "FAILED" }).where("id", "=", taskId).execute();
   });
 
   test("an executionId query mismatch against the resolved execution is rejected", async () => {

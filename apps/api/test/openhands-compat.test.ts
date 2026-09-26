@@ -4,6 +4,31 @@
 // standalone file, inline helper functions (duplicated, not imported), a real
 // Fastify app via inject(), and a real persistent Postgres test database with
 // randomUUID()-suffixed isolation (no reset/truncate between runs or suites).
+//
+// --- Test-infrastructure note: the shared claim queue race — see
+// job-lifecycle.test.ts's own (longer) header comment for the full story.
+// Short version: POST /internal/executions/claim is a single global FIFO
+// with no per-test scoping, shared by every *.test.ts file running
+// concurrently in this suite against one real Postgres database. This
+// file's fixture helper used to call claim() in a loop and drain
+// (auto-complete) any non-matching result on the assumption a mismatch
+// could only be a straggler from an earlier *run* — reproduced directly:
+// that assumption is false, a mismatch is at least as likely to be another
+// file's own in-flight task, and draining it corrupts that file's test.
+// Fixed the same way as job-lifecycle.test.ts:
+//   - FIXTURE-ONLY need (a RUNNING execution to test the read surface
+//     against, nothing about claim itself): claimTaskDirect below inserts
+//     the execution row and flips the task to RUNNING directly via Kysely,
+//     scoped to this test's own taskId — never touches the shared queue.
+//   - GENUINE claim-endpoint/retry-FSM coverage (only the "two execution
+//     attempts" test below, which is actually asserting on
+//     complete()'s RUNNING->FAILED->QUEUED retry transition and claim's
+//     ability to reclaim the retried task): claimOwnTaskExecution keeps
+//     calling the real endpoint, but only ever drains a non-matching
+//     result when isTaskStale proves it can't belong to a test still in
+//     flight elsewhere in this run (see that function's comment for the
+//     exact threshold and why it's safe). A non-matching, non-stale result
+//     throws instead of draining.
 process.env.DATABASE_URL =
   process.env.TEST_DATABASE_URL ??
   "postgres://athernull:athernull@localhost:5433/athernull_test";
@@ -193,12 +218,65 @@ async function createFundedTask(ownerCookie: string, projectId: string, agentPro
   return taskId;
 }
 
-// Claims whichever task the internal /claim endpoint hands back, draining any
-// stragglers left over by other tests/suites sharing this persistent DB
-// (identical pattern to job-lifecycle.test.ts's createFundedAndRunningTask),
-// until it returns the caller's own taskId. Unlike that helper, this stops
-// right after claiming — it does NOT complete the execution — so the caller
-// can report a conversation id / post events first.
+// FIXTURE-ONLY path — see this file's header comment. Deliberately bypasses
+// POST /internal/executions/claim's shared global queue: none of this
+// file's read-surface tests need the claim FSM itself, only a real
+// tasks/executions row pair already in the RUNNING state a successful claim
+// would have left them in. Every mutation below is scoped to `taskId`, a
+// row this test itself just created via createFundedTask — it can never
+// observe, race with, or touch another test file's rows.
+async function claimTaskDirect(taskId: string): Promise<{ executionId: string; workerId: string }> {
+  const workerId = `worker-${randomUUID()}`;
+
+  await db
+    .updateTable("tasks")
+    .set({ status: "RUNNING", updated_at: new Date() })
+    .where("id", "=", taskId)
+    .execute();
+
+  const execution = await db
+    .insertInto("executions")
+    .values({
+      task_id: taskId,
+      lease_owner: workerId,
+      lease_expires_at: sql`now() + make_interval(secs => 300)`,
+      status: "RUNNING",
+      started_at: new Date(),
+    })
+    .returningAll()
+    .executeTakeFirstOrThrow();
+
+  return { executionId: execution.id, workerId };
+}
+
+// How far in the past a QUEUED/RUNNING task's created_at must be before a
+// non-matching claim result is treated as safe to drain (complete). See
+// job-lifecycle.test.ts's identical helper for the full reasoning: every
+// claim-touching test claims its own task within a single synchronous
+// stretch of JS immediately after creating it (sub-100ms even under load),
+// so 60 seconds is a wide safety margin against ever misclassifying a live
+// sibling test's fresh row as stale, while still letting genuine leftovers
+// from an interrupted previous run self-heal quickly on the next
+// invocation rather than blocking the claim queue for many minutes.
+async function isTaskStale(taskId: string): Promise<boolean> {
+  const result = await sql<{ stale: boolean }>`
+    select (created_at < now() - interval '60 seconds') as stale
+    from tasks where id = ${taskId}
+  `.execute(db);
+  return result.rows[0]?.stale ?? false;
+}
+
+// GENUINE claim-endpoint coverage path — see this file's header comment.
+// Used only by the "two execution attempts" test below, which is actually
+// asserting on complete()'s RUNNING->FAILED->QUEUED retry transition and
+// claim's ability to reclaim the retried task — real coverage that must
+// keep calling the real endpoint. Unlike claimTaskDirect above, this stops
+// right after claiming — it does NOT complete the execution — so the
+// caller can report a conversation id / post events first. A non-matching
+// claim is only ever drained when isTaskStale proves it cannot belong to a
+// test still in flight elsewhere in this run; otherwise this throws with
+// full diagnostics rather than silently completing another file's
+// in-progress execution.
 async function claimOwnTaskExecution(taskId: string): Promise<{ executionId: string; workerId: string }> {
   for (let attempt = 0; attempt < 50; attempt++) {
     const workerId = `worker-${randomUUID()}`;
@@ -215,8 +293,18 @@ async function claimOwnTaskExecution(taskId: string): Promise<{ executionId: str
       return { executionId: body.executionId, workerId };
     }
 
-    // Not ours — a straggler from another test. Drain it with a "success"
-    // complete so it stops clogging the claim queue, then keep looping.
+    const stale = await isTaskStale(body.jobId);
+    if (!stale) {
+      throw new Error(
+        `claimOwnTaskExecution(${taskId}): claim returned a DIFFERENT, NON-stale task ` +
+          `(jobId=${body.jobId}, executionId=${body.executionId}). This looks like a live sibling ` +
+          `test file's own in-flight claim-path test, not a leftover from an earlier run — refusing ` +
+          `to drain it.`,
+      );
+    }
+
+    // Genuinely stale (see isTaskStale) — drain it with a "success" complete
+    // so it stops clogging the claim queue, then keep looping.
     const drained = await app.inject({
       method: "POST",
       url: `/internal/executions/${body.executionId}/complete`,
@@ -225,7 +313,7 @@ async function claimOwnTaskExecution(taskId: string): Promise<{ executionId: str
     });
     assert.equal(drained.statusCode, 200, `drain complete failed: ${drained.body}`);
   }
-  throw new Error("claim never returned this test's own task within 50 attempts");
+  throw new Error("claimOwnTaskExecution: claim never returned this test's own task within 50 attempts");
 }
 
 async function reportConversation(executionId: string, workerId: string, conversationId: string) {
@@ -268,9 +356,13 @@ async function completeExecution(executionId: string, workerId: string, outcome:
   return JSON.parse(res.body) as { status: string };
 }
 
-// Full happy-path fixture: create -> fund -> claim -> report conversation ->
-// post events -> complete. Returns everything a test needs to assert against
-// the OpenHands-compatible read surface for this one execution attempt.
+// Full happy-path fixture: create -> fund -> claim (direct, FIXTURE-ONLY —
+// see claimTaskDirect above) -> report conversation -> post events ->
+// complete. Returns everything a test needs to assert against the
+// OpenHands-compatible read surface for this one execution attempt. None of
+// this needs the real claim endpoint: only /conversation, /events, and
+// /complete are exercised for real, which is what the read surface under
+// test in this file actually depends on.
 async function createFundedAndRunningTaskWithConversation(
   ownerCookie: string,
   projectId: string,
@@ -278,7 +370,7 @@ async function createFundedAndRunningTaskWithConversation(
   opts: { events?: ReturnType<typeof messageEvent>[]; completeOutcome?: "success" | "failure" } = {},
 ) {
   const taskId = await createFundedTask(ownerCookie, projectId, agentProfileId);
-  const { executionId, workerId } = await claimOwnTaskExecution(taskId);
+  const { executionId, workerId } = await claimTaskDirect(taskId);
   const conversationId = `oh-conv-${randomUUID()}`;
   await reportConversation(executionId, workerId, conversationId);
 
@@ -560,6 +652,18 @@ describe("openhands-compat: resolver behavior (resolveConversationTarget)", () =
       headers: { cookie: owner.jar.header },
     });
     assert.deepEqual(JSON.parse(unknownRes.body), [null]);
+
+    // This test's whole point requires taskId to still be QUEUED (unclaimed)
+    // for every assertion above — but nothing else in this suite ever
+    // claims/completes it, so left alone it would sit QUEUED in the shared
+    // `tasks` table indefinitely, a permanent landmine for any *other* test
+    // file's genuine claim-endpoint coverage (job-lifecycle.test.ts's
+    // dedicated claim tests, this file's own "two execution attempts" test)
+    // that might otherwise draw it from the shared FIFO queue. Once the
+    // assertions above are done with it, neutralize it directly — it's not
+    // needed in any particular state after this point, only definitely not
+    // QUEUED/RUNNING.
+    await db.updateTable("tasks").set({ status: "FAILED" }).where("id", "=", taskId).execute();
   });
 
   test("two execution attempts for one task remain distinct (different ids, different event sets)", async () => {

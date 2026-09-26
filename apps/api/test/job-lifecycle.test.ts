@@ -3,6 +3,71 @@
 // inject(), same style as tenant-authorization.test.ts — see that file's
 // header comment for how to create/migrate the test database (must include
 // migrations through 0007_execution_events.sql).
+//
+// --- Test-infrastructure note: the shared claim queue race (read this before
+// adding any new test that touches /internal/executions/claim) -----------
+//
+// This suite runs each *.test.ts file as its own concurrent OS process
+// (`node --import tsx --test test/**/*.test.ts`), all pointed at one real,
+// persistent Postgres database with no reset/truncate between files or runs
+// (see tenant-authorization.test.ts's header for why). `POST
+// /internal/executions/claim` (src/routes/internal.ts) is, by correct
+// design, a single global FIFO: it claims the globally oldest QUEUED task
+// (or a RUNNING task whose lease expired) via `FOR UPDATE OF t SKIP LOCKED`,
+// with no per-test/per-file/per-tenant scoping concept whatsoever — that's
+// exactly right for a real worker pool, but it means every test file that
+// calls this endpoint is drawing from the *same* queue as every other file
+// running at the same time.
+//
+// An earlier version of this file's fixture helper called claim() in a loop
+// and "drained" (auto-completed) whatever non-matching task it happened to
+// draw, on the theory that any mismatch must be a straggler left over from
+// an earlier test *run*. That theory was wrong: under real concurrent load,
+// a mismatch is at least as likely to be another test *file's* own
+// currently-in-flight task, created moments earlier by that file's own
+// setup — draining it irreversibly completes an execution some other test's
+// assertions are still relying on staying QUEUED/RUNNING, which is exactly
+// the `204 !== 200` / mismatched-jobId flakiness this suite exhibited
+// (reproduced directly: 2 of 3 raw `node --import tsx --test
+// test/**/*.test.ts` runs failed this way before the fix below). The
+// underlying bug was never "stale rows from a previous run" — it was two
+// live, concurrently-running test files racing over one shared queue.
+//
+// The fix has two parts, and every future test/helper here must pick the
+// right one:
+//
+//   1. FIXTURE-ONLY use (you just need a real `tasks`/`executions` row pair
+//      already sitting in whatever post-claim state your test needs, as a
+//      starting point for testing something else — verify/accept/reject,
+//      event persistence, the OpenHands-compat read surface, realtime
+//      delivery, etc.): do NOT call the claim endpoint at all. Use
+//      createVerifyingTaskDirect below (create + fund via the real HTTP
+//      endpoints, exactly like production, then insert the execution row
+//      and set the task's status directly via Kysely, in whatever end
+//      state a real claim-then-complete would have left them in) — the
+//      same pattern relay.test.ts's createRunningExecution
+//      and realtime-gateway.test.ts's createRunningExecutionDirect already
+//      established for the identical reason. This removes the test from the
+//      shared queue entirely: since every mutation is scoped to `WHERE id =
+//      <this test's own taskId>` (itself created moments earlier, owned by
+//      this test's own freshly-created org/project), it can never observe,
+//      let alone touch, another file's row.
+//
+//   2. GENUINE claim-endpoint coverage (the claim FSM/response/ordering
+//      itself is what's under test): you must keep calling the real
+//      endpoint — see claimOwnTaskExecution below. It still loops and
+//      drains a non-matching claim, but ONLY when that task is
+//      unambiguously a leftover from a *previous* test run — see
+//      isTaskStale's own comment for the exact rule and why it can never
+//      misclassify a live sibling file's fresh row as stale. A non-matching
+//      claim that is NOT stale throws immediately with a diagnostic instead
+//      of draining it, rather than silently corrupting another file's test.
+//
+// Never: delete/truncate a shared table, drain "the whole queue" without a
+// staleness check, add a sleep/retry to paper over the ordering, or
+// serialize test files against each other. All of those either hide a real
+// bug instead of fixing it, or reintroduce whole-suite coupling this
+// per-process isolation is specifically trying to avoid.
 process.env.DATABASE_URL =
   process.env.TEST_DATABASE_URL ??
   "postgres://athernull:athernull@localhost:5433/athernull_test";
@@ -135,16 +200,9 @@ function createJobPayload(projectId: string, agentProfileId: string) {
   };
 }
 
-// Drives a fresh task through CREATED -> ... -> VERIFYING using the owner's
-// session for customer-facing calls and the internal token for the
-// worker-facing claim/complete calls — the exact path a real task takes
-// before either /verify outcome is decided.
-async function createFundedAndRunningTask(
-  ownerCookie: string,
-  projectId: string,
-  agentProfileId: string,
-  completeOutcome: "success" | "failure" = "success",
-) {
+// Create + fund a task via the real HTTP endpoints, exactly like production
+// (CREATED -> QUEUED), returning its id without claiming it.
+async function createFundedTask(ownerCookie: string, projectId: string, agentProfileId: string): Promise<string> {
   const created = await app.inject({
     method: "POST",
     url: "/v1/jobs",
@@ -160,16 +218,96 @@ async function createFundedAndRunningTask(
     headers: { cookie: ownerCookie },
   });
   assert.equal(funded.statusCode, 200, `fund failed: ${funded.body}`);
+  return taskId;
+}
 
-  // /internal/executions/claim claims the globally oldest QUEUED task, not a
-  // specific one — correct for a real worker pool, but it means a leftover
-  // QUEUED task orphaned by an earlier test run (this suite shares a
-  // persistent Postgres DB across runs, nothing resets it between them) can
-  // get claimed ahead of the task this test just created. Loop, draining any
-  // such stragglers with a "success" complete so they stop clogging the
-  // queue, until the claim actually returns our own task.
-  let executionId: string | null = null;
-  for (let attempt = 0; attempt < 50 && executionId === null; attempt++) {
+// FIXTURE-ONLY path — see this file's header comment. Deliberately bypasses
+// POST /internal/executions/claim (and /complete) and their shared global
+// queue entirely: every test using this only needs a real tasks/executions
+// row pair already in the state a successful claim-then-complete(success)
+// would have left them in — task VERIFYING, execution SUCCEEDED — as a
+// starting point for exercising /verify, /accept, /reject, or the events
+// endpoints. None of that requires the claim FSM itself. Every mutation
+// below is scoped to `taskId`, a row this test itself just created via
+// createFundedTask — it can never observe, race with, or touch another
+// test file's rows.
+async function createVerifyingTaskDirect(
+  ownerCookie: string,
+  projectId: string,
+  agentProfileId: string,
+) {
+  const taskId = await createFundedTask(ownerCookie, projectId, agentProfileId);
+  const workerId = `worker-${randomUUID()}`;
+
+  const execution = await db
+    .insertInto("executions")
+    .values({
+      task_id: taskId,
+      lease_owner: workerId,
+      lease_expires_at: sql`now() + make_interval(secs => 300)`,
+      status: "SUCCEEDED",
+      started_at: new Date(),
+      ended_at: new Date(),
+    })
+    .returningAll()
+    .executeTakeFirstOrThrow();
+
+  await db
+    .updateTable("tasks")
+    .set({ status: "VERIFYING", updated_at: new Date() })
+    .where("id", "=", taskId)
+    .execute();
+
+  return { taskId, executionId: execution.id, workerId };
+}
+
+// How far in the past a QUEUED/RUNNING task's created_at must be before a
+// non-matching claim result is treated as safe to drain (complete).
+//
+// Every claim-touching test in this suite claims (and completes, or hands
+// off) its own task within a single synchronous stretch of JS immediately
+// after creating it — the only work between "task created" and "task
+// claimed" is one more in-process app.inject() call, no external I/O, no
+// sleeps. That window is realistically sub-100ms even on a loaded CI box.
+// A threshold of 60 seconds is therefore ~600x larger than the only window
+// in which a genuinely live sibling test's fresh row could ever be seen —
+// no code path in this suite leaves a task it's actively working with
+// sitting QUEUED/RUNNING anywhere near that long. So a row older than 60
+// seconds can only be a leftover from a *separate* invocation of the suite
+// (a previous run that crashed/was killed mid-test) — never a row a
+// currently-running sibling process is still relying on.
+//
+// Deliberately short (not, say, 10 minutes): a shorter threshold is *more*
+// conservative here, not less — the only thing a shorter threshold does is
+// let genuinely-orphaned rows from an interrupted run get cleaned up
+// sooner on the next invocation, which is exactly what's wanted when
+// re-running this suite repeatedly during development. It does not narrow
+// the safety margin against misclassifying a live sibling's row, since
+// that margin is set by the (sub-100ms) claim-immediately-after-create
+// pattern above, not by how long a suite run takes.
+async function isTaskStale(taskId: string): Promise<boolean> {
+  const result = await sql<{ stale: boolean }>`
+    select (created_at < now() - interval '60 seconds') as stale
+    from tasks where id = ${taskId}
+  `.execute(db);
+  return result.rows[0]?.stale ?? false;
+}
+
+// GENUINE claim-endpoint coverage path — see this file's header comment.
+// Unlike createVerifyingTaskDirect above, this calls the real POST
+// /internal/executions/claim, because the test using it is asserting
+// something about the claim endpoint's own behavior. It still has to
+// tolerate drawing another task from the shared global queue (any other
+// concurrently-running file's own genuine claim-path test, or a leftover
+// from a previous run) — but it only ever drains (completes) a
+// non-matching claim when isTaskStale proves it cannot belong to a test
+// still in flight in this run. A non-matching, non-stale claim throws
+// immediately with full diagnostics rather than silently completing
+// another file's in-progress execution.
+async function claimOwnTaskExecution(
+  taskId: string,
+): Promise<{ executionId: string; workerId: string; claimBody: Record<string, unknown> }> {
+  for (let attempt = 0; attempt < 50; attempt++) {
     const workerId = `worker-${randomUUID()}`;
     const claimed = await app.inject({
       method: "POST",
@@ -178,23 +316,32 @@ async function createFundedAndRunningTask(
       payload: { workerId },
     });
     assert.equal(claimed.statusCode, 200, `claim failed: ${claimed.body}`);
-    const claimedBody = JSON.parse(claimed.body) as { jobId: string; executionId: string };
+    const body = JSON.parse(claimed.body) as { jobId: string; executionId: string } & Record<string, unknown>;
 
-    const completed = await app.inject({
-      method: "POST",
-      url: `/internal/executions/${claimedBody.executionId}/complete`,
-      headers: { authorization: `Bearer ${INTERNAL_TOKEN}` },
-      payload: { workerId, outcome: claimedBody.jobId === taskId ? completeOutcome : "success" },
-    });
-    assert.equal(completed.statusCode, 200, `complete failed: ${completed.body}`);
-
-    if (claimedBody.jobId === taskId) {
-      executionId = claimedBody.executionId;
+    if (body.jobId === taskId) {
+      return { executionId: body.executionId, workerId, claimBody: body };
     }
-  }
-  assert.ok(executionId, "claim never returned this test's own task within 50 attempts");
 
-  return { taskId, executionId };
+    const stale = await isTaskStale(body.jobId);
+    if (!stale) {
+      throw new Error(
+        `claimOwnTaskExecution(${taskId}): claim returned a DIFFERENT, NON-stale task ` +
+          `(jobId=${body.jobId}, executionId=${body.executionId}). This looks like a live sibling ` +
+          `test file's own in-flight claim-path test, not a leftover from an earlier run — refusing ` +
+          `to drain it. If this fires reproducibly, two genuine claim-endpoint tests are contending; ` +
+          `see this file's header comment before touching the staleness threshold.`,
+      );
+    }
+
+    const drained = await app.inject({
+      method: "POST",
+      url: `/internal/executions/${body.executionId}/complete`,
+      headers: { authorization: `Bearer ${INTERNAL_TOKEN}` },
+      payload: { workerId, outcome: "success" },
+    });
+    assert.equal(drained.statusCode, 200, `drain complete failed: ${drained.body}`);
+  }
+  throw new Error("claimOwnTaskExecution: claim never returned this test's own task within 50 attempts");
 }
 
 async function setUpOwnerWithOrg(suffix: string) {
@@ -236,7 +383,7 @@ describe("job lifecycle: estimate, verify, accept, reject", () => {
   test("verify(PASS) then accept reaches SETTLED with one settle payment intent", async () => {
     const suffix = randomUUID();
     const { owner, projectId, agentProfileId } = await setUpOwnerWithOrg(suffix);
-    const { taskId, executionId } = await createFundedAndRunningTask(owner.jar.header, projectId, agentProfileId);
+    const { taskId, executionId } = await createVerifyingTaskDirect(owner.jar.header, projectId, agentProfileId);
 
     const verified = await app.inject({
       method: "POST",
@@ -297,7 +444,7 @@ describe("job lifecycle: estimate, verify, accept, reject", () => {
   test("verify(FAIL) moves the task to FAILED, not AWAITING_ACCEPTANCE", async () => {
     const suffix = randomUUID();
     const { owner, projectId, agentProfileId } = await setUpOwnerWithOrg(suffix);
-    const { taskId } = await createFundedAndRunningTask(owner.jar.header, projectId, agentProfileId);
+    const { taskId } = await createVerifyingTaskDirect(owner.jar.header, projectId, agentProfileId);
 
     const verified = await app.inject({
       method: "POST",
@@ -312,7 +459,7 @@ describe("job lifecycle: estimate, verify, accept, reject", () => {
   test("reject moves an awaiting-acceptance task to REFUNDED with one refund payment intent", async () => {
     const suffix = randomUUID();
     const { owner, projectId, agentProfileId } = await setUpOwnerWithOrg(suffix);
-    const { taskId } = await createFundedAndRunningTask(owner.jar.header, projectId, agentProfileId);
+    const { taskId } = await createVerifyingTaskDirect(owner.jar.header, projectId, agentProfileId);
 
     const verified = await app.inject({
       method: "POST",
@@ -344,7 +491,7 @@ describe("job lifecycle: estimate, verify, accept, reject", () => {
 
 test("execution snapshots recover late events, deduplicate replay, and enforce ownership", async () => {
   const { owner, projectId, agentProfileId } = await setUpOwnerWithOrg(randomUUID());
-  const { taskId, executionId } = await createFundedAndRunningTask(owner.jar.header, projectId, agentProfileId);
+  const { taskId, executionId } = await createVerifyingTaskDirect(owner.jar.header, projectId, agentProfileId);
   const execution = await db.selectFrom("executions").select("lease_owner")
     .where("id", "=", executionId).executeTakeFirstOrThrow();
   const internalHeaders = { authorization: `Bearer ${INTERNAL_TOKEN}` };
@@ -379,4 +526,176 @@ test("execution snapshots recover late events, deduplicate replay, and enforce o
     url: `/v1/jobs/${randomUUID()}/executions/${executionId}/events`,
     headers: { cookie: owner.jar.header } });
   assert.equal(mismatchedTask.statusCode, 404);
+});
+
+// Same staleness-gated draining discipline as claimOwnTaskExecution, but
+// accepts any task id from a known set of this test's own tasks — used only
+// by a test that legitimately races multiple concurrent claim calls against
+// more than one of its own tasks at once (verifying FOR UPDATE SKIP
+// LOCKED's no-double-claim guarantee), where "not a match" must mean
+// "belongs to neither of my own tasks", not just "doesn't equal one
+// specific id".
+async function claimAnyOfOwnTasks(
+  taskIds: string[],
+): Promise<{ taskId: string; executionId: string; workerId: string }> {
+  for (let attempt = 0; attempt < 50; attempt++) {
+    const workerId = `worker-${randomUUID()}`;
+    const claimed = await app.inject({
+      method: "POST",
+      url: "/internal/executions/claim",
+      headers: { authorization: `Bearer ${INTERNAL_TOKEN}` },
+      payload: { workerId },
+    });
+    assert.equal(claimed.statusCode, 200, `claim failed: ${claimed.body}`);
+    const body = JSON.parse(claimed.body) as { jobId: string; executionId: string };
+
+    if (taskIds.includes(body.jobId)) {
+      return { taskId: body.jobId, executionId: body.executionId, workerId };
+    }
+
+    const stale = await isTaskStale(body.jobId);
+    if (!stale) {
+      throw new Error(
+        `claimAnyOfOwnTasks([${taskIds.join(",")}]): claim returned a DIFFERENT, NON-stale task ` +
+          `(jobId=${body.jobId}) belonging to neither task — looks like a live sibling test file's own ` +
+          `in-flight claim-path test, refusing to drain it.`,
+      );
+    }
+    const drained = await app.inject({
+      method: "POST",
+      url: `/internal/executions/${body.executionId}/complete`,
+      headers: { authorization: `Bearer ${INTERNAL_TOKEN}` },
+      payload: { workerId, outcome: "success" },
+    });
+    assert.equal(drained.statusCode, 200, `drain complete failed: ${drained.body}`);
+  }
+  throw new Error("claimAnyOfOwnTasks: claim never returned one of these tasks within 50 attempts");
+}
+
+describe("claim queue safety: the staleness predicate (isTaskStale) cannot misclassify a live sibling's row", () => {
+  test("a task created moments ago is never stale; one backdated past the threshold always is", async () => {
+    const { organizationId, projectId, agentProfileId } = await setUpOwnerWithOrg(randomUUID());
+
+    // Simulates a sibling test file's own in-flight task: created an instant
+    // ago, exactly like every real claim-touching test's task is at the
+    // moment it calls claim.
+    const freshTask = await db
+      .insertInto("tasks")
+      .values({
+        organization_id: organizationId,
+        project_id: projectId,
+        agent_profile_id: agentProfileId,
+        repository_revision: "abc123",
+        agent_profile_config_revision: 1,
+        agent_policy_version: "v1",
+        requirements: "simulated live sibling task",
+        acceptance_criteria: JSON.stringify(["n/a"]),
+        max_budget_minor: "1000",
+        currency: "usd",
+        status: "QUEUED",
+      })
+      .returningAll()
+      .executeTakeFirstOrThrow();
+
+    // Simulates a genuine leftover from a previous, separate test-suite
+    // invocation: created well beyond any single run's lifetime.
+    const staleTask = await db
+      .insertInto("tasks")
+      .values({
+        organization_id: organizationId,
+        project_id: projectId,
+        agent_profile_id: agentProfileId,
+        repository_revision: "abc123",
+        agent_profile_config_revision: 1,
+        agent_policy_version: "v1",
+        requirements: "simulated leftover from an earlier run",
+        acceptance_criteria: JSON.stringify(["n/a"]),
+        max_budget_minor: "1000",
+        currency: "usd",
+        status: "QUEUED",
+        created_at: sql`now() - interval '20 minutes'`,
+      })
+      .returningAll()
+      .executeTakeFirstOrThrow();
+
+    assert.equal(
+      await isTaskStale(freshTask.id),
+      false,
+      "a task created moments ago (simulating a live sibling test's own task) must never be classified stale",
+    );
+    assert.equal(
+      await isTaskStale(staleTask.id),
+      true,
+      "a task created well beyond the threshold must be classified stale, so genuine leftovers still get drained",
+    );
+
+    // Clean up directly — these two rows were never claimed, so there is no
+    // execution/lease state to unwind, just the QUEUED task rows themselves.
+    await db.updateTable("tasks").set({ status: "FAILED" }).where("id", "in", [freshTask.id, staleTask.id]).execute();
+  });
+});
+
+describe("POST /internal/executions/claim: genuine end-to-end coverage", () => {
+  test("claims a freshly queued task and returns a full routing/dispatch decision", async () => {
+    const suffix = randomUUID();
+    const { owner, projectId, agentProfileId } = await setUpOwnerWithOrg(suffix);
+    const taskId = await createFundedTask(owner.jar.header, projectId, agentProfileId);
+
+    const { executionId, workerId, claimBody } = await claimOwnTaskExecution(taskId);
+
+    assert.equal(claimBody.jobId, taskId);
+    assert.equal(claimBody.executionId, executionId);
+    assert.equal(claimBody.repositorySnapshot, "github.com/athernull/example@abc123");
+    assert.equal(claimBody.objective, "Add a health check endpoint");
+    assert.deepEqual(claimBody.acceptanceCriteria, ["Returns 200"]);
+    assert.equal(claimBody.agentProfileVersion, 1);
+    assert.equal(claimBody.routingTier, "fast");
+    assert.equal(claimBody.resolvedModel, "anthropic/claude-haiku-4-5-20251001");
+    assert.equal(typeof claimBody.routingScore, "number");
+    assert.equal(typeof claimBody.routingReason, "string");
+    assert.equal(claimBody.budgetMinor, 1000);
+    assert.equal(claimBody.policyVersion, "v1");
+    assert.equal(typeof claimBody.deadline, "string");
+    assert.ok(new Date(claimBody.deadline as string).getTime() > Date.now(), "deadline must be in the future");
+
+    const taskRow = await db.selectFrom("tasks").select(["status"]).where("id", "=", taskId).executeTakeFirstOrThrow();
+    assert.equal(taskRow.status, "RUNNING", "claim must transition the task to RUNNING");
+
+    const completed = await app.inject({
+      method: "POST",
+      url: `/internal/executions/${executionId}/complete`,
+      headers: { authorization: `Bearer ${INTERNAL_TOKEN}` },
+      payload: { workerId, outcome: "success" },
+    });
+    assert.equal(completed.statusCode, 200, `complete failed: ${completed.body}`);
+  });
+
+  test("two concurrently queued tasks are never claimed by the same claim result (FOR UPDATE SKIP LOCKED)", async () => {
+    const a = await setUpOwnerWithOrg(randomUUID());
+    const b = await setUpOwnerWithOrg(randomUUID());
+    const taskA = await createFundedTask(a.owner.jar.header, a.projectId, a.agentProfileId);
+    const taskB = await createFundedTask(b.owner.jar.header, b.projectId, b.agentProfileId);
+
+    const [resultA, resultB] = await Promise.all([
+      claimAnyOfOwnTasks([taskA, taskB]),
+      claimAnyOfOwnTasks([taskA, taskB]),
+    ]);
+
+    assert.notEqual(
+      resultA.taskId,
+      resultB.taskId,
+      "two concurrent claim calls must never both resolve to the same task",
+    );
+    assert.deepEqual([resultA.taskId, resultB.taskId].sort(), [taskA, taskB].sort());
+
+    for (const { executionId, workerId } of [resultA, resultB]) {
+      const completed = await app.inject({
+        method: "POST",
+        url: `/internal/executions/${executionId}/complete`,
+        headers: { authorization: `Bearer ${INTERNAL_TOKEN}` },
+        payload: { workerId, outcome: "success" },
+      });
+      assert.equal(completed.statusCode, 200, `complete failed: ${completed.body}`);
+    }
+  });
 });
