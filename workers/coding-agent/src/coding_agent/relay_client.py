@@ -53,17 +53,64 @@ themselves. `on_command`'s own body (agent_server_adapter.py's handler) runs
 on this receive thread, never on the thread driving `.run()` — see that
 module's own docstring for why it deliberately does NOT call
 `conversation.run()` again from this thread.
+
+ADR-0007 Phase 3E addition: "no reconnect-on-drop" (above) is superseded by
+BOUNDED reconnect with exponential backoff and jitter. This was re-evaluated
+specifically because Phase 3D's own command-forwarding feature made a
+long-running relay outage materially worse than a Phase 3B-only readonly
+event feed being briefly interrupted: without reconnect, one transient
+network blip permanently disabled realtime:control for the rest of a
+dispatch that can otherwise run for a long time. The reconnect this phase
+adds preserves every constraint the earlier design already established:
+  - Still worker-initiated only — the gateway never dials the worker; each
+    reconnect attempt is this same client calling `ws_client.connect()`
+    again, outward, exactly like the very first attempt.
+  - Still re-presents the full credential set every time (INTERNAL_API_TOKEN
+    header, workerId, executionId in the URL) — apps/api's own
+    `preValidation` (routes/relay.ts) re-verifies lease_owner/RUNNING status
+    against Postgres on EVERY attempt, reconnect or not; this client adds no
+    client-side "is my lease still valid" check of its own because it has no
+    way to know that authoritatively — the gateway's response IS the check.
+  - Bounded, not a tight infinite loop: capped attempt count
+    (MAX_RECONNECT_ATTEMPTS) with exponential backoff + jitter
+    (BASE_BACKOFF_SECONDS .. MAX_BACKOFF_SECONDS), and a deterministic,
+    immediate stop (no more attempts) the moment the gateway's handshake
+    response makes the rejection reason explicit and permanent for this
+    dispatch (401/403 bad token, 404 execution gone, 409 lease/status
+    mismatch) — retrying those would just be wasted busywork on a condition
+    that redialing can never fix. Only genuinely transient failures (DNS,
+    connection refused, timeout, mid-connection drop) consume a bounded
+    retry attempt.
+  - Never blocks or affects the dispatch: exactly as before, connecting
+    (and now reconnecting) happens entirely on this module's own background
+    thread; `conversation.run()` on the main thread never waits on any of
+    this.
+  - Never restarts the Agent Server or the execution — this client only ever
+    re-opens the OUTBOUND relay leg to apps/api. It has no code path that
+    touches Docker, the Agent Server container, or `Conversation`/`.run()`
+    at all.
+  - Stops permanently (no further attempts) once `close()` is called (the
+    dispatch itself is ending — `_stop` is set), matching the existing
+    single-attempt design's own lifecycle boundary.
+  - The outbound queue (`_queue`) is NOT cleared across a reconnect — events
+    enqueued while disconnected are simply sent once a new connection comes
+    up, same bounded drop-oldest policy as always. This is a nice-to-have on
+    top of (never a substitute for) the authoritative HTTP event path, which
+    is completely unaffected by any of this either way.
 """
 
 from __future__ import annotations
 
 import json
+import random
 import threading
+import time
 from collections import deque
 from typing import Callable
 from urllib.parse import urlencode
 
 import websockets.sync.client as ws_client
+from websockets.exceptions import InvalidStatus
 
 RELAY_PROTOCOL_VERSION = 1
 # Drop-oldest beyond this many queued-but-unsent messages — see module
@@ -73,6 +120,27 @@ RELAY_PROTOCOL_VERSION = 1
 MAX_QUEUED_MESSAGES = 200
 CONNECT_TIMEOUT_SECONDS = 5.0
 CLOSE_JOIN_TIMEOUT_SECONDS = 2.0
+
+# ADR-0007 Phase 3E — bounded reconnect policy (see the module docstring's
+# Phase 3E section for the full rationale). A handshake rejection carrying
+# one of these HTTP status codes is a deterministic, permanent-for-this-
+# dispatch outcome — the gateway has told us definitively (by re-checking
+# Postgres, per routes/relay.ts's own preValidation) that this worker/
+# executionId/token combination is no longer valid, and no amount of
+# redialing changes that until the execution itself changes state (which
+# ends this dispatch anyway). Retrying only ever applies to genuinely
+# transient failures (connection refused, DNS, timeout, an
+# already-established connection dying mid-stream).
+TERMINAL_HANDSHAKE_STATUS_CODES = frozenset({401, 403, 404, 409})
+MAX_RECONNECT_ATTEMPTS = 8
+BASE_BACKOFF_SECONDS = 0.5
+MAX_BACKOFF_SECONDS = 30.0
+# A connection that stayed up at least this long before dying is treated as
+# an ordinary drop (resets the consecutive-failure counter) rather than
+# evidence of a persistent problem — see `_run`'s own docstring for why this
+# is what actually prevents a connect-then-immediately-die cycle from
+# becoming an unbounded tight loop.
+STABLE_CONNECTION_SECONDS = 10.0
 
 
 def relay_ws_url(api_url: str, execution_id: str, worker_id: str) -> str:
@@ -129,6 +197,11 @@ class RelayClient:
         self._ws: ws_client.ClientConnection | None = None
         self._connected = threading.Event()
         self._dropped_count = 0
+        # ADR-0007 Phase 3E — observability only, never consulted by dispatch
+        # logic: how many times a NEW connection was successfully established
+        # after the first (i.e. real reconnects, not the initial connect).
+        # Exposed for tests and the phase's own real-execution verification.
+        self._reconnect_count = 0
 
     # -- public API: every method here is safe to call unconditionally and
     # never raises — a caller (agent_server_adapter.py) must never need a
@@ -249,6 +322,13 @@ class RelayClient:
     def is_connected(self) -> bool:
         return self._connected.is_set()
 
+    @property
+    def reconnect_count(self) -> int:
+        """How many times a new connection was established after the first
+        (Phase 3E). 0 means either never connected, or connected exactly
+        once and never needed to reconnect. Observability only."""
+        return self._reconnect_count
+
     # -- internal --------------------------------------------------------
 
     def _enqueue_lifecycle(self, message_type: str) -> None:
@@ -263,65 +343,171 @@ class RelayClient:
             self._queue.append(envelope)
         self._has_work.set()
 
+    def _connect(self) -> ws_client.ClientConnection:
+        """One raw connection attempt. Raises on any failure — callers
+        decide (via `_is_terminal_handshake_rejection`) whether that failure
+        should stop reconnecting entirely or be retried."""
+        url = relay_ws_url(self._api_url, self._execution_id, self._worker_id)
+        # INTERNAL_API_TOKEN travels as a header, exactly like every other
+        # /internal/* call this worker already makes (worker.py's
+        # api_headers()) — never in the URL, never a substitute for
+        # SESSION_API_KEY, which this module never touches at all. Every
+        # single call to this method (first attempt or any later reconnect)
+        # re-presents the full credential set — there is no "remembered"
+        # trust from a previous attempt.
+        headers = {"Authorization": f"Bearer {self._internal_token}"}
+        return ws_client.connect(url, additional_headers=headers, open_timeout=CONNECT_TIMEOUT_SECONDS)
+
+    @staticmethod
+    def _is_terminal_handshake_rejection(err: Exception) -> bool:
+        """True if `err` is a handshake-level rejection whose HTTP status
+        code means apps/api's own Postgres-backed check (lease_owner/status/
+        token — routes/relay.ts's preValidation) has definitively and
+        permanently (for this dispatch) refused this worker/executionId. See
+        the module docstring's Phase 3E section for why these specific codes
+        stop reconnecting outright rather than consuming a retry."""
+        return isinstance(err, InvalidStatus) and err.response.status_code in TERMINAL_HANDSHAKE_STATUS_CODES
+
     def _run(self) -> None:
-        try:
-            url = relay_ws_url(self._api_url, self._execution_id, self._worker_id)
-            # INTERNAL_API_TOKEN travels as a header, exactly like every
-            # other /internal/* call this worker already makes
-            # (worker.py's api_headers()) — never in the URL, never a
-            # substitute for SESSION_API_KEY, which this module never
-            # touches at all.
-            headers = {"Authorization": f"Bearer {self._internal_token}"}
-            self._ws = ws_client.connect(url, additional_headers=headers, open_timeout=CONNECT_TIMEOUT_SECONDS)
-        except Exception as err:  # noqa: BLE001
-            # Gateway unreachable, registration rejected (lease no longer
-            # owned by this worker, execution not RUNNING, bad/missing
-            # token), or any other connect-time failure — the dispatch must
-            # proceed exactly as if this module didn't exist.
-            self._log(f"relay: connect failed, proceeding without a relay: {err!r}")
-            return
+        """Outer bounded-reconnect loop (ADR-0007 Phase 3E). Each iteration
+        is one connection attempt/lifecycle: optionally back off, connect,
+        then (if connected) run the send loop until the connection dies or
+        `close()` is called. `attempt` is a single consecutive-failure
+        counter shared by BOTH failure modes — a connect() that raises, and a
+        connection that came up but died almost immediately afterward (e.g.
+        the very first send fails). Counting both the same way, and applying
+        backoff at the TOP of the loop whenever `attempt > 0` (rather than
+        only in the connect-exception branch), is what stops a
+        connects-then-immediately-dies cycle from becoming a tight loop: a
+        connection that succeeds but is torn down within
+        STABLE_CONNECTION_SECONDS of coming up is treated as still failing,
+        not as a fresh success. A connection that stays up for at least that
+        long DOES reset `attempt` to 0 — a relay that ran healthily for a
+        while and then legitimately dropped deserves an immediate retry, not
+        a penalty carried over from unrelated past trouble. See the module
+        docstring's Phase 3E section for the full policy this implements."""
+        attempt = 0
+        while not self._stop.is_set():
+            if attempt > 0:
+                backoff = min(MAX_BACKOFF_SECONDS, BASE_BACKOFF_SECONDS * (2 ** (attempt - 1)))
+                # Full jitter: a random value in [0, backoff) rather than a
+                # fixed delay — avoids every worker in a fleet retrying in
+                # lockstep against a gateway that's recovering from an
+                # outage. Bounded, not a tight loop: the longest possible gap
+                # between attempts is MAX_BACKOFF_SECONDS, never unbounded.
+                backoff = random.uniform(0, backoff)
+                self._log(f"relay: reconnect attempt {attempt} in {backoff:.1f}s")
+                if self._stop.wait(backoff):
+                    return  # close() was called while backing off.
+                if self._stop.is_set():
+                    return
 
-        self._connected.set()
-        self._enqueue_lifecycle("worker.ready")
-
-        # ADR-0007 Phase 3D: start the inbound-command receive thread only
-        # once the connection is up. If `_on_command` is None (no caller
-        # opted into command handling — e.g. worker.py's plain
-        # EXECUTION_ADAPTER=direct path, which never constructs a
-        # RelayClient with one), the thread still runs but simply has
-        # nothing to invoke — inbound gateway.command messages are received
-        # and silently ignored rather than left unread on the socket.
-        self._recv_thread = threading.Thread(target=self._recv_run, daemon=True)
-        self._recv_thread.start()
-
-        try:
-            while not self._stop.is_set():
-                self._has_work.wait(timeout=1.0)
-                self._has_work.clear()
-                while True:
-                    with self._queue_lock:
-                        if not self._queue:
-                            break
-                        envelope = self._queue.popleft()
-                    try:
-                        self._ws.send(json.dumps(envelope))
-                    except Exception as err:  # noqa: BLE001
-                        # The connection is gone. Stop trying to send for the
-                        # rest of this dispatch — see module docstring on
-                        # why this doesn't reconnect. The authoritative HTTP
-                        # event path is completely unaffected by this.
-                        self._log(f"relay: send failed, relay is now inactive for this dispatch: {err!r}")
-                        self._connected.clear()
-                        return
-        finally:
             try:
-                self._ws.close()
-            except Exception:  # noqa: BLE001
-                pass
+                self._ws = self._connect()
+            except Exception as err:  # noqa: BLE001
+                if self._is_terminal_handshake_rejection(err):
+                    self._log(
+                        f"relay: connect rejected terminally by the gateway "
+                        f"(HTTP {err.response.status_code}), giving up for this dispatch: {err!r}"  # type: ignore[union-attr]
+                    )
+                    return
+                attempt += 1
+                if attempt > MAX_RECONNECT_ATTEMPTS:
+                    self._log(f"relay: giving up after {attempt - 1} reconnect attempt(s), proceeding without a relay: {err!r}")
+                    return
+                self._log(f"relay: connect failed ({err!r}), will retry (attempt {attempt}/{MAX_RECONNECT_ATTEMPTS})")
+                continue
 
-    def _recv_run(self) -> None:
-        """ADR-0007 Phase 3D receive loop. Runs on its own thread for the
-        life of this relay connection. Reads inbound frames via the
+            if attempt > 0:
+                self._reconnect_count += 1
+                self._log(f"relay: reconnected (attempt {attempt}, total reconnects {self._reconnect_count})")
+            self._connected.set()
+            self._enqueue_lifecycle("worker.ready")
+            connected_at = time.monotonic()
+
+            # ADR-0007 Phase 3D/3E: start the inbound-command receive thread
+            # bound to THIS specific connection object (`current_ws`, passed
+            # explicitly — never read back via `self._ws` inside the thread).
+            # This explicit binding matters precisely because of Phase 3E's
+            # reconnect: `self._ws` is reassigned to a new connection object
+            # on every reconnect, and a receive thread that instead read
+            # `self._ws` on each loop iteration could start reading from a
+            # BRAND NEW connection the moment reconnect logic replaces
+            # `self._ws`, racing with that new connection's own freshly
+            # started receive thread over the same socket. Binding to a
+            # captured local closes that race: a connection's own receive
+            # thread only ever reads from that same connection, and exits on
+            # its own once that specific connection dies (see the `except`
+            # branch below) — it never "follows" `self._ws` onto a
+            # subsequent connection. `set_command_handler`'s own late-binding
+            # contract (re-reading `self._on_command` on every message rather
+            # than capturing it once) already makes handler dispatch itself
+            # naturally reconnect-safe; only the connection object needed
+            # this explicit fix.
+            current_ws = self._ws
+            self._recv_thread = threading.Thread(target=self._recv_run, args=(current_ws,), daemon=True)
+            self._recv_thread.start()
+
+            connection_lost = False
+            try:
+                while not self._stop.is_set():
+                    self._has_work.wait(timeout=1.0)
+                    self._has_work.clear()
+                    while True:
+                        with self._queue_lock:
+                            if not self._queue:
+                                break
+                            envelope = self._queue.popleft()
+                        try:
+                            current_ws.send(json.dumps(envelope))
+                        except Exception as err:  # noqa: BLE001
+                            # The connection is gone. Re-queue this envelope
+                            # (best-effort — if the queue is momentarily at
+                            # capacity, drop-oldest applies exactly as usual)
+                            # so a reconnect can still deliver it, then break
+                            # out to the outer loop's reconnect logic. The
+                            # authoritative HTTP event path is completely
+                            # unaffected either way.
+                            self._log(f"relay: send failed, will attempt to reconnect: {err!r}")
+                            with self._queue_lock:
+                                self._queue.appendleft(envelope)
+                            connection_lost = True
+                            break
+                    if connection_lost:
+                        break
+            finally:
+                self._connected.clear()
+                try:
+                    current_ws.close()
+                except Exception:  # noqa: BLE001
+                    pass
+
+            if self._stop.is_set():
+                return
+
+            if time.monotonic() - connected_at >= STABLE_CONNECTION_SECONDS:
+                # This connection did real work for a meaningful stretch
+                # before dying — an ordinary drop, not a persistent problem.
+                # Reset so the next attempt isn't penalized by unrelated past
+                # trouble.
+                attempt = 0
+            else:
+                attempt += 1
+                if attempt > MAX_RECONNECT_ATTEMPTS:
+                    self._log(
+                        f"relay: giving up after {attempt - 1} reconnect attempt(s) "
+                        "(connection kept dying immediately after connecting)"
+                    )
+                    return
+            # Loop back to the top: backoff (if attempt > 0) then reconnect.
+
+    def _recv_run(self, connection: ws_client.ClientConnection) -> None:
+        """ADR-0007 Phase 3D receive loop, bound to exactly one connection
+        object for its entire lifetime (ADR-0007 Phase 3E: see the call site
+        above for why this must be an explicit parameter, never `self._ws`,
+        once reconnect can reassign `self._ws` out from under a still-running
+        thread from a previous connection). Runs on its own thread for the
+        life of THIS relay connection. Reads inbound frames via the
         underlying library's own internal recv queue (see this module's
         docstring on why this is safe to run concurrently with `_run`'s send
         loop and with the main dispatch thread's blocking `.run()` call) and
@@ -330,10 +516,10 @@ class RelayClient:
         dispatch or the outbound send path."""
         while not self._stop.is_set():
             try:
-                raw = self._ws.recv(timeout=1.0)
+                raw = connection.recv(timeout=1.0)
             except TimeoutError:
                 continue
-            except Exception:  # noqa: BLE001 - connection gone; stop receiving for this dispatch
+            except Exception:  # noqa: BLE001 - this connection is gone; exit (a reconnect, if any, starts its own new receive thread for the new connection)
                 return
 
             try:

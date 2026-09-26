@@ -45,7 +45,12 @@ interface PendingCommand {
   handlers: PendingCommandHandlers;
 }
 
-class ControlRegistry {
+// Exported (ADR-0007 Phase 3E, purely a visibility change — no behavior
+// difference from before) so tests can construct a fresh, empty instance to
+// demonstrate exactly what a gateway restart leaves behind: this class has no
+// persistence of its own, so a new instance IS what "after a restart" looks
+// like. The real, singleton `controlRegistry` below is unaffected.
+export class ControlRegistry {
   private readonly pending = new Map<string, PendingCommand>();
   // commandId -> executionId, insertion-ordered so the oldest entry is
   // always the next one evicted once the cap is hit.

@@ -34,13 +34,75 @@ import {
 // reported — an uncertain command stays visibly "uncertain" (see
 // `commandStatuses` below) until the user explicitly acknowledges it or a
 // later, unrelated event supersedes the display.
+//
+// ADR-0007 Phase 3E adds bounded browser reconnect on top of the above,
+// strictly additively — the wire protocol (packages/contracts/
+// realtime-browser.ts) is completely unchanged. Design, matching the ADR's
+// own stated invariants (docs/adr/0007-secure-realtime-execution.md, Phase
+// 3E status section):
+//   - On an unexpected socket close (anything other than a server-driven
+//     `execution.completed`, or this hook's own effect cleanup on
+//     unmount/executionId change), a NEW WebSocket is opened to the exact
+//     same URL after a bounded exponential backoff with jitter — never a
+//     tight reconnect loop. The gateway itself re-validates session, Origin,
+//     org membership and realtime:view from scratch on every single new
+//     connection attempt (routes/realtime-gateway.ts's preValidation) — this
+//     hook restores NOTHING from the old socket; a reconnect is, from the
+//     gateway's point of view, indistinguishable from a brand-new tab
+//     opening the same URL.
+//   - `eventsById`/`commandStatusesById` (this hook's own client-side caches)
+//     are NOT reset on a reconnect — only on a genuine new subscription
+//     (mount, or `taskId`/`executionId` changing). This is what makes
+//     reconnection lossless without duplicating anything: the gateway always
+//     replays the FULL persisted history on every new connection
+//     (`history.ready`), and `upsert()` is a plain Map.set() keyed by the
+//     event's own uuid — replaying the same id twice is a no-op overwrite,
+//     never a second rendered row (invariant: "reconnect does not duplicate
+//     rendered events").
+//   - Any command status that was still non-terminal (received/authorized/
+//     forwarded/accepted — i.e. NOT executed/failed/rejected/uncertain) at
+//     the moment the socket closed is force-transitioned to `uncertain`
+//     (reason `connection_lost`) right then, before any reconnect is even
+//     attempted. This is a client-side application of the same "never
+//     fabricate certainty" rule the gateway itself already follows
+//     (control-registry.ts's own ack-timeout handling): once the connection
+//     that was going to tell us the real outcome is gone, the gateway
+//     process on the other end may not even still exist (e.g. it just
+//     restarted) to ever resolve that command — continuing to display
+//     "forwarded" forever would be a false, stale certainty, not an honest
+//     "we don't know."
+//   - Reconnect attempts stop (this hook simply lets the socket stay closed)
+//     once: the execution has already reached `execution.completed` (no
+//     reason to keep trying — the historical/polled view is the correct
+//     source from then on), the caller's own `active` flag goes false
+//     (RealWorkspaceView flips this the moment its own task/execution poll
+//     observes a non-RUNNING status — this is the real backstop for "don't
+//     reconnect forever against a finished execution" described in the ADR,
+//     since a closed WebSocket carries no HTTP status code this hook could
+//     otherwise inspect to tell "rejected because finished" apart from
+//     "transient network blip"), the effect is cleaned up (unmount /
+//     `taskId`/`executionId` change), or a bounded maximum attempt count is
+//     reached.
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3001";
+
+// ADR-0007 Phase 3E bounded-reconnect policy (mirrors the worker relay's own
+// policy in workers/coding-agent/src/coding_agent/relay_client.py, though
+// the two are independent implementations — a browser tab and a worker
+// process reconnect to entirely different gateway routes and have no shared
+// state). Full jitter, exponential backoff, hard attempt cap: never a tight
+// loop, never unbounded.
+const MAX_RECONNECT_ATTEMPTS = 8;
+const BASE_BACKOFF_MS = 500;
+const MAX_BACKOFF_MS = 30_000;
+
+const TERMINAL_COMMAND_STATUSES = new Set<CommandStatusValue>(["executed", "failed", "rejected", "uncertain"]);
 
 export type RealtimeConnectionStatus =
   | "idle"
   | "connecting"
   | "open"
+  | "reconnecting"
   | "relay-unavailable"
   | "completed"
   | "error"
@@ -115,22 +177,29 @@ export function useExecutionRealtime(
       return;
     }
 
+    // Fresh subscription (mount, or taskId/executionId actually changed —
+    // e.g. a retried task attempt got a new execution) — this is the ONLY
+    // place these caches are reset. A reconnect within the same subscription
+    // (below) deliberately does NOT touch them, per this file's own Phase 3E
+    // header comment: the gateway replays full history on every connection,
+    // and re-delivering an already-known event id is a harmless no-op
+    // upsert, never a duplicate.
     eventsById.current = new Map();
     commandStatusesById.current = new Map();
     setEvents(null);
     setRelayUnavailable(false);
     setCanControl(false);
     setCommandStatuses([]);
-    setStatus("connecting");
 
-    let socket: WebSocket;
-    try {
-      socket = new WebSocket(realtimeWebSocketUrl(taskId, executionId));
-      socketRef.current = socket;
-    } catch {
-      setStatus("error");
-      return;
-    }
+    let cancelled = false;
+    let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+    let attempt = 0;
+    // Latched true only by a real server-driven execution.completed message
+    // (never inferred from a socket closing/erroring) — once true, this
+    // subscription never attempts to reconnect again. ADR-0007's own
+    // invariant: the browser must never decide an execution is finished;
+    // this flag only ever gets set from that one authoritative signal.
+    let completed = false;
 
     function snapshot(): RealtimeExecutionEvent[] {
       return [...eventsById.current.values()].sort((a, b) => a.occurredAt.localeCompare(b.occurredAt) || a.id.localeCompare(b.id));
@@ -149,60 +218,157 @@ export function useExecutionRealtime(
       setCommandStatuses(commandSnapshot());
     }
 
-    socket.onopen = () => setStatus("open");
+    // ADR-0007 Phase 3E: once the connection that could have told us a
+    // command's real outcome is gone, this gateway process may not even
+    // still exist to ever answer (e.g. it just restarted) — leaving a
+    // non-terminal status (received/authorized/forwarded/accepted) displayed
+    // would be a false, stale certainty. Force it to the same honest
+    // "uncertain" the gateway itself already uses for an unresolved ack
+    // timeout — never a silent forget, never a fabricated success/failure.
+    function markInFlightCommandsUncertain(reason: string) {
+      let changed = false;
+      for (const [commandId, entry] of commandStatusesById.current) {
+        if (!TERMINAL_COMMAND_STATUSES.has(entry.status)) {
+          commandStatusesById.current.set(commandId, { commandId, status: "uncertain", reason });
+          changed = true;
+        }
+      }
+      if (changed) setCommandStatuses(commandSnapshot());
+    }
 
-    socket.onmessage = (raw) => {
-      let message: RealtimeServerMessage;
-      try {
-        message = JSON.parse(String(raw.data)) as RealtimeServerMessage;
-      } catch {
+    function scheduleReconnect() {
+      if (cancelled || completed) return;
+      attempt += 1;
+      if (attempt > MAX_RECONNECT_ATTEMPTS) {
+        // Bounded, not infinite. The caller's own task/execution poll
+        // (RealWorkspaceView) is the real backstop from here — once it
+        // observes the execution is no longer RUNNING, `active` goes false
+        // and this whole effect tears down; if the execution is genuinely
+        // still RUNNING and the gateway is just unreachable for longer than
+        // this budget, the historical/polled event view remains available
+        // regardless (this hook's `events` simply stays whatever it last
+        // was, per its own "coexist, don't replace" contract with the
+        // polling fallback).
+        setStatus("error");
         return;
       }
+      const backoffCap = Math.min(MAX_BACKOFF_MS, BASE_BACKOFF_MS * 2 ** (attempt - 1));
+      const backoff = Math.random() * backoffCap; // full jitter, same policy as the worker relay's own reconnect
+      setStatus("reconnecting");
+      reconnectTimer = setTimeout(connect, backoff);
+    }
 
-      switch (message.type) {
-        case "server.hello":
-          // ADR-0007 Phase 3D: the gateway's own authorization decision,
-          // never computed here — this hook only reflects it.
-          setCanControl(message.canControl);
-          break;
-        case "history.ready":
-          for (const event of message.events) upsert(event);
-          setEvents(snapshot());
-          break;
-        case "execution.event":
-          upsert(message.event);
-          setEvents(snapshot());
-          break;
-        case "relay.unavailable":
-          setRelayUnavailable(true);
-          break;
-        case "execution.completed":
-          setStatus("completed");
-          break;
-        case "command.status":
-          // Never inferred, never auto-retried — this hook only relays
-          // exactly what the gateway reported, including "uncertain".
-          upsertCommandStatus({ commandId: message.commandId, status: message.status, reason: message.reason });
-          break;
-        case "error":
-          // The gateway explicitly rejected something — surfaced for
-          // observability, not treated as a fatal connection error. A
-          // malformed/unrecognized command this hook itself sent (a bug,
-          // since sendMessage below always builds a valid envelope) would
-          // also land here rather than as a command.status, since the
-          // gateway can't attribute it to a specific commandId in that case.
-          break;
-        default:
-          break;
+    function connect(): void {
+      if (cancelled || completed) return;
+
+      let socket: WebSocket;
+      try {
+        socket = new WebSocket(realtimeWebSocketUrl(taskId, executionId!));
+      } catch {
+        scheduleReconnect();
+        return;
       }
-    };
+      socketRef.current = socket;
+      // A fresh connection attempt — reset per-connection (not per-
+      // subscription) flags. `relayUnavailable`/`canControl` are the
+      // gateway's OWN fresh decision on every new socket (never restored
+      // from a previous one, matching ADR-0007's "never restore previous
+      // privileges just because the old socket had them"); a reconnect that
+      // succeeds gets a brand-new `server.hello`/possible
+      // `relay.unavailable` message reflecting current server-side state.
+      setRelayUnavailable(false);
+      setCanControl(false);
+      setStatus(attempt === 0 ? "connecting" : "reconnecting");
 
-    socket.onerror = () => setStatus("error");
-    socket.onclose = () => setStatus((prev) => (prev === "completed" ? prev : "closed"));
+      socket.onopen = () => {
+        attempt = 0; // a real successful connection resets the backoff budget
+        setStatus("open");
+      };
+
+      socket.onmessage = (raw) => {
+        let message: RealtimeServerMessage;
+        try {
+          message = JSON.parse(String(raw.data)) as RealtimeServerMessage;
+        } catch {
+          return;
+        }
+
+        switch (message.type) {
+          case "server.hello":
+            // ADR-0007 Phase 3D: the gateway's own authorization decision,
+            // never computed here — this hook only reflects it. Rechecked
+            // fresh on every reconnect, same as connect-time.
+            setCanControl(message.canControl);
+            break;
+          case "history.ready":
+            // ADR-0007 Phase 3E: this is exactly the reconciliation a
+            // reconnect relies on — the gateway always sends the FULL
+            // current persisted history on every new connection, so any
+            // event produced while this tab was disconnected is delivered
+            // here, deduped by id against whatever this hook already had.
+            for (const event of message.events) upsert(event);
+            setEvents(snapshot());
+            break;
+          case "execution.event":
+            upsert(message.event);
+            setEvents(snapshot());
+            break;
+          case "relay.unavailable":
+            setRelayUnavailable(true);
+            break;
+          case "execution.completed":
+            completed = true;
+            setStatus("completed");
+            break;
+          case "command.status":
+            // Never inferred, never auto-retried — this hook only relays
+            // exactly what the gateway reported, including "uncertain".
+            upsertCommandStatus({ commandId: message.commandId, status: message.status, reason: message.reason });
+            break;
+          case "error":
+            // The gateway explicitly rejected something — surfaced for
+            // observability, not treated as a fatal connection error. A
+            // malformed/unrecognized command this hook itself sent (a bug,
+            // since sendMessage below always builds a valid envelope) would
+            // also land here rather than as a command.status, since the
+            // gateway can't attribute it to a specific commandId in that
+            // case.
+            break;
+          default:
+            break;
+        }
+      };
+
+      socket.onerror = () => {
+        // Deliberately not a terminal state here — a browser always follows
+        // a failed-connection error with a close event, and `onclose` below
+        // is the single place that decides completed/reconnect/give-up, so
+        // the decision isn't split across two handlers that could disagree.
+      };
+
+      socket.onclose = () => {
+        if (socketRef.current === socket) socketRef.current = null;
+        if (cancelled) return;
+        if (completed) {
+          setStatus("completed");
+          return;
+        }
+        // ADR-0007 Phase 3E: socket loss does not mean the execution
+        // finished — never inferred here. Only ever a reason to try to
+        // reconnect (bounded) while treating any command this connection
+        // was still tracking as uncertain from this moment forward.
+        markInFlightCommandsUncertain("connection_lost");
+        scheduleReconnect();
+      };
+    }
+
+    connect();
 
     return () => {
+      cancelled = true;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      socketRef.current?.close();
       socketRef.current = null;
-      socket.close();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [taskId, executionId, active]);

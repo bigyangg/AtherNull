@@ -47,6 +47,7 @@ import {
   type BroadcastExecutionEvent,
   type ExecutionCompletionOutcome,
 } from "../realtime/execution-broadcaster.js";
+import { attachHeartbeat } from "../realtime/heartbeat.js";
 import { relayRegistry } from "../realtime/relay-registry.js";
 import { resolveConversationTarget } from "./openhands-compat.js";
 import { HttpError, hasRealtimeControlAuthority, requireOrgSession, sendHttpError } from "../session.js";
@@ -331,8 +332,19 @@ export async function realtimeGatewayRoutes(app: FastifyInstance) {
         void handleCompletion(outcome);
       });
 
+      // ADR-0007 Phase 3E — same bounded liveness detection as the worker
+      // relay leg (relay.ts): a browser tab whose network died without a
+      // clean close (laptop sleep, wifi drop, etc.) is otherwise
+      // indistinguishable from "still there" until some future write fails —
+      // this bounds that to one heartbeat interval, freeing the connection's
+      // resources (unsubscribing from executionBroadcaster, cancelling any
+      // pending command waits) promptly rather than leaking them for the
+      // life of a half-open TCP connection.
+      const heartbeat = attachHeartbeat(socket);
+
       function cleanup(): void {
         closed = true;
+        heartbeat.stop();
         unsubscribeEvent();
         unsubscribeCompletion();
         // ADR-0007 Phase 3D: a command left waiting for a worker ack must

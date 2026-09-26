@@ -12,6 +12,7 @@ import {
   RelayEnvelopeSchema,
   RelayExecutionEventPayloadSchema,
 } from "../realtime/envelope.js";
+import { attachHeartbeat } from "../realtime/heartbeat.js";
 import { relayRegistry } from "../realtime/relay-registry.js";
 
 // Matches the maxPayload bound configured on the @fastify/websocket plugin
@@ -100,11 +101,19 @@ export async function relayRoutes(app: FastifyInstance) {
       relayRegistry.register({ executionId, workerId, socket, registeredAt: new Date() });
       request.log.info({ executionId, workerId }, "relay registered");
 
+      // ADR-0007 Phase 3E — bounded ping/pong so a half-open worker
+      // connection (process died or network path went dark without a
+      // TCP FIN/RST) is detected and torn down within one heartbeat
+      // interval, rather than sitting "registered" indefinitely. Termination
+      // fires the same `close` handler below as any ordinary disconnect.
+      const heartbeat = attachHeartbeat(socket);
+
       socket.on("message", (raw: Buffer) => {
         void handleRelayMessage(request, executionId, raw);
       });
 
       socket.on("close", () => {
+        heartbeat.stop();
         relayRegistry.unregister(executionId, socket);
         request.log.info({ executionId, workerId }, "relay disconnected");
       });

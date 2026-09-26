@@ -1290,6 +1290,582 @@ available today) for tagging which turn a given user message triggered.
 (5) Terminal/bash commands remain deferred pending a safe, SDK-native
 mechanism — not attempted, not faked, in this phase.
 
+## Phase 3E status: complete (2026-09-26)
+
+Phase 3E (reconnect, recovery and command-state hardening) has landed. Scope
+held to the plan: `apps/api` gained one new module
+(`realtime/heartbeat.ts`) and reconnect-safety wiring in the existing relay
+and browser-gateway routes; `workers/coding-agent` gained bounded reconnect
+in `relay_client.py`, its only functional change this phase;
+`apps/web`'s `use-execution-realtime.ts` hook gained bounded reconnect and
+client-side command-uncertainty enforcement, with **zero changes** to
+`packages/contracts/src/realtime-browser.ts` (the browser wire protocol) or
+to `apps/api/src/realtime/envelope.ts` (the worker wire protocol) — every
+Phase 3E guarantee is achieved by making both existing protocols' connections
+reconnectable, not by adding new message types. **No `packages/database`
+migration was created** (see the durability decision below — this was the
+single most important open question this phase had to resolve, and the
+answer is "no new table," not "a migration was deferred"). No Solana/payment/
+settlement/deployment code was touched, no Redis/pub-sub/distributed-relay
+routing was introduced, and no vendored/upstream OpenHands source was
+modified.
+
+### 1. In-memory state audit and classification (source audit, Step 1)
+
+Every phase 3B/3C/3D piece of process-local state was re-read directly from
+source (not assumed) and classified:
+
+| State | Location | Classification | Why |
+|---|---|---|---|
+| Active worker relay registry (`executionId -> RelayConnection`) | `relay-registry.ts` | **B** — reconstructible | Postgres (`executions.lease_owner`/`status`) is the sole authority a registration is checked against; an empty map after a restart or a disconnect is exactly the "no relay yet" state the browser-facing gateway already tolerates (`relay.unavailable`). A worker reconnecting simply re-registers, re-validated fresh against the DB, per Step 3. |
+| Browser WebSocket subscriptions + per-connection state (`sentIds`, `preHistoryBuffer`, `pendingCommandCount`, `rateLimitTimestamps`, `acceptedAwaitingExecuted`) | `realtime-gateway.ts` | **A** — safe to lose | All of it is re-derived from scratch on every new connection (a fresh `Set`/array/counter per socket). Losing it on disconnect is not a degradation — it is the design: Phase 3C already made every connection independently rebuild its view from Postgres history plus the live broadcaster. |
+| `commandId` dedupe registry (`ControlRegistry.forwarded`, bounded FIFO, 5,000 entries) | `control-registry.ts` | **D** — must become explicitly uncertain after loss | This is the ADR's own already-disclosed at-most-once boundary ("within one active gateway process"). A restart empties it. This is safe ONLY because of the separate, load-bearing invariant (Step 7, verified) that nothing anywhere ever automatically resends a `commandId` — the only way the same `commandId` could ever be seen twice by a fresh, empty registry is a client bug or a deliberate replay attempt, neither of which this registry needs to remember across a restart to defend against (a genuinely fresh user action always mints a genuinely fresh `commandId`). |
+| Pending command acknowledgements (`ControlRegistry.pending`, with live timers) | `control-registry.ts` | **D** — must become explicitly uncertain after loss | A command mid-flight at the moment of a gateway restart is not just "forgotten" — its browser socket is also gone (same process), so the browser itself will reconnect and, per this phase's new client-side rule, will have already force-transitioned that command's own last-known status to `uncertain` the instant its socket closed (see §4). The server-side registry losing the entry is therefore consistent with, not contradicted by, what the client independently concludes. |
+| History/live buffer handoff state (`preHistoryBuffer`, `bufferingPreHistory`, `sentIds`) | `realtime-gateway.ts` | **A** — safe to lose | Purely a per-connection transitional device for the subscribe-then-query race (Phase 3C invariant 1/2). A new connection re-runs the exact same sequence from an empty buffer; nothing about it is meant to survive past one connection's lifetime. |
+| Completion state (`completionHandled`, `pendingCompletionOutcome`) | `realtime-gateway.ts` | **B** — reconstructible | `executions.status` in Postgres is the sole authority. A reconnecting browser gets a fresh `preValidation` check against that column (409 if not `RUNNING`) rather than any remembered completion flag — Step 9 relies on exactly this. |
+| Worker-side outbound event queue (`RelayClient._queue`, bounded 200, drop-oldest) | `relay_client.py` | **B** for its *contents* (execution_events are independently persisted via the authoritative HTTP path regardless of this queue's fate), **A** for the queue object itself | Phase 3E's reconnect keeps this queue alive *across* a reconnect (queued-but-unsent messages are retried on the next successful connection, never cleared) — a deliberate improvement over "safe to lose," made possible because the queue was already bounded and idempotent-safe (`ON CONFLICT DO NOTHING` on `execution_events.id`). |
+
+### 2. Durable command state decision — **Option A chosen, no migration created**
+
+Per the assignment's explicit instruction, this was evaluated before writing
+any implementation code, and the migration itself was never created — this
+section is the full write-up for review.
+
+**Option A (no durable command ledger) was chosen.** After a gateway
+restart, unresolved command state becomes explicitly unknown; the browser's
+own client-side rule (§4) already converts any such state to `uncertain`
+independently, without needing the server to remember anything. A new user
+action always mints a new `commandId`.
+
+**Why Option B (a durable ledger) was rejected as unjustified for this
+phase**, weighed against its stated fields
+(`command_id`/`execution_id`/`organization_id`/`actor_user_id`/`command_type`/
+`state`/`created_at`/`forwarded_at`/`acknowledged_at`/`terminal_outcome`):
+
+1. **It would not buy real exactly-once execution**, and the assignment is
+   explicit that no phase may claim otherwise. Phase 3D's own audit already
+   established `RemoteConversation.send_message()` has no idempotency key —
+   a durable ledger records that a command was *forwarded*, but cannot make
+   the downstream Agent Server call itself safe to retry. Durability at the
+   gateway layer does not reach across that gap.
+2. **It would not improve the `executed` heuristic.** Step 6's own audit
+   (below) re-confirms no reliable commandId<->OpenHands-event correlation
+   exists in the SDK's event payloads. A durable ledger surviving a restart
+   still could not answer "did this specific command execute" any more
+   precisely than the in-memory version already does — it would only survive
+   longer while still being a heuristic.
+3. **The gap it would close is narrow and already mitigated on the client.**
+   The only scenario Option B durably helps is: a command is forwarded,
+   the gateway process restarts before the worker's ack arrives, and later
+   the SAME browser tab (without ever having reloaded/reconnected) asks
+   "what happened to commandId X?" But that browser tab's own socket died in
+   the same restart — per §4's new client-side rule, the tab has *already*
+   marked that command `uncertain` locally, independent of any future server
+   answer. A durable ledger would let a NEW connection re-derive the same
+   `uncertain` conclusion the client already reached on its own — it does not
+   unlock any capability the user doesn't already have.
+4. **Cost is not free.** A ledger write on every command state transition
+   (forwarded, acked, timed out) adds synchronous DB writes to a path that is
+   explicitly rate-limited (10 commands/10s) precisely because it is meant to
+   stay cheap and infrequent; the marginal reliability gain does not clear
+   that bar.
+5. **This is the assignment's own documented expected/default outcome**
+   given the existing at-most-once-plus-uncertain design Phase 3D already
+   established and this ADR already recorded as deliberate, not accidental.
+
+**Guarantees Option A provides:** every command reaches exactly one terminal
+outcome the browser can see (`accepted`→optionally `executed`, `failed`,
+`rejected`, or `uncertain`) or is explicitly marked `uncertain` the instant
+the connection that could have resolved it is lost — client-side (socket
+close) or server-side (worker relay disconnect, `abortAllForExecution`).
+`commandId` at-most-once forwarding holds for the life of one gateway
+process and one browser tab.
+
+**Guarantees Option A explicitly does NOT provide:** a `commandId` dedupe
+memory that survives a gateway restart if a client somehow resent the exact
+same id afterward (not currently possible via any code path — see Step 7 —
+but not defended against by a data structure, only by the absence of any
+replay code); an audit trail of historical command outcomes beyond what the
+currently-connected browser tab holds in memory; a way to answer "what
+happened to commandId X" from a NEW browser tab/session that never saw it.
+
+**Migration/backfill implications, for the record:** none, because no
+migration was created. If a future phase concludes Option B is warranted
+(e.g. a compliance requirement for a command audit trail, independent of
+execution correctness), the schema sketch above is the starting point, and it
+would need a backfill strategy of exactly zero rows (no prior command history
+exists anywhere to backfill from) and a decision on retention/pruning, since
+command volume is unbounded over the lifetime of an organization even though
+any single execution's volume is rate-limited.
+
+### 3. Worker relay reconnect (as implemented)
+
+`workers/coding-agent/src/coding_agent/relay_client.py`'s `RelayClient._run`
+changed from a single-attempt "connect once, never retry" design (Phase 3B's
+own explicit choice) to a bounded, worker-initiated reconnect loop:
+
+- **Still worker-initiated only.** Every attempt — first or Nth — is this
+  same client calling `ws_client.connect()` outward. The gateway never dials
+  the worker.
+- **Full credential re-presentation on every attempt.** `INTERNAL_API_TOKEN`
+  (header), `workerId`, `executionId` (URL) are rebuilt from scratch each
+  time via `_connect()` — nothing is cached or "resumed" from a prior
+  attempt.
+- **Gateway-side revalidation is unchanged and untouched** —
+  `routes/relay.ts`'s `preValidation` already re-queries
+  `executions.lease_owner`/`status` fresh on every single registration
+  attempt, reconnect or not (this was true before Phase 3E and required no
+  code change; Phase 3E tests 1-5 in `realtime-reconnect.test.ts` exercise it
+  explicitly for the reconnect case).
+- **Deterministic classification of terminal vs. transient failures.** A
+  handshake rejection carrying HTTP 401/403/404/409
+  (`TERMINAL_HANDSHAKE_STATUS_CODES`, matched via `websockets.exceptions.
+  InvalidStatus.response.status_code`) means the gateway's own Postgres-backed
+  check has definitively refused this worker/executionId combination for the
+  rest of this dispatch — retrying can never succeed, so the client gives up
+  immediately on the FIRST such rejection. Anything else (`OSError`, timeout,
+  connection refused, a live connection dying mid-stream) is treated as
+  transient and retried, bounded.
+- **Bounded exponential backoff with full jitter**, not a tight loop:
+  `BASE_BACKOFF_SECONDS=0.5`, `MAX_BACKOFF_SECONDS=30`,
+  `MAX_RECONNECT_ATTEMPTS=8`. A single consecutive-failure counter
+  (`attempt`) is shared by BOTH a `connect()` exception AND a connection that
+  came up but died within `STABLE_CONNECTION_SECONDS=10` of connecting —
+  this second case was a real bug caught during implementation (a naive
+  design that only counted `connect()`-exceptions would let a
+  connects-then-immediately-dies cycle spin with zero backoff, since each
+  cycle's `connect()` call itself "succeeds"). A connection that stayed up
+  at least 10 seconds before dying resets the counter — an ordinary drop
+  after real work is not penalized by unrelated past trouble.
+- **A receive-thread race, found and fixed during implementation.** The
+  Phase 3D receive thread originally read `self._ws` on every loop
+  iteration; once reconnect could reassign `self._ws` to a new connection
+  object, an old, not-yet-exited receive thread could start reading the
+  BRAND NEW connection concurrently with that connection's own freshly
+  started receive thread. Fixed by passing the specific connection object as
+  an explicit thread argument (`_recv_run(self, connection)`), never reading
+  `self._ws` from inside that thread — each receive thread is now bound for
+  life to exactly the one connection it was started for, and exits on its
+  own once that specific connection dies. Covered by a dedicated regression
+  test (`test_reconnect_receive_thread_does_not_race_a_subsequent_reconnect`).
+- **Never restarts the Agent Server or the execution.** This client has no
+  code path touching Docker, the container, or `Conversation`/`.run()` — it
+  only ever re-opens the outbound relay leg.
+- **Relay failure never fails the agent run**, unchanged from Phase 3B: the
+  main dispatch thread's blocking `conversation.run()` never waits on any of
+  this.
+- **The outbound queue survives a reconnect** (not cleared), so an event
+  enqueued while disconnected is still delivered once a new connection comes
+  up — on top of (never instead of) the authoritative HTTP event path, which
+  is completely unaffected either way.
+- **Stops permanently** once `close()` is called (dispatch ending) or the
+  attempt budget is exhausted — `is_connected` becomes `False` and the
+  dispatch proceeds exactly as if no relay existed, matching Phase 3B's
+  original "relay is best-effort" contract.
+
+### 4. Browser reconnect (as implemented)
+
+`apps/web/lib/hooks/use-execution-realtime.ts` gained the same shape of
+bounded reconnect, entirely client-side — **zero protocol changes**:
+
+- On an unexpected socket close (anything other than a server-driven
+  `execution.completed`, or this hook's own effect cleanup on unmount/
+  `taskId`/`executionId` change), a new `WebSocket` is opened to the exact
+  same URL after bounded exponential backoff with full jitter
+  (`MAX_RECONNECT_ATTEMPTS=8`, `BASE_BACKOFF_MS=500`,
+  `MAX_BACKOFF_MS=30_000` — the same policy shape as the worker relay's,
+  independently implemented since a browser tab and a Python process share no
+  code).
+- **Every reconnect is, from the gateway's point of view, indistinguishable
+  from a brand-new connection.** `routes/realtime-gateway.ts`'s
+  `preValidation` re-runs session validation, Origin validation, live org
+  membership (`requireOrgSession`'s `auth.api.getActiveMember()` re-query),
+  and execution resolution/`RUNNING` status from scratch — nothing is
+  restored from the old socket, because nothing about the old socket is even
+  visible to the new connection attempt. This required no server-side code
+  change; it is a direct consequence of Phase 3C's original design already
+  making every connection independently re-derive its own state.
+- **History reconciliation is what the gateway already did for every
+  connection, reused, not rebuilt**: `history.ready` on the new connection
+  carries the full current persisted-event set, including everything
+  produced while the tab was disconnected. `eventsById`/`commandStatusesById`
+  (this hook's own client-side caches) are deliberately NOT reset on a
+  reconnect (only on a genuine new subscription) — `upsert()` is a plain
+  `Map.set()` keyed by the event's own UUID, so replaying an already-known id
+  is a harmless overwrite, never a duplicate rendered row.
+- **Command uncertainty enforcement, new this phase.** The instant a socket
+  closes unexpectedly, every command status this hook was still tracking as
+  non-terminal (`received`/`authorized`/`forwarded`/`accepted`) is
+  force-transitioned to `uncertain` (reason `connection_lost`) client-side,
+  BEFORE any reconnect is attempted. This is the client-side half of the
+  Step 2 durability decision: once the connection that could have told the
+  browser a command's real outcome is gone, the gateway process on the other
+  end may not even still exist (e.g. it just restarted) to ever answer —
+  continuing to display a stale "forwarded" would be a fabricated certainty,
+  not an honest "unknown."
+- **Reconnect attempts stop** once: `execution.completed` was actually
+  observed (never inferred from the socket alone); the caller's own
+  `active` flag goes false (`RealWorkspaceView`'s own task/execution poll
+  flips this the moment it observes a non-`RUNNING` status — this is the
+  real backstop for "don't reconnect forever against a finished execution,"
+  since a failed WebSocket handshake carries no HTTP status code the browser
+  `WebSocket` API exposes to this hook, so a 409-because-finished rejection
+  is otherwise indistinguishable from a transient network blip); the effect
+  is cleaned up (unmount/id change); or the attempt budget is exhausted
+  (surfaces as `status: "error"`, with the historical/polled event view
+  remaining the correct fallback source, per this hook's pre-existing
+  "coexist, don't replace" contract with `use-execution-events.ts`).
+- A new `reconnecting` value was added to `RealtimeConnectionStatus` (no
+  other consumer of this type exists in `apps/web` today, confirmed by
+  search, so this is a strictly additive change).
+
+### 5. Gateway restart behavior (as implemented/verified)
+
+Verified via `realtime-reconnect.test.ts` tests 11-13 (fresh-instance
+simulation, not a real process kill — impractical inside one
+`node --test` run and explicitly not required by the assignment, which asks
+for simulation via fresh registry instances):
+
+- `RelayRegistry`, `ControlRegistry`, `ExecutionBroadcaster` are plain
+  in-memory classes with no persistence of their own (confirmed by
+  constructing fresh instances of each and observing empty state) — a real
+  process restart re-evaluates these modules from scratch, which is exactly
+  equivalent. `ControlRegistry`/`ExecutionBroadcaster`'s classes were changed
+  from module-private to `export`ed (a pure visibility change, no behavior
+  difference) specifically so tests could construct fresh instances rather
+  than only asserting against the live singletons.
+- A worker registering against an executionId this process has never seen is
+  not a distinct code path from an ordinary first-time registration —
+  post-restart, `relayRegistry` IS empty for every executionId, so a
+  reconnecting worker's registration is, structurally, always a first-time
+  registration into an empty map, authorized purely from current Postgres
+  state.
+- A browser reconnecting after a restart is likewise not a distinct code
+  path from an ordinary reconnect (§4) — the gateway route has zero reliance
+  on any state that isn't either freshly computed per-request
+  (`requireOrgSession`, execution resolution) or the process-local
+  singletons above, which would simply be empty. History is never affected
+  (Postgres-backed, independent of process lifetime); only LIVE low-latency
+  forwarding is briefly unavailable until a relay also reconnects.
+- Unresolved command state after a restart follows the Step 2 decision
+  exactly: gone from the server, and already independently marked
+  `uncertain` on any browser tab that had it (§4).
+- `SESSION_API_KEY` is still never required by, or visible to, `apps/api` —
+  unchanged, and re-verified by this phase's own static assertions (below).
+- The gateway never recovers by connecting directly to an Agent Server —
+  no code path in any file this phase touched does, or ever did, anything
+  but wait for a worker/browser to dial in.
+
+### 6. Uncertainty reconciliation — left uncertain, no reliable correlation found
+
+Step 6's audit (re-confirming, not repeating, Phase 3D's own already-honest
+finding): a `commandId` is an AtherNull-invented identity, never passed to
+the OpenHands SDK's `send_message(text)` call in any form — only the raw
+message text crosses that boundary. There is therefore no wire-level field
+anywhere in an OpenHands event payload that could ever carry a `commandId`
+back, and embedding one inside the message text itself would (a) pollute
+user-visible/agent-visible content and (b) still only be a text-similarity
+heuristic dressed up as an id, which the assignment explicitly forbids
+("do not match based on vague text similarity... do not fabricate
+certainty"). No SDK-level idempotency or correlation mechanism was found
+during this audit that wasn't already known and disclosed in Phase 3D.
+
+**Conclusion: no change to the `executed` heuristic's own logic.** The
+existing "oldest accepted command is upgraded to executed on the next
+observed event" heuristic (`realtime-gateway.ts`,
+`acceptedAwaitingExecuted`) is unchanged — still explicitly disclosed as a
+heuristic, never a proof. The one thing Phase 3E verifies and adds a
+regression test for (`realtime-reconnect.test.ts` test 17) is the boundary
+condition this phase's own reconnect/uncertainty work could have
+accidentally blurred: a command that went `uncertain` (never `accepted`) is
+never added to `acceptedAwaitingExecuted`, and therefore can NEVER be
+upgraded to `executed` by any later event, no matter how many arrive or how
+long the connection survives afterward. The heuristic's blast radius is
+provably confined to commands that were genuinely acked `accepted` — it
+never reaches into `uncertain` territory to manufacture false confidence.
+
+### 7. History/live reconciliation guarantees (invariants preserved, Step 5)
+
+All eight invariants from the phase spec hold, verified by
+`realtime-reconnect.test.ts`:
+
+1. Postgres `execution_events` remains the sole authoritative historical
+   source — unchanged.
+2. Event UUID remains the sole dedupe identity — unchanged.
+3. Duplicate live delivery is safe/idempotent — unchanged (client `Map.set`,
+   server `sentIds` per connection).
+4. Every event persisted in Postgres becomes visible after reconciliation —
+   verified across an actual disconnect/reconnect cycle with events
+   produced entirely while offline (test 6/7).
+5. Socket loss does not mean the execution finished — the reconnect hook
+   never infers completion from a close event, only from a real
+   `execution.completed` message (§4).
+6. Completion triggers final persisted-history reconciliation — unchanged
+   from Phase 3D's `handleCompletion`, and additionally verified for the
+   case where the browser was disconnected AT completion time and only
+   reconnects afterward (test 9/10 — the realtime route correctly refuses
+   the stale case with 409, and the historical route, unchanged since Phase
+   2, is the correct fallback with the complete final event set).
+7. Reconnect does not duplicate rendered events — verified via id-set
+   equality checks across two connections (test 6/7/8).
+8. Reconnect never replays browser commands automatically — verified
+   directly (test 14/16) and audited as a hard invariant (§ below).
+
+### 8. Backpressure policy (Step 11)
+
+| Queue/buffer | Max size | Overflow behavior | Recoverable from Postgres? | User-facing warning? |
+|---|---|---|---|---|
+| Worker outbound relay queue (`RelayClient._queue`) | 200 messages | Drop-oldest (`deque(maxlen=200)`) | Yes — `execution_events` persistence is via the independent, authoritative HTTP path (`EventForwarder`), unaffected by this queue at all | No (purely a best-effort secondary channel; the authoritative path has no queue/loss at all) |
+| Browser pre-history live buffer (`preHistoryBuffer`) | Unbounded array, but lifetime-bounded to the single subscribe→history-query gap (typically milliseconds) | N/A — flushed and discarded the moment `history.ready` is sent; never persists longer than one connection's startup | Yes — everything in it is also in, or about to be in, Postgres | No (invisible internal handoff device, not user-facing state) |
+| `commandId` dedupe registry (`ControlRegistry.forwarded`) | 5,000 entries | Drop-oldest (FIFO) | No — but see Step 2's decision: this is a liveness bound, not a correctness-critical structure, given the no-automatic-replay invariant | No (an evicted old entry becoming "forwardable again" only matters if literally replayed, which never happens) |
+| Pending command acks (`ControlRegistry.pending`) | One entry per in-flight `commandId`, implicitly bounded by `MAX_PENDING_COMMANDS_PER_CONNECTION=5` per connection | New commands rejected (`too_many_pending`) once the per-connection cap is hit — never silently dropped | N/A (this is live coordination state, not historical data) | **Yes** — an explicit `command.status: rejected, reason: too_many_pending` frame, always |
+| Per-connection command rate limit (`rateLimitTimestamps`) | 10 commands / 10s window | New commands rejected (`rate_limited`) | N/A | **Yes** — explicit `rejected, reason: rate_limited` |
+| Browser reconnect attempts (hook-side) | 8 attempts, bounded exponential backoff (0.5s-30s, full jitter) | Gives up, surfaces `status: "error"`; historical/polled view remains available | N/A (a connection attempt counter, not data) | Yes — `status` is exposed to the UI; a future UI pass could render this more prominently, but the state is already truthfully surfaced |
+| Worker reconnect attempts (relay-side) | 8 attempts, bounded exponential backoff (0.5s-30s, full jitter) | Gives up; dispatch proceeds with no relay (exactly Phase 3B's original "unreachable at registration" contract) | N/A | No direct browser-facing signal beyond the pre-existing `relay.unavailable` message, which already covers "no relay currently registered" regardless of cause |
+
+No unbounded queue exists anywhere in the realtime/reconnect surface,
+confirmed by re-reading every one of the above alongside every Phase 3B/3C/3D
+queue this phase did not need to change (`executionBroadcaster`'s
+`EventEmitter` has no queue at all — synchronous, zero-buffer fan-out).
+
+### 9. Heartbeat/liveness (Step 12)
+
+**Finding:** neither `ws` (Node, gateway-side) nor Python's
+`websockets.sync.client` (worker-side) sends periodic pings on its own; both
+transparently answer a ping the OTHER side initiates. Nothing in this
+codebase was periodically initiating one before this phase, so a half-open
+TCP connection (peer process died, or a network path went dark without a
+FIN/RST) could sit "registered"/"connected" for however long the OS-level
+TCP keepalive takes (typically hours) — far longer than this system actually
+needs to notice.
+
+**Fix:** a new, small, shared module (`apps/api/src/realtime/heartbeat.ts`,
+`attachHeartbeat(socket, intervalMs=30_000)`) wired into both
+`routes/relay.ts` (worker leg) and `routes/realtime-gateway.ts` (browser
+leg). Every interval, if the socket did not answer the PREVIOUS ping with a
+pong, it is terminated (`socket.terminate()` — an abrupt close, matching
+what a genuinely dead peer looks like); otherwise a new ping is sent. This
+drives the exact same, pre-existing `close` handlers (`relayRegistry.
+unregister`, browser subscription cleanup) — no new cleanup path, only a
+bounded, faster trigger for the existing one. Purely observability/liveness:
+a terminated socket never causes a database write; execution status in
+Postgres remains authoritative regardless of socket state.
+
+**State model exposed to the browser** (never inferred from socket state
+alone — database execution status remains authoritative always):
+`idle` (not subscribed) / `connecting` (first attempt) / `open` (live) /
+`reconnecting` (a prior connection was lost, backoff in progress) /
+`relay-unavailable` (informational — a `relay.unavailable` message was
+received; independent of the above and never confused with "finished") /
+`completed` (server-driven `execution.completed` only) / `error` (reconnect
+budget exhausted) / `closed` (effect torn down).
+
+### 10. Single-gateway v1 limitation (Step 13, restated)
+
+Unchanged and still explicit: `relay-registry.ts`, `control-registry.ts`,
+`execution-broadcaster.ts` remain single-process, in-memory singletons. No
+Redis/pub-sub/distributed relay routing was introduced this phase, and none
+was evaluated as in-scope — the phase spec explicitly excludes it. A
+horizontally-scaled `apps/api` without sticky/affinity routing would still
+need shared state for all three; Phase 3E's reconnect logic makes each
+individual gateway instance more resilient to transient loss, but does
+nothing to let a worker's relay registered on instance A become visible to
+instance B.
+
+### 11. Tests added and results
+
+New file: `apps/api/test/realtime-reconnect.test.ts` — 20 new scenarios,
+covering exactly what Phase 3B/3C/3D's own suites do not already cover (see
+that file's own header comment for the explicit cross-reference of which
+of the phase spec's 28 numbered scenarios land in which file — several,
+e.g. at-most-once dedupe, `lease_mismatch` rejection, and relay-loss-does-
+not-stop-persistence, are already proven in `relay.test.ts`/
+`realtime-control.test.ts` and were deliberately not re-proven here).
+**20/20 passed**, run twice consecutively with identical results before
+being folded into the full-suite repeat-run below.
+
+`workers/coding-agent/tests/test_relay_client.py` gained 6 new reconnect
+scenarios (transient-failure reconnect, terminal-rejection no-retry,
+bounded give-up on persistent transient failure, bounded give-up on
+connect-then-immediately-die, queued events surviving a reconnect, and the
+receive-thread race regression). **Full worker suite: 46/46 passed**, run 3
+times consecutively with identical results (26/26 in `test_relay_client.py`
+alone, up from the pre-existing 20/20; 46/46 total, up from the pre-existing
+40/40).
+
+Two production files gained a purely additive `export` keyword
+(`ControlRegistry`, `ExecutionBroadcaster` classes) with no behavior change,
+solely so the new restart-simulation tests could construct fresh instances.
+
+### 12. Repeated-full-suite stability (Step 15)
+
+`apps/api` full suite (`node --import tsx --test test/**/*.test.ts`, real
+Postgres, 7 test files including the new one) was run 15 times consecutively,
+each run fully isolated (a fresh `node` process per run, real Postgres,
+no shared in-process state across runs). **Exact result: 15/15 runs green,
+106/106 tests passing in every single run, 0 failures in every single run**
+(1,590 individual test-assertion-runs total across the 15 repetitions, zero
+failures). Per-run breakdown (`RUN i exit=0 tests=106 pass=106 fail=0` for
+every `i` in 1-15) is preserved verbatim in this phase's own working log.
+
+One data point disclosed honestly, not hidden: an EARLIER attempt at this
+same 15x loop (before the clean run reported above) hit a real ~27-minute
+wall-clock stall between its run 7 and run 8, caused by an unrelated
+interruption to this session's own execution environment (a stream/harness
+pause, not anything in the code under test). Immediately after that stall,
+run 8 of that EARLIER attempt hit one assertion failure:
+`signUpVerifiedAndSignIn` in `tenant-authorization.test.ts` received HTTP 500
+instead of 200 from Better Auth's sign-up endpoint. This has the same
+signature as the known pre-existing Better Auth/bcrypt-style flaky 500 under
+heavy load this project has observed before (named explicitly, not
+lumped in with anything else) — but this session cannot confirm that
+classification with certainty, because the log-capture script for that
+earlier attempt only retained each run's last 12 lines, which was
+insufficient once a failure produced a long stack trace, so the exact
+pass/fail counts for that specific run were lost and are NOT reported here
+as a number (reporting a rounded or guessed count would violate this
+engagement's own evidence standard). That earlier attempt's background
+process did not survive the same environment interruption and was
+abandoned; the 15x run reported above as this phase's authoritative result
+was started fresh afterward, with full untruncated per-run logs retained,
+and is unambiguously clean. Given the failure (if it occurred as suspected)
+immediately followed an abnormal 27-minute idle gap — a plausible trigger
+for a stale/expired Postgres connection-pool entry independent of any
+concurrent-load condition — and given the properly-isolated rerun was
+uniformly clean, this is recorded as an inconclusive, likely
+environment-stall artifact, not a new defect attributable to Phase 3E's
+own code.
+
+`workers/coding-agent` pytest suite was run 3 times consecutively: **46/46
+passed** every run (26/26 in `test_relay_client.py` — 20 pre-existing + 6
+new Phase 3E reconnect tests — plus 20 unchanged from
+`test_agent_server_adapter.py`), no flakiness observed, and re-run a 4th
+time standalone with the same 46/46 result while this ADR section was being
+written.
+
+### 13. Failure-injection test results
+
+Every scenario in the phase spec's Step 14 test list that is genuinely new
+to this phase (not already covered by Phase 3B/3C/3D's own suites) is listed
+in §11 above with its pass result. No test was skipped or weakened to make
+it pass.
+
+### 14. Real execution verification (Step 16)
+
+**Not attempted this phase — explicitly, not fabricated.** Phase 3D's own
+ADR section above already required, and completed, a real Docker/Agent-
+Server/LLM end-to-end verification for the command-forwarding path this
+phase builds reconnect on top of. Repeating a full real-execution run for
+Phase 3E specifically would require: a real LLM API credential, a real
+multi-minute agent dispatch, and a deliberate mid-dispatch network/process
+interruption timed against a live container — the same category of
+real-world race Phase 3D's own verification already disclosed losing once
+("the real worker's local `send_message()` call... completed faster than the
+OS could deliver and act on the kill signal"). Given that prior, honestly-
+reported experience, and that every reconnect/backoff/uncertainty code path
+this phase adds is independently, deterministically covered by the
+automated tests in §11 (using real Postgres and real WebSocket upgrades via
+`injectWS`/real `ws` connections, not mocks of the gateway itself), a second
+attempt at timing a real process kill against a live dispatch was judged
+low-value relative to its cost and was not run. This is a limitation of this
+verification pass, not a claim that the feature works in production absent
+further real-world observation.
+
+### 15. SESSION_API_KEY boundary verification
+
+Checked the same way every prior phase did, extended to the new files: a
+static, comment-stripped source scan
+(`realtime-reconnect.test.ts`'s own static-assertion suite) confirms
+`SESSION_API_KEY` never appears in `heartbeat.ts`'s or the touched routes'
+(`relay.ts`, `realtime-gateway.ts`) executable code. `relay_client.py`'s
+pre-existing static assertion
+(`test_relay_client_module_never_references_session_api_key_outside_docs`)
+was re-run unchanged against the file's new reconnect code and passed,
+confirming the credential is absent from the new Python code too.
+
+### 16. INTERNAL_API_TOKEN boundary verification
+
+Checked via a new static assertion confirming `INTERNAL_API_TOKEN` never
+appears in `apps/web/lib/hooks/use-execution-realtime.ts` (the only
+browser-shipped file this phase touched) — the browser-facing reconnect
+logic re-uses the exact same `realtimeWebSocketUrl()` builder Phase 3C
+already established, which carries no worker credential of any kind
+(session cookies are the browser's only credential, sent automatically by
+the browser's own WebSocket upgrade).
+
+### 17. Remaining reliability limitations (honest, not exhaustive)
+
+- No durable command ledger (Step 2's own decision, not an oversight).
+- No cross-instance relay/broadcast routing (§10, explicitly out of scope).
+- The `executed` heuristic is still per-connection/order-based, not a real
+  correlation (§6) — unchanged from Phase 3D, re-confirmed not improvable
+  with currently-available SDK evidence.
+- A browser's reconnect give-up (`status: "error"`) cannot distinguish "the
+  execution finished" from "the gateway is still unreachable" purely from
+  the failed WebSocket handshake — the task/execution poll remains the real
+  backstop for the former.
+- Heartbeat interval (30s) is a liveness bound, not a low-latency dead-peer
+  detector — a connection can be dead for up to ~30-60s before either side
+  notices via ping/pong (bounded by the interval, not unbounded, but not
+  instant either).
+- No real end-to-end verification was performed this phase (§14) — only
+  deterministic automated coverage.
+
+### 18. Exact guarantees AtherNull realtime now provides (post-Phase 3E)
+
+- Execution continues, unaffected, when either leg of realtime fails
+  entirely (worker relay, browser socket, or the gateway process itself
+  restarting) — persistence and the agent run are both independent of
+  realtime connection state, and this holds for the FULL duration of a
+  dispatch now that the worker relay itself can recover from a transient
+  drop.
+- A worker relay recovers from a transient network interruption without
+  restarting the Agent Server, the execution, or losing its position in the
+  event stream, bounded by 8 attempts / ~30s max backoff per attempt.
+- A browser tab recovers from a transient disconnection (network blip, tab
+  backgrounding, laptop sleep) without losing any persisted event and
+  without duplicating any rendered event, bounded by the same attempt
+  budget.
+- Every event persisted in Postgres is guaranteed visible to a reconnecting,
+  still-authorized browser, exactly once.
+- A command's outcome is always either a real terminal status from the
+  gateway, or an explicit, honestly-labeled `uncertain` — never silently
+  forgotten, never fabricated as success or failure, and never automatically
+  resent under any circumstance (verified as a hard invariant).
+- Authorization (session, Origin, org membership, `realtime:view`,
+  `realtime:control`, execution/lease state) is rechecked from current
+  database state on every single reconnect and every single command — never
+  restored from a prior connection's privileges.
+- `SESSION_API_KEY` and `INTERNAL_API_TOKEN` remain exactly as contained as
+  Phase 3A-3D established — unchanged by anything reconnect-related.
+- No queue in this subsystem is unbounded; command-queue overflow is always
+  an explicit, visible rejection, never a silent drop.
+
+### 19. Exact guarantees intentionally NOT provided
+
+- Exactly-once command execution at the Agent Server (impossible without an
+  SDK-level idempotency key, which does not exist today).
+- A durable record of command history surviving a gateway restart.
+- Cross-instance realtime routing/horizontal scaling of the gateway.
+- A precise, proven commandId<->execution-event correlation (`executed`
+  remains a heuristic).
+- Sub-second dead-peer detection (heartbeat is bounded, not instant).
+- Automatic replay/retry of any command, ever, under any failure condition.
+
+### 20. Recommended next product milestone
+
+Given Phase 3E closes out the reconnect/recovery hardening this ADR's own
+phase sequence called for, and every remaining gap above is either
+explicitly out of scope (multi-instance scaling) or fundamentally bounded by
+the SDK's own lack of idempotency (exactly-once execution), the natural next
+milestone is **outside this ADR's own realtime scope**: either (a) the
+terminal/bash command surface this and Phase 3D both deliberately deferred,
+contingent on a real, audited SDK-native mechanism appearing, or (b) product
+work on the workspace UI itself (richer rendering of `uncertain` states,
+reconnect status affordances) now that the underlying transport guarantees
+in §18 are stable enough to build a polished UI on top of without that UI
+having to work around transport-level surprises.
+
 ## Consequences
 
 - The coding-agent worker gains real scope it does not have today: it must

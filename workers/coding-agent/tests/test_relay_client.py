@@ -57,6 +57,14 @@ class FakeConnection:
         self.sent.append(json.loads(message))
 
     def recv(self, timeout: float | None = None):
+        if self.closed:
+            # Real `websockets` semantics: recv() on an already-closed
+            # connection raises (ConnectionClosed) rather than ever
+            # returning/timing out — this is what actually terminates a
+            # receive thread bound to a connection the outer reconnect loop
+            # has moved on from (see relay_client.py's `_run`/`_recv_run`,
+            # ADR-0007 Phase 3E).
+            raise ConnectionError("recv on a closed connection")
         with self._inbound_lock:
             if self._inbound:
                 return self._inbound.pop(0)
@@ -405,6 +413,193 @@ def test_relay_client_module_never_references_session_api_key_outside_docs() -> 
     assert "SESSION_API_KEY" in source, "sanity: the module docstring should still explain the invariant"
     code_only = _strip_python_comments_and_docstrings(source)
     assert "SESSION_API_KEY" not in code_only, "relay_client.py's executable code must never reference SESSION_API_KEY"
+
+
+# --- ADR-0007 Phase 3E: bounded worker relay reconnect ---------------------
+# Every attempt here uses a fake `connect()` (monkeypatched onto the module,
+# same convention as `make_relay` above) — no real network, no real
+# `websockets` handshake — so these tests run in milliseconds/seconds, not
+# by actually waiting out MAX_BACKOFF_SECONDS-scale delays.
+
+
+class _FakeInvalidStatusResponse:
+    def __init__(self, status_code: int) -> None:
+        self.status_code = status_code
+
+
+def _make_invalid_status(status_code: int) -> "relay_module.InvalidStatus":
+    return relay_module.InvalidStatus(_FakeInvalidStatusResponse(status_code))
+
+
+def test_reconnects_after_a_transient_connect_failure(monkeypatch) -> None:
+    """A transient failure (connection refused) followed by a real
+    connection must be retried — this is the core Phase 3E behavior Phase 3B
+    explicitly did not have ("no reconnect-on-drop")."""
+    good_conn = FakeConnection()
+    attempts = {"n": 0}
+
+    def fake_connect(url, **kwargs):
+        attempts["n"] += 1
+        if attempts["n"] == 1:
+            raise OSError("connection refused")
+        return good_conn
+
+    monkeypatch.setattr(relay_module.ws_client, "connect", fake_connect)
+    relay = RelayClient("http://localhost:3001", "test-token", "worker-1", "exec-1", log=lambda *_: None)
+    relay.start()
+
+    assert relay.connected_within(5.0), "must eventually connect after one transient failure"
+    assert attempts["n"] == 2, "exactly one failed attempt, then one successful attempt"
+    assert relay.reconnect_count == 1
+
+    relay.close()
+
+
+def test_terminal_handshake_rejection_stops_reconnecting_immediately(monkeypatch) -> None:
+    """A 409 (lease no longer owned / not RUNNING) — or 401/403/404 — is a
+    definitive, Postgres-backed rejection from the gateway (routes/relay.ts's
+    preValidation). Retrying it can never succeed for this dispatch, so the
+    client must give up on the FIRST such rejection, never retry it."""
+    attempts = {"n": 0}
+
+    def fake_connect(url, **kwargs):
+        attempts["n"] += 1
+        raise _make_invalid_status(409)
+
+    monkeypatch.setattr(relay_module.ws_client, "connect", fake_connect)
+    relay = RelayClient("http://localhost:3001", "test-token", "worker-1", "exec-1", log=lambda *_: None)
+    relay.start()
+
+    assert relay.connected_within(1.0) is False
+    # Give the background thread ample time to have retried if (incorrectly)
+    # it were treating this as transient — it must not have.
+    time.sleep(1.0)
+    assert attempts["n"] == 1, "a terminal handshake rejection must never be retried"
+    assert relay.reconnect_count == 0
+
+    relay.close()  # must not raise or hang
+
+
+def test_gives_up_after_max_reconnect_attempts_on_persistent_transient_failure(monkeypatch) -> None:
+    """A connection that never succeeds (always a transient-looking failure)
+    must not retry forever — bounded, not a tight infinite loop."""
+    # Shrink the backoff bounds for this test only, so asserting the loop
+    # actually gives up doesn't require waiting out production-scale
+    # (up to ~90s worst case) backoff delays.
+    monkeypatch.setattr(relay_module, "BASE_BACKOFF_SECONDS", 0.01)
+    monkeypatch.setattr(relay_module, "MAX_BACKOFF_SECONDS", 0.05)
+
+    attempts = {"n": 0}
+
+    def fake_connect(url, **kwargs):
+        attempts["n"] += 1
+        raise OSError("connection refused")
+
+    monkeypatch.setattr(relay_module.ws_client, "connect", fake_connect)
+    relay = RelayClient("http://localhost:3001", "test-token", "worker-1", "exec-1", log=lambda *_: None)
+    relay.start()
+
+    # The background thread must terminate on its own once it gives up —
+    # join (not just an is_connected check) proves the retry loop actually
+    # exited rather than merely being between backoff sleeps.
+    relay._thread.join(timeout=10.0)
+    assert not relay._thread.is_alive(), "the reconnect loop must give up and exit on its own, not retry forever"
+    assert attempts["n"] == relay_module.MAX_RECONNECT_ATTEMPTS + 1, (
+        "exactly one initial attempt plus MAX_RECONNECT_ATTEMPTS retries, never unbounded"
+    )
+    assert relay.is_connected is False
+
+    relay.close()  # must still be safe to call after the loop already exited
+
+
+def test_a_connection_that_dies_immediately_after_connecting_is_also_bounded(monkeypatch) -> None:
+    """A connection that succeeds at the handshake but is torn down on the
+    very next send (e.g. the gateway accepts the upgrade and then the
+    underlying TCP path dies) must count toward the SAME bounded retry
+    budget as an outright connect failure — otherwise a connect-then-die
+    cycle could spin as a tight loop forever, never hitting the
+    connect-exception branch's own attempt counter."""
+    monkeypatch.setattr(relay_module, "BASE_BACKOFF_SECONDS", 0.01)
+    monkeypatch.setattr(relay_module, "MAX_BACKOFF_SECONDS", 0.05)
+
+    attempts = {"n": 0}
+
+    def fake_connect(url, **kwargs):
+        attempts["n"] += 1
+        # Every connection immediately fails its first real send (fail_after=0).
+        return FakeConnection(fail_after=0)
+
+    monkeypatch.setattr(relay_module.ws_client, "connect", fake_connect)
+    relay = RelayClient("http://localhost:3001", "test-token", "worker-1", "exec-1", log=lambda *_: None)
+    relay.start()
+    relay.send_event({"id": "evt-1", "kind": "K", "occurredAt": "t", "payload": {}})
+
+    relay._thread.join(timeout=10.0)
+    assert not relay._thread.is_alive(), "connect-then-immediately-die must also give up, not loop forever"
+    assert attempts["n"] <= relay_module.MAX_RECONNECT_ATTEMPTS + 1
+
+    relay.close()
+
+
+def test_queued_events_survive_a_reconnect(monkeypatch) -> None:
+    """An event enqueued while disconnected must still be delivered once a
+    reconnect succeeds — the outbound queue is not cleared across
+    reconnects."""
+    good_conn = FakeConnection()
+    attempts = {"n": 0}
+
+    def fake_connect(url, **kwargs):
+        attempts["n"] += 1
+        if attempts["n"] == 1:
+            raise OSError("connection refused")
+        return good_conn
+
+    monkeypatch.setattr(relay_module.ws_client, "connect", fake_connect)
+    relay = RelayClient("http://localhost:3001", "test-token", "worker-1", "exec-1", log=lambda *_: None)
+    relay.start()
+    # Enqueued before the relay has ever successfully connected.
+    relay.send_event({"id": "evt-during-outage", "kind": "K", "occurredAt": "t", "payload": {}})
+
+    assert relay.connected_within(5.0)
+    assert _wait_until(lambda: any(m.get("eventId") == "evt-during-outage" for m in good_conn.sent))
+
+    relay.close()
+
+
+def test_reconnect_receive_thread_does_not_race_a_subsequent_reconnect(monkeypatch) -> None:
+    """Regression coverage for the exact race the Phase 3E implementation
+    comment calls out: a receive thread must be bound to the specific
+    connection object it was started for, never re-read `self._ws`, or a
+    slow-to-notice-death old thread could start reading a brand new
+    connection concurrently with that new connection's own receive thread."""
+    connections = [FakeConnection(), FakeConnection()]
+    attempts = {"n": 0}
+
+    def fake_connect(url, **kwargs):
+        conn = connections[attempts["n"]]
+        attempts["n"] += 1
+        return conn
+
+    monkeypatch.setattr(relay_module.ws_client, "connect", fake_connect)
+    relay = RelayClient("http://localhost:3001", "test-token", "worker-1", "exec-1", log=lambda *_: None)
+    relay.start()
+    assert relay.connected_within(2.0)
+    first_recv_thread = relay._recv_thread
+
+    # Kill the first connection's send path (simulating a drop) and let the
+    # background thread reconnect onto the second fake connection.
+    connections[0].fail_after = 0
+    relay.send_event({"id": "evt-1", "kind": "K", "occurredAt": "t", "payload": {}})
+    assert _wait_until(lambda: attempts["n"] == 2, timeout=15.0), "must reconnect onto the second connection"
+    assert _wait_until(lambda: relay.is_connected, timeout=5.0)
+
+    # The old receive thread (bound to connections[0]) must have exited on
+    # its own — never still running and never the same thread object driving
+    # the new connection.
+    assert _wait_until(lambda: not first_recv_thread.is_alive(), timeout=5.0)
+    assert relay._recv_thread is not first_recv_thread
+
+    relay.close()
 
 
 def test_relay_wiring_in_agent_server_adapter_never_passes_the_session_key_to_the_relay() -> None:

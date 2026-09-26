@@ -46,7 +46,11 @@ export interface BroadcastExecutionEvent {
 
 export type ExecutionCompletionOutcome = "success" | "failure";
 
-class ExecutionBroadcaster {
+// Exported (ADR-0007 Phase 3E, purely a visibility change) for the same
+// restart-simulation reason as ControlRegistry above — a fresh instance is
+// exactly what this singleton looks like immediately after a real process
+// restart.
+export class ExecutionBroadcaster {
   private readonly emitter = new EventEmitter();
 
   constructor() {
