@@ -880,7 +880,415 @@ Server or any `/internal/*` route) — using the same low-cost model Phases
   afterward, leaving only the persistent dev Postgres container running (its
   standing baseline state, unrelated to this verification).
 
-Phases 3D–3E remain not started.
+## Phase 3D status: complete (2026-09-26)
+
+Phase 3D (authorized browser -> agent control) has landed. Scope held to the
+plan: `apps/api` gained the command-forwarding half of the browser gateway
+route, a new `realtime/control-registry.ts` module, and command-forwarding
+additions to the existing worker relay route/envelope/registry;
+`packages/contracts` gained the browser-facing command/status protocol;
+`workers/coding-agent` gained a receive loop on the existing relay tunnel and
+a narrow, allowlisted command handler; `apps/web` gained one small,
+non-redesigning UI affordance. Solana/payment code, settlement, deployment,
+and `packages/database` (no migration — no new persisted state, per the
+explicit at-most-once/no-durable-ledger decision below) were untouched, and
+no OpenHands upstream/vendored source was modified.
+
+**Source-audit findings, confirmed against real source, not assumed.**
+
+1. Phase 3B's relay protocol (`apps/api/src/realtime/envelope.ts`,
+   `workers/coding-agent/src/coding_agent/relay_client.py`) was worker→gateway
+   only — no gateway→worker message existed. This phase adds exactly two new
+   message types to that same envelope, on the same tunnel: `gateway.command`
+   (gateway→worker) and `worker.command_ack` (worker→gateway). No second
+   tunnel, no second transport.
+2. Phase 3C's browser protocol
+   (`packages/contracts/src/realtime-browser.ts`) defined zero legitimate
+   client→server messages — every inbound frame was rejected. This phase adds
+   exactly one: `execution.command`, carrying a versioned, allowlisted
+   command payload.
+3. The installed OpenHands SDK's `RemoteConversation` (re-confirmed by
+   reading `remote_conversation.py` directly, not cited from memory) exposes
+   `send_message()` (`POST {base}/{id}/events`, payload `run: False`,
+   "mirror local semantics; explicit run() must be called"), `run()`,
+   `pause()`, `interrupt()`, and confirm/reject — no method resembling direct,
+   agent-bypassing shell execution. The pinned frontend's own
+   `/sockets/bash-events` PTY-style channel (ADR-0007's original grounding
+   audit, §1.1) is a frontend-specific convenience the Agent Server also
+   happens to accept on that socket — it is not something the Python SDK
+   client this worker actually uses exposes or relies on, and apps/web (the
+   real integration target, per Phase 3C's own audit) never used that
+   frontend at all.
+4. **Decision, made explicitly per the source audit's own finding**: v1's
+   command surface is exactly one type, `agent.message` (a chat/user
+   message), mapped to `send_message()`. A terminal/bash command type was
+   investigated and deliberately deferred — not because it wasn't considered,
+   but because no safe, SDK-native, non-forked way to expose raw shell
+   execution (distinct from the agent's own tool use) was found. Building an
+   unaudited second path to run arbitrary shell commands, or disguising bash
+   as a chat message, was rejected as unsafe for v1, consistent with this
+   ADR's own "narrowest useful command surface" instruction. Deferred to a
+   future phase if a real, audited mechanism is identified.
+5. `send_message()` is safe to call from a second thread concurrently with
+   the main dispatch thread's blocking `conversation.run()` call: it touches
+   only `self._client` (a plain REST POST) and none of
+   `RemoteConversation`'s own run-tracking state (`_run_armed`,
+   `_terminal_status_queue`). `run()`/`pause()`/`interrupt()`, by contrast,
+   DO touch that shared state — the worker's new command handler
+   (`CommandHandler` in `agent_server_adapter.py`) therefore calls
+   `send_message()` only, never a second `run()`/`pause()`/`interrupt()`,
+   specifically to avoid racing the main thread's own in-flight `.run()`
+   call. Verified against a real running execution during this phase's own
+   verification (below), not assumed from reading the client alone: a
+   message injected while the agent's own turn loop was already active was
+   picked up without a second explicit trigger — the agent's own persisted
+   reasoning for its next turn explicitly referenced the injected message
+   ("I should provide a short acknowledgement as requested").
+6. `SESSION_API_KEY` is required, and used, exclusively inside
+   `agent_server_adapter.py`'s existing `docker_workspace`/`Conversation`
+   construction (unchanged by this phase) — the new command-handling code
+   path never reads it, never receives it as a parameter, and never
+   constructs a second local connection to the Agent Server. `CommandHandler`
+   is handed the SAME `Conversation` object the main dispatch thread already
+   holds; there is no new local port, no new local connection, and no change
+   to Phase 3A's loopback-only containment.
+7. Current execution status/lease checking (`apps/api/src/routes/internal.ts`)
+   was re-read, not re-derived: `executions.status`/`lease_owner` remain the
+   sole source of truth, and this phase adds a SECOND read site (a per-command
+   revalidation in the browser gateway, see below) rather than a parallel
+   notion of "is this execution controllable."
+8. AtherNull's authorization surface (`apps/api/src/session.ts`) has exactly
+   one tier stricter than plain org membership: `PRIVILEGED_ORG_ROLES`
+   (`owner`/`admin`), already gating `fund`/`verify`/`accept`/`reject`. No
+   second permission primitive exists anywhere in this codebase.
+
+**`realtime:control` authorization policy — the explicit decision this ADR
+required, not a default.** `realtime:control` is gated on the exact same
+`owner`/`admin` tier as the existing business-lifecycle actions
+(`hasRealtimeControlAuthority`, `apps/api/src/session.ts`, a thin,
+documented wrapper around the same `PRIVILEGED_ORG_ROLES` set
+`requirePrivilegedRole` already uses) — not a new, parallel permission
+concept, and not silently defaulted to plain membership. This is a
+deliberate choice, recorded here as such: a command that can cause real
+additional inference cost and mutate a live agent session is judged
+analogous in risk to funding/verify/accept/reject, which already draw this
+same line; `realtime:view` (Phase 3C) deliberately stayed at plain-member
+level because reading output carries no equivalent risk. If a finer-grained
+policy (e.g. a dedicated `realtime:control` grant independent of
+owner/admin) is ever needed, `hasRealtimeControlAuthority` is the one place
+to change it — no second check exists elsewhere to fall out of sync.
+
+**Per-command revalidation, not connect-time-only — the ADR's own
+"preferred security property."** `realtime:view`'s authorization is still
+checked once, at connect (Phase 3C, unchanged). `realtime:control` is
+different: `apps/api/src/routes/realtime-gateway.ts`'s `handleControlMessage`
+re-runs, on EVERY inbound command: (1) a fresh `requireOrgSession` (the same
+live `auth.api.getActiveMember()` re-query Phase 2/3C already established,
+now invoked per-command, not just per-connection — a demoted/removed member's
+very next command is rejected immediately); (2) a fresh
+`hasRealtimeControlAuthority` check against the just-fetched role; (3) a
+fresh `executions.status === 'RUNNING'` read; (4) a fresh
+`relayRegistry.get(executionId)` presence check; (5) a fresh
+`relayConnection.workerId === executions.lease_owner` equality check. All
+five are re-read from the database/registry at command time, never cached
+from the connection's own handshake. A connection's `canControl` flag
+(reported once, in `server.hello`) only gates whether the socket is even
+allowed to ATTEMPT a command — it is never itself trusted as the actual
+authorization for any specific command.
+
+**Command envelope, exact shape**
+(`packages/contracts/src/realtime-browser.ts`):
+
+```json
+{
+  "version": 1,
+  "type": "execution.command",
+  "commandId": "<client-generated UUID>",
+  "executionId": "...",
+  "command": { "type": "agent.message", "payload": { "text": "..." } }
+}
+```
+
+`commandId` is the browser command's own identity — generated client-side,
+carried through the gateway→worker envelope unchanged, and NEVER the same
+identity space as an OpenHands event's own UUID (`execution_events.id`).
+`ExecutionCommandTypeSchema` is a one-member allowlist (`agent.message`) —
+structured as a `z.discriminatedUnion` from day one so a future, audited
+second command type is a pure addition, not a restructuring.
+
+**Command lifecycle states, all eight represented, semantically distinct**
+(`CommandStatusValueSchema`): `received` → `authorized` → `forwarded` →
+(`accepted` | `rejected` | `failed` | `uncertain`) → optionally `executed`.
+`rejected` = this system (gateway or worker) deliberately did not let the
+command reach/affect the Agent Server (auth failure, validation failure,
+backpressure, stale lease, or the worker's own not-ready window — see below).
+`failed` = the Agent Server's REST call explicitly returned an error.
+`uncertain` = forwarded, but the worker relay disappeared (disconnect, lease
+reclaim, execution completion) or its ack never arrived within the timeout —
+the system honestly does not know the outcome. `executed` is a deliberate,
+disclosed heuristic (see below), not a strong per-command guarantee. These
+are never collapsed into each other in the wire protocol
+(`RealtimeCommandStatusSchema`'s `status` enum has all eight values).
+
+**"Executed" is a disclosed heuristic, not a durable correlation — recorded
+explicitly rather than overclaimed.** Precisely correlating a specific
+resulting OpenHands event to a specific `commandId` would require either a
+new, second event-identity scheme (which ADR-0007 already rejects for the
+Agent→Browser direction, and this phase does not introduce one for this
+direction either) or deeper protocol work this phase's own "Phase 3E
+boundary" excludes. The shipped behavior: once a command reaches `accepted`,
+its `commandId` is queued (bounded, oldest-first, per browser connection);
+the next `execution.event` the connection observes for that execution
+upgrades the oldest queued `commandId` to `executed`. This is honest,
+disclosed best-effort evidence "a normal OpenHands event occurred after this
+command was accepted," not a proof that event resulted from that exact
+command. Verified working end to end against a real execution (below).
+
+**At-most-once forwarding, exactly as ADR-0007 specifies — not durable.**
+`apps/api/src/realtime/control-registry.ts`'s `ControlRegistry` tracks every
+`commandId` this gateway PROCESS has ever forwarded (bounded at 5,000
+entries, oldest-evicted) — a second `execution.command` with an
+already-seen `commandId` is rejected (`duplicate_command_id`) and never
+re-forwarded, regardless of why the browser sent it twice. This state is
+**entirely in-memory and process-local**: a gateway restart loses all
+history of forwarded `commandId`s, meaning a genuinely duplicate submission
+after a restart would be forwarded again. This limitation is explicit, not
+silently assumed away — a durable command ledger (enabling real
+exactly-once semantics across restarts) is explicitly out of scope for this
+phase, deferred to Phase 3E or later per the ADR's own instruction.
+
+**Uncertain-delivery handling, covering every step named in the ADR's own
+walkthrough.** (1) Gateway cannot find/match an active relay before
+forwarding → immediate `rejected` (`no_active_relay` / `lease_mismatch` /
+`execution_not_running`), never a wait. (2) Gateway forwards, but the
+worker relay disconnects (network drop, lease reclaim, execution completion)
+before an ack arrives → `ControlRegistry.abortAllForExecution` (invoked from
+`relay-registry.ts`'s own `unregister`/`closeAndRemove`, the same two call
+sites Phase 3B already used for relay lifecycle) immediately resolves every
+still-pending command for that execution as `uncertain` — the browser is not
+made to wait out the full ack-timeout window for a connection already known
+to be gone. (3) Worker acknowledges receipt (`accepted`) but the Agent
+Server's own eventual outcome is observed only indirectly, via the
+`executed` heuristic above. (4) The Agent Server (or the worker itself, for
+a condition it can detect — see below) explicitly rejects/fails → `failed`
+or `rejected` with a `detail`/`reason`, never silently absorbed. (5) A real
+resulting event → the `executed` heuristic. No branch of this logic ever
+automatically resends a command — every retry observed in this phase's own
+verification was a NEW `commandId`, submitted as an explicit new action
+(by the test script standing in for a real user), never an automatic resend
+of the original.
+
+**A real, previously-undocumented race, found and closed during this
+phase's own real-execution verification (not merely theorized).** The
+execution's `status` flips to `RUNNING` (visible to a browser) the instant
+`POST /internal/executions/claim` returns — well before the Docker container
+is healthy, the worker's relay tunnel has registered with the gateway, AND
+(a narrower window inside that) before `agent_server_adapter.py`'s
+`Conversation` object exists and `relay.set_command_handler(...)` has run.
+A `gateway.command` arriving in that narrowest window used to be silently
+dropped by the receive loop (`self._on_command is None: continue`), leaving
+the browser to wait out the full ack-timeout window for a command that could
+never be answered — an avoidable `uncertain` for a condition the worker
+could already detect deterministically. Fixed in
+`workers/coding-agent/src/coding_agent/relay_client.py`'s `_recv_run`: this
+specific, detectable case now sends an explicit `worker.command_ack`
+`rejected` (`"worker is not ready to accept commands yet"`) immediately,
+turning an avoidable `uncertain` into a fast, honest `rejected` a client can
+retry against right away. This was found by observing real, repeated
+`no_active_relay`/timeout behavior against a real worker during
+verification, then fixed and re-verified against another real run — not
+assumed or guessed at.
+
+**Worker → Agent Server forwarding mechanism, exactly as the audit
+predicted, no new local connection.** `relay_client.py`'s `RelayClient` gains
+a second background thread (`_recv_run`) reading inbound frames off the
+SAME relay WebSocket Phase 3B already opened — confirmed safe to run
+concurrently with the existing outbound send thread and with the main
+dispatch thread's blocking `.run()` poll by reading `websockets/sync/
+connection.py` directly: the library already runs its own internal
+`recv_events` thread per connection, decoupling the application's own
+`.recv()`/`.send()` calls from the raw socket via internal queues/locks — a
+second application-level consumer thread calling `.recv()` is exactly the
+pattern the library is built to support, not something layered
+unsafely on top of it. `agent_server_adapter.py`'s new `CommandHandler` is
+late-bound onto the already-running `RelayClient`
+(`relay.set_command_handler(...)`) once the real `Conversation` object
+exists, and re-issues an `agent.message` command as
+`conversation.send_message(text)` against that same object — the same
+`Conversation`, the same underlying `SESSION_API_KEY`-authenticated Agent
+Server connection, the same worker process boundary Phase 1–3B already
+established. No new local port, no new local connection, no exposure beyond
+what Phase 3A already locked to loopback.
+
+**Backpressure/limits, as implemented** (`apps/api/src/routes/
+realtime-gateway.ts`): `MAX_CONTROL_MESSAGE_BYTES` = 16 KiB per inbound
+frame (an oversized frame is rejected generically, before `JSON.parse`, per
+`MAX_COMMAND_TEXT_LENGTH` = 8,000 chars' own schema bound plus envelope
+overhead); `MAX_PENDING_COMMANDS_PER_CONNECTION` = 5 concurrent
+unacknowledged commands per browser connection (`too_many_pending` beyond
+that); a 10-command-per-10-second sliding-window rate limit per connection
+(`rate_limited` beyond that); `ControlRegistry`'s 5,000-entry bound (above)
+caps total forwarded-`commandId` memory regardless of how many executions or
+connections exist. None of these are configurable via env var in v1 —
+conservative, hardcoded defaults, not a tuning surface this phase needs.
+
+**Business-lifecycle boundary, verified both structurally and by test.**
+`realtime-gateway.ts`'s entire command-handling code path never calls
+`updateTable("tasks")` — the sole place any task's business-lifecycle status
+ever transitions remains `apps/api/src/routes/internal.ts`'s existing
+handlers, completely untouched by this phase. Verified by a static
+source-level assertion (`realtime-control.test.ts`, test 22) AND a real
+functional test sending an accepted control command and confirming the
+task's `status` column is byte-for-byte unchanged afterward.
+
+**Read-only path regression check.** Phase 3C's own `realtime-gateway.test.ts`
+required one, disclosed, minimal adjustment: its own test 8 (a connection
+sending a control-shaped message must be rejected) previously connected as
+the task's OWNER — under Phase 3C's premise that NO connection had any
+legitimate command type. Phase 3D makes that premise false for owner/admin
+specifically, so test 8 now connects as a plain MEMBER instead (still
+correctly rejected with `control_not_supported`), preserving the exact
+guarantee the test's own name and describe-block describe. No other Phase
+3C test required any change — re-run in full alongside this phase's new
+tests (below).
+
+**Test results.** `apps/api`: 24 new Phase 3D scenarios in the new
+`test/realtime-control.test.ts` (member without control rejected;
+owner-with-control command reaches the worker relay; unauthenticated/
+cross-org/wrong-Origin connect-time rejection; non-RUNNING execution
+rejected per-command without disturbing the live view; missing relay
+rejected; lease-owner mismatch rejected; unknown command type rejected;
+malformed payload rejected; oversized text rejected via schema; oversized
+raw frame rejected generically before parsing; duplicate `commandId`
+forwarded at most once; worker-disconnect-before-ack produces `uncertain`;
+explicit worker rejection produces `rejected`; explicit downstream failure
+produces `failed`; a live event after `accepted` upgrades to `executed`;
+a rejected command never disturbs the live event stream; a control command
+never mutates task status; SESSION_API_KEY/INTERNAL_API_TOKEN absent from
+the Phase 3D source files; `/internal/*` absent from the gateway route's
+code; the contract's allowlist contains only `agent.message`) — **24/24
+pass**. Full `apps/api` suite (`node --import tsx --test test/*.test.ts`,
+86 tests total: 62 pre-existing/Phase-3B/3C + 24 new Phase 3D) —
+**86/86 pass, repeated 10 consecutive times, 860/860 pass, zero failures,
+zero flakes** (exact per-run results: all 10 runs reported `tests 86, pass
+86, fail 0`). `tsc --noEmit` (`apps/api`, `apps/web`) and `tsc --noEmit` +
+`tsc -p tsconfig.test.json` (`apps/api`) all clean. `workers/coding-agent`:
+15 new Phase 3D scenarios across `test_relay_client.py` (receive-loop
+dispatch, execution-id-mismatch ignored, malformed-payload-ignored,
+no-handler-is-a-no-op, exception-in-handler-does-not-kill-the-loop,
+late-binding via `set_command_handler`, `send_command_ack` envelope shape,
+the not-ready-yet explicit rejection fix, ack-never-raises-if-never-
+connected) and `test_agent_server_adapter.py` (`CommandHandler` forwards
+`agent.message` and acks accepted; never calls `run()`/`pause()`/
+`interrupt()` again; rejects unsupported command types without touching the
+conversation; rejects missing/empty text; acks `failed` when `send_message`
+raises; drops a payload with no `commandId` without raising; the real
+`run_dispatch_via_agent_server` wires the command handler to the real
+`Conversation` object) — **40/40 pass** (25 pre-existing + 15 new), repeated
+10 consecutive times, **400/400 pass, zero failures**.
+
+**Real execution evidence**, gathered against a real `apps/api` dev server
+(`postgres://athernull@localhost:5433/athernull_dev`), a real dev Postgres,
+a real Docker container, and a real `ws`-based Node client standing in for
+a browser's network path (real Better Auth session cookie via actual
+sign-up/verify/sign-in/organization-create calls, a real `Origin` header,
+connecting only to `apps/api`), using the same low-cost model prior phases
+used (`nvidia_nim/nvidia/nemotron-3-super-120b-a12b`):
+
+- A real task (objective: explore a cloned repo via `ls -la`, read files,
+  create `SUMMARY.md`, run `printf 'athernull-phase3d\n'`, then wait) was
+  funded, claimed by a real worker, and reached a real `RUNNING` execution
+  with a real Docker `agent-server` container.
+- The realtime client connected with `canControl: true` (a real owner
+  session), received `history.ready`, then submitted real
+  `execution.command` (`agent.message`) submissions. The FIRST several
+  submissions were honestly `rejected` (`no_active_relay`, then briefly
+  `"worker is not ready to accept commands yet"`) during the real,
+  observed window before the worker's relay/command-handler wiring
+  completed — each with a fresh `commandId`, never an automatic resend of
+  an earlier one, exactly matching this phase's own at-most-once/no-blind-
+  retry rule. Once the worker was ready, a submission reached
+  `received → authorized → forwarded → accepted → executed` in full.
+- **Independently queried against Postgres**: the injected message persisted
+  as its own `MessageEvent` row (`source: "user"`), immediately following
+  the original task objective's own `MessageEvent`, with a
+  `ConversationStateUpdateEvent` (`last_user_message_id`) confirming the
+  Agent Server's own state tracked it as current. The agent's own final
+  response's persisted `reasoning_content` explicitly referenced it: *"The
+  user wants me to create a SUMMARY.md file and run a final printf command.
+  I've already done both. Now I need to wait for further instructions. I
+  should acknowledge completion and wait. Let me provide a short
+  acknowledgement as requested."* — direct, independent proof the injected
+  command reached and was acted on by the real, running agent, not merely
+  accepted and ignored.
+- A duplicate submission of the SAME `commandId` (sent deliberately, after
+  the first had already been accepted) was rejected
+  (`duplicate_command_id`) and never reached the worker a second time,
+  confirmed both by the gateway's own status stream and by the
+  worker-observed forward count.
+- `finalEventCount`/live-event count/independently-queried Postgres
+  `execution_events` count for this execution all agreed exactly.
+- `SESSION_API_KEY` confirmed absent from every network-visible surface:
+  zero (case-insensitive) matches across the entire `apps/api` dev server
+  log for the full verification session; the realtime client itself never
+  received anything but the documented message types.
+- `INTERNAL_API_TOKEN`'s real value was confirmed absent from every message
+  the browser-standing-in client ever received.
+- The client never opened a connection to anything other than
+  `ws://localhost:3001/v1/realtime/executions/...` — no Agent Server host,
+  port, or container coordinate was ever known to it.
+- **Uncertain-delivery scenario, tested two ways.** (1) A deterministic,
+  reliable, repeatable automated test
+  (`realtime-control.test.ts`, test 14: a controlled fake worker relay
+  disconnects after the gateway forwards a command but before it acks) —
+  passed on every one of the 10 repeated full-suite runs above. (2) One
+  genuine real-worker-process-kill attempt: a command was forwarded to a
+  real worker mid-dispatch, and the real OS process was force-killed
+  immediately afterward via `Stop-Process -Force`, intending to race the
+  kill against the worker's own ack. **Disclosed honestly: the race was
+  lost** — the real worker's local `send_message()` call plus queuing its
+  ack completed faster than the OS could deliver and act on the kill signal,
+  so the command reached `accepted`/`executed` before the process actually
+  died. This is recorded as a real, attempted, non-fabricated result, not
+  papered over — it is also a mildly reassuring data point about how fast
+  the accept path actually is in practice. The deterministic test (1) is
+  the phase's authoritative, repeatable evidence for this scenario, exactly
+  as ADR-0007 itself anticipates ("a deterministic lower-level integration
+  test is acceptable... do not force unsafe timing hacks").
+- All throwaway rows (7 organizations' worth of users/orgs/projects/agent
+  profiles/tasks/executions/execution_events across the main verification
+  and the uncertainty-test run, plus each run's app-onboarding-created
+  default organization/agent-profile) were removed via transactional
+  cleanup scripts after verification; every dev-DB row count (`tasks`,
+  `executions`, `execution_events`, `organization`, `user`, `projects`,
+  `agent_profiles`, `member`) was independently re-queried and confirmed
+  to exactly match this session's own pre-verification baseline. The
+  temporary `apps/api/.env`, both scratch verification scripts, and every
+  launched worker process/Docker container were removed —
+  `docker ps -a`/`Get-CimInstance Win32_Process` both confirmed empty of
+  anything this phase launched afterward.
+
+**Remaining Phase 3E risks, explicitly not addressed here.** (1) No durable
+command ledger — a gateway restart loses all `commandId` dedupe history and
+all in-flight pending-ack state (any command mid-flight at restart time
+simply never resolves; the browser's own ack-timeout still eventually
+surfaces `uncertain` from the client's perspective, but the registry itself
+has no memory of it). (2) No relay reconnect — if a worker's relay drops and
+reconnects (not attempted anywhere in this codebase today, Phase 3B's own
+documented limitation), any commands that were pending against the old
+connection are already resolved `uncertain` by `abortAllForExecution`, but
+there is no mechanism to correlate a reconnected relay with the browser's
+earlier session or replay anything. (3) No cross-instance routing — the
+single-gateway-instance assumption `relay-registry.ts`/
+`execution-broadcaster.ts`/`control-registry.ts` all carry from Phase 3B/3C
+is unchanged; a horizontally-scaled `apps/api` without sticky routing would
+need shared state for all three. (4) The `executed` heuristic is
+per-connection and order-based, not a real per-command correlation — a
+future phase wanting a stronger guarantee needs either a durable command
+log Agent Server events can reference, or an SDK-level mechanism (not
+available today) for tagging which turn a given user message triggered.
+(5) Terminal/bash commands remain deferred pending a safe, SDK-native
+mechanism — not attempted, not faked, in this phase.
 
 ## Consequences
 

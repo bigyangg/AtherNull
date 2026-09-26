@@ -30,6 +30,28 @@ export const RelayMessageTypeSchema = z.enum([
   // automatically) is the real liveness/dead-connection mechanism; this is
   // purely for observability at the gateway.
   "relay.heartbeat",
+  // ADR-0007 Phase 3D — gateway -> worker: forward one authorized browser
+  // command for the worker to re-issue against its local, authenticated
+  // Agent Server connection using the worker's own real per-execution
+  // session credential (never present in this envelope, on either leg —
+  // see routes/relay.ts's static assertion test, which checks this exact
+  // file's raw source for that credential's env-var name). This is the ONLY direction
+  // this relay tunnel now needs a gateway->worker message for; nothing else
+  // about Phase 3B's worker->gateway event flow changes.
+  "gateway.command",
+  // ADR-0007 Phase 3D — worker -> gateway: the terminal outcome of
+  // forwarding one command to the Agent Server. "accepted" = the worker's
+  // REST call to the Agent Server succeeded (the command was durably
+  // recorded in the OpenHands conversation's event log). "rejected" = the
+  // WORKER itself declined to forward (e.g. an envelope it doesn't
+  // recognize/support at its own protocol version) — distinct from the
+  // gateway's own "rejected" (which never reaches the worker at all).
+  // "failed" = the Agent Server explicitly returned an error for the
+  // attempted action. There is no "executed" ack from the worker — the
+  // gateway derives that signal from the ordinary execution.event stream
+  // (see routes/realtime-gateway.ts), not from a second, competing
+  // worker-reported outcome.
+  "worker.command_ack",
 ]);
 export type RelayMessageType = z.infer<typeof RelayMessageTypeSchema>;
 
@@ -56,3 +78,29 @@ export const RelayExecutionEventPayloadSchema = z.object({
   payload: z.unknown(),
 });
 export type RelayExecutionEventPayload = z.infer<typeof RelayExecutionEventPayloadSchema>;
+
+// ADR-0007 Phase 3D — gateway.command's payload. `commandId` is the
+// browser's own command identity (see packages/contracts/realtime-browser.ts)
+// carried through unchanged end to end — this relay tunnel does not
+// generate a second id for the same command. `command` mirrors the
+// browser-facing ExecutionCommandPayloadSchema shape (kept as z.unknown()
+// here and re-validated narrowly by the worker, so this internal envelope
+// schema doesn't need to import the browser-facing package — this file is
+// intentionally standalone, matching this module's existing
+// no-shared-code-across-languages convention).
+export const RelayCommandPayloadSchema = z.object({
+  commandId: z.string().min(1),
+  command: z.object({
+    type: z.string().min(1),
+    payload: z.unknown(),
+  }),
+});
+export type RelayCommandPayload = z.infer<typeof RelayCommandPayloadSchema>;
+
+// ADR-0007 Phase 3D — worker.command_ack's payload.
+export const RelayCommandAckPayloadSchema = z.object({
+  commandId: z.string().min(1),
+  status: z.enum(["accepted", "rejected", "failed"]),
+  detail: z.string().optional(),
+});
+export type RelayCommandAckPayload = z.infer<typeof RelayCommandAckPayloadSchema>;

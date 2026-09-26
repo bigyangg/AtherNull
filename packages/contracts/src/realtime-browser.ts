@@ -48,6 +48,13 @@ export const RealtimeServerHelloSchema = z.object({
   executionId: z.string().min(1),
   taskId: z.string().min(1),
   executionStatus: z.string().min(1),
+  // ADR-0007 Phase 3D: whether THIS connection currently holds
+  // realtime:control, decided entirely server-side (requireOrgSession's role
+  // plus AtherNull's existing owner/admin policy — see session.ts). The
+  // frontend must treat this as informational only, never as its own
+  // authorization decision: every command is re-checked server-side
+  // regardless of what this flag said at connect time.
+  canControl: z.boolean(),
 });
 export type RealtimeServerHello = z.infer<typeof RealtimeServerHelloSchema>;
 
@@ -123,6 +130,118 @@ export const RealtimeErrorSchema = z.object({
 });
 export type RealtimeError = z.infer<typeof RealtimeErrorSchema>;
 
+// ADR-0007 Phase 3D — authorized browser -> agent control. Everything below
+// this line is new; everything above is unchanged from Phase 3C (the
+// discriminated union at the bottom of this file is extended, not replaced).
+//
+// realtime:control is a SEPARATE, strictly additive capability on top of
+// realtime:view (see docs/adr/0007-secure-realtime-execution.md's Phase 3D
+// status section for the authorization policy). A connection without
+// realtime:control still gets `RealtimeErrorSchema`'s existing
+// "control_not_supported" rejection for ANY inbound message, unchanged from
+// Phase 3C — nothing here weakens that default. `server.hello` gains one new
+// field (`canControl`) so the frontend reflects a permission decision the
+// gateway already made, rather than deciding for itself (ADR-0007: "Do not
+// let the frontend decide whether someone has control permission").
+//
+// V1 delivery semantics (deliberate, not an oversight — see the ADR): AT-MOST-
+// ONCE submission with EXPLICIT DELIVERY UNCERTAINTY. There is no durable
+// command ledger and no automatic retry. `commandId` is the browser command's
+// own identity — it is NEVER an OpenHands event id, and reusing an
+// execution-event UUID as a commandId (or vice versa) is a bug, not a
+// convenience shortcut.
+
+// Narrowest useful v1 command surface (ADR-0007 Phase 3D source audit):
+// only a chat/user message. Terminal/bash forwarding was investigated and
+// deliberately deferred — the installed OpenHands SDK's own
+// RemoteConversation exposes no raw-shell-execution method (send_message /
+// run / pause / interrupt / confirm-reject only); the pinned frontend's
+// `/sockets/bash-events` PTY-style channel is a frontend-specific
+// convenience the Agent Server happens to also accept, not something the
+// Python SDK client this worker actually uses exposes or relies on. Faking
+// bash as a disguised chat message, or building a second, unaudited direct
+// execution path, was rejected as unsafe — see the ADR for the full
+// reasoning. Adding a real terminal command type is left to a future phase.
+export const ExecutionCommandTypeSchema = z.enum(["agent.message"]);
+export type ExecutionCommandType = z.infer<typeof ExecutionCommandTypeSchema>;
+
+// Deliberately conservative: plain text only, no markup/HTML, no attachments.
+export const MAX_COMMAND_TEXT_LENGTH = 8_000;
+
+export const AgentMessageCommandSchema = z.object({
+  type: z.literal("agent.message"),
+  payload: z.object({
+    text: z.string().min(1).max(MAX_COMMAND_TEXT_LENGTH),
+  }),
+});
+
+// z.discriminatedUnion requires 2+ members — a single-member allowlist is
+// still expressed as a union of one so adding a second command type later
+// (e.g. a future, carefully-audited terminal command) is a pure addition to
+// this list, never a restructuring of callers.
+export const ExecutionCommandPayloadSchema = z.discriminatedUnion("type", [
+  AgentMessageCommandSchema,
+]);
+export type ExecutionCommandPayload = z.infer<typeof ExecutionCommandPayloadSchema>;
+
+// Browser -> gateway. This is the ONLY legitimate inbound message shape when
+// a connection holds realtime:control; anything else (unknown `type`, wrong
+// `version`, missing fields) is rejected as `invalid_message`, and a
+// commandId that has already been seen for this execution (bounded,
+// in-memory, this gateway process only — ADR-0007: "not durable
+// exactly-once delivery") is never forwarded a second time.
+export const ExecutionCommandMessageSchema = z.object({
+  version: z.literal(REALTIME_BROWSER_PROTOCOL_VERSION),
+  type: z.literal("execution.command"),
+  commandId: z.string().uuid(),
+  executionId: z.string().min(1),
+  command: ExecutionCommandPayloadSchema,
+});
+export type ExecutionCommandMessage = z.infer<typeof ExecutionCommandMessageSchema>;
+
+export const RealtimeClientMessageSchema = z.discriminatedUnion("type", [
+  ExecutionCommandMessageSchema,
+]);
+export type RealtimeClientMessage = z.infer<typeof RealtimeClientMessageSchema>;
+
+// Explicit command lifecycle states (ADR-0007 Phase 3D). REJECTED = AtherNull
+// deliberately did not forward the command (authorization, validation,
+// backpressure, or execution/lease state made forwarding unsafe). FAILED =
+// downstream (worker or Agent Server) explicitly reported failure. UNCERTAIN
+// = the command may have been forwarded and/or executed, but the system lost
+// enough acknowledgement state (e.g. the worker relay disconnected before
+// acking) to no longer safely know the outcome — this is never silently
+// resent, and must never be presented to the user as though it were FAILED.
+export const CommandStatusValueSchema = z.enum([
+  "received",
+  "authorized",
+  "forwarded",
+  "accepted",
+  "executed",
+  "failed",
+  "rejected",
+  "uncertain",
+]);
+export type CommandStatusValue = z.infer<typeof CommandStatusValueSchema>;
+
+// Gateway -> browser, one or more per commandId, ending in exactly one
+// terminal status (accepted alone is not terminal if `executed` can still
+// follow — see the ADR's note on how "executed" is derived in this phase).
+export const RealtimeCommandStatusSchema = z.object({
+  version: z.literal(REALTIME_BROWSER_PROTOCOL_VERSION),
+  type: z.literal("command.status"),
+  executionId: z.string().min(1),
+  commandId: z.string().min(1),
+  status: CommandStatusValueSchema,
+  // Machine-readable reason for rejected/failed/uncertain — e.g.
+  // "not_authorized", "execution_not_running", "no_active_relay",
+  // "lease_mismatch", "duplicate_command_id", "oversized_payload",
+  // "unknown_command_type", "invalid_payload", "rate_limited",
+  // "too_many_pending", "worker_disconnected", "agent_server_error".
+  reason: z.string().optional(),
+});
+export type RealtimeCommandStatus = z.infer<typeof RealtimeCommandStatusSchema>;
+
 export const RealtimeServerMessageSchema = z.discriminatedUnion("type", [
   RealtimeServerHelloSchema,
   RealtimeHistoryReadySchema,
@@ -130,5 +249,6 @@ export const RealtimeServerMessageSchema = z.discriminatedUnion("type", [
   RealtimeExecutionCompletedSchema,
   RealtimeRelayUnavailableSchema,
   RealtimeErrorSchema,
+  RealtimeCommandStatusSchema,
 ]);
 export type RealtimeServerMessage = z.infer<typeof RealtimeServerMessageSchema>;

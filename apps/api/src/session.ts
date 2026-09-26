@@ -89,12 +89,41 @@ export async function requireOrgSession(
   };
 }
 
+// Non-throwing form of the same owner/admin check below — for call sites
+// that need a boolean to branch on (e.g. deciding whether a realtime
+// connection holds realtime:control) rather than a request that should fail
+// outright. Both this and requirePrivilegedRole share the exact same
+// PRIVILEGED_ORG_ROLES set so the two can never silently drift apart.
+export function hasPrivilegedRole(role: string): boolean {
+  return PRIVILEGED_ORG_ROLES.has(role);
+}
+
 // For actions more sensitive than plain org membership (funding a task
 // moves real money) — call after requireOrgSession, not instead of it.
 export function requirePrivilegedRole(role: string): void {
-  if (!PRIVILEGED_ORG_ROLES.has(role)) {
+  if (!hasPrivilegedRole(role)) {
     throw new HttpError(403, "This action requires an owner or admin role");
   }
+}
+
+// ADR-0007 Phase 3D — realtime:control authorization policy, decided
+// explicitly (per the ADR's own requirement not to invent a vague new
+// permission): a full source audit of this codebase's authorization surface
+// found exactly one existing tier stricter than plain org membership —
+// PRIVILEGED_ROLES/hasPrivilegedRole/requirePrivilegedRole above, already
+// gating every real-money/business-lifecycle action (fund/verify/accept/
+// reject in routes/jobs.ts). realtime:control — sending a command into a
+// running execution, which can itself trigger real additional inference
+// cost and mutate a live agent session — is deliberately gated on the exact
+// same primitive, not a new, parallel permission concept: it is genuinely
+// analogous in risk profile (real-world consequence beyond read access),
+// and reusing the established tier keeps AtherNull's authorization surface
+// to one stricter-than-member concept rather than two. This is a considered
+// decision, not the default: realtime:view (Phase 3C) deliberately stayed
+// at plain-member level because reading execution output is not analogous
+// to those actions; realtime:control is.
+export function hasRealtimeControlAuthority(role: string): boolean {
+  return hasPrivilegedRole(role);
 }
 
 export function sendHttpError(reply: FastifyReply, err: unknown): boolean {

@@ -147,6 +147,102 @@ class EventForwarder:
                     return
 
 
+class CommandHandler:
+    """ADR-0007 Phase 3D — worker -> Agent Server control forwarding.
+
+    Invoked (on RelayClient's own receive thread, NEVER the thread driving
+    `conversation.run()`) with an already-authorized RelayCommandPayload
+    dict: `{"commandId": ..., "command": {"type": ..., "payload": {...}}}`.
+    apps/api's gateway has already checked realtime:control, execution
+    status, and lease ownership before this ever arrives — this handler's
+    only job is the narrow, allowlisted mapping onto the OpenHands SDK's own
+    supported action surface, using the SAME `Conversation` object and the
+    SAME `SESSION_API_KEY`-authenticated Agent Server connection this
+    dispatch already holds for its own `.run()` call. No second local
+    connection to the Agent Server is opened, and no local port is exposed —
+    the audit for this phase (docs/adr/0007-secure-realtime-execution.md,
+    Phase 3D status) found `RemoteConversation.send_message()` is already a
+    plain REST call (`POST {base}/{id}/events`), safe to call from a second
+    thread concurrently with the main thread's blocking `.run()` poll loop
+    because it touches none of `RemoteConversation`'s own run-tracking state
+    (`_run_armed`, `_terminal_status_queue`) — unlike `.run()`/`.pause()`/
+    `.interrupt()`, which this handler deliberately does NOT call a second
+    time from this thread, precisely to avoid racing the main thread's own
+    in-flight `.run()` call over that shared state. A conversation that is
+    still actively running already has its own server-side turn loop reading
+    the event stream; adding a new user-message event via `send_message()`
+    (payload `run: False`, matching local semantics) is expected to be
+    picked up by that already-running turn loop without a second explicit
+    trigger — verified against a real running execution as part of this
+    phase's own verification pass, not assumed from reading the client
+    alone (see the ADR for what that verification actually observed and any
+    caveats).
+
+    Command surface, deliberately narrow (ADR-0007: "start with the
+    narrowest useful command surface... prefer explicit allowlisted command
+    types"): only "agent.message" in this phase. A raw terminal/bash command
+    type was investigated and explicitly deferred — the installed SDK
+    exposes no direct shell-execution method distinct from the agent's own
+    tool use, and building an unaudited second path to run arbitrary shell
+    commands was rejected as unsafe for v1. See the ADR for the full
+    reasoning.
+
+    Every branch below sends exactly one `send_command_ack` — "accepted" if
+    the REST call to the Agent Server succeeded (the message was durably
+    recorded in the conversation's event log), "rejected" if this handler
+    itself declined to forward (unknown command type, malformed payload —
+    an AtherNull-worker-side decision, distinct from the gateway's own
+    "rejected"), or "failed" if the Agent Server's REST call itself raised.
+    There is no "executed" ack from this handler — the gateway derives that
+    signal from the ordinary execution.event stream this dispatch is already
+    forwarding (see routes/realtime-gateway.ts), never from a second,
+    worker-reported outcome that could disagree with it.
+    """
+
+    def __init__(self, conversation, relay: RelayClient, log: Callable[[str], None]) -> None:
+        self._conversation = conversation
+        self._relay = relay
+        self._log = log
+        # Guards conversation.send_message() against a hypothetically
+        # overlapping second command arriving before the first REST call
+        # returns (the receive loop processes commands one at a time, but a
+        # lock here costs nothing and removes any doubt). httpx.Client
+        # itself supports concurrent requests, but the OpenHands SDK's own
+        # thread-safety story for RemoteConversation is not documented
+        # either way — serializing calls through this handler is the
+        # conservative, defensible choice, not a performance-critical path.
+        self._lock = threading.Lock()
+
+    def __call__(self, payload: dict) -> None:
+        command_id = payload.get("commandId")
+        command = payload.get("command") if isinstance(payload.get("command"), dict) else {}
+        command_type = command.get("type")
+
+        if not isinstance(command_id, str) or not command_id:
+            self._log("command handler: payload missing commandId, dropping (cannot ack)")
+            return
+
+        if command_type != "agent.message":
+            self._log(f"command handler: unsupported command type {command_type!r}, rejecting")
+            self._relay.send_command_ack(command_id, "rejected", f"unsupported command type: {command_type!r}")
+            return
+
+        command_payload = command.get("payload") if isinstance(command.get("payload"), dict) else {}
+        text = command_payload.get("text")
+        if not isinstance(text, str) or not text.strip():
+            self._log("command handler: agent.message missing non-empty text, rejecting")
+            self._relay.send_command_ack(command_id, "rejected", "missing or empty text")
+            return
+
+        try:
+            with self._lock:
+                self._conversation.send_message(text)
+            self._relay.send_command_ack(command_id, "accepted")
+        except Exception as err:  # noqa: BLE001 - must never affect the dispatch or the receive loop
+            self._log(f"command handler: send_message to Agent Server failed: {err!r}")
+            self._relay.send_command_ack(command_id, "failed", repr(err))
+
+
 class RelayEventCallback:
     """Registered as a second `Conversation` callback alongside (never
     instead of) EventForwarder — see `run_dispatch_via_agent_server`'s
@@ -301,6 +397,25 @@ def run_dispatch_via_agent_server(client: httpx.Client, dispatch: dict) -> str:
             callbacks=[forwarder, RelayEventCallback(relay)],
         )
         _report_conversation_id(client, execution_id, WORKER_ID, str(conversation.id))
+
+        # ADR-0007 Phase 3D: late-bind the command handler now that
+        # `conversation` exists (RelayClient itself was constructed and
+        # started before this point, since Conversation's own construction
+        # needs `RelayEventCallback(relay)`, which needs `relay` first — see
+        # relay_client.py's set_command_handler docstring for why this
+        # ordering is safe). A gateway.command CAN genuinely arrive in the
+        # window between relay.start() (above) registering with the gateway
+        # and this line — confirmed empirically during this phase's own
+        # real-execution verification, not just theorized: the relay's WS
+        # handshake can complete, making the browser's realtime:control path
+        # look fully available, before Conversation's own construction (which
+        # itself does WS/HTTP setup against the Agent Server) finishes. A
+        # command received before this line runs is never silently lost —
+        # relay_client.py's `_recv_run` sends an explicit "rejected" ack for
+        # that specific case (see its own comment) rather than leaving the
+        # gateway to time out into "uncertain" for a condition the worker
+        # could detect and report immediately.
+        relay.set_command_handler(CommandHandler(conversation, relay, log))
 
         message = build_task_message(dispatch["objective"], dispatch["acceptanceCriteria"])
         conversation.send_message(message)

@@ -5,6 +5,7 @@ matching test_agent_server_adapter.py's mocking style."""
 
 import json
 import re
+import threading
 import time
 from unittest.mock import MagicMock
 
@@ -29,19 +30,43 @@ def test_relay_ws_url_handles_https() -> None:
 
 
 class FakeConnection:
-    def __init__(self, fail_after: "int | None" = None) -> None:
+    def __init__(self, fail_after: "int | None" = None, inbound: "list[str] | None" = None) -> None:
         """fail_after=N: the (N+1)th send() call raises — lets tests get a
         real connected relay (worker.ready succeeds) before simulating the
         connection dying on a later send, instead of racing worker.ready's
-        own send against the failure."""
+        own send against the failure.
+
+        `inbound` (ADR-0007 Phase 3D): a queue of raw JSON strings `.recv()`
+        pops one at a time (FIFO); once empty, `.recv()` raises
+        `TimeoutError` on every call, matching the real
+        `websockets.sync.client` connection's own documented behavior for a
+        `timeout=` call with nothing to receive yet — see relay_client.py's
+        `_recv_run` for why that specific exception is what triggers a
+        "keep waiting" loop iteration rather than tearing down the receive
+        thread.
+        """
         self.sent: list[dict] = []
         self.closed = False
         self.fail_after = fail_after
+        self._inbound = list(inbound or [])
+        self._inbound_lock = threading.Lock()
 
     def send(self, message: str) -> None:
         if self.fail_after is not None and len(self.sent) >= self.fail_after:
             raise RuntimeError("send failed")
         self.sent.append(json.loads(message))
+
+    def recv(self, timeout: float | None = None):
+        with self._inbound_lock:
+            if self._inbound:
+                return self._inbound.pop(0)
+        # Real connection semantics: no message available within `timeout`.
+        time.sleep(min(timeout or 0.05, 0.05))
+        raise TimeoutError
+
+    def push_inbound(self, raw: str) -> None:
+        with self._inbound_lock:
+            self._inbound.append(raw)
 
     def close(self, *args, **kwargs) -> None:
         self.closed = True
@@ -170,6 +195,191 @@ def test_relay_event_callback_never_raises_even_if_relay_is_broken() -> None:
     relay.send_event.side_effect = RuntimeError("boom")
     callback = RelayEventCallback(relay)
     callback(FakeEvent("evt-1", "MessageEvent", "2026-01-01T00:00:00"))  # must not raise
+
+
+# --- ADR-0007 Phase 3D: receive loop / command ack ---------------------
+
+
+def test_recv_run_invokes_on_command_for_a_valid_gateway_command(monkeypatch) -> None:
+    conn = FakeConnection()
+    received = []
+
+    def fake_connect(url, **kwargs):
+        return conn
+
+    monkeypatch.setattr(relay_module.ws_client, "connect", fake_connect)
+    relay = RelayClient(
+        "http://localhost:3001", "test-token", "worker-1", "exec-1",
+        log=lambda *_: None, on_command=lambda payload: received.append(payload),
+    )
+    relay.start()
+    assert relay.connected_within(2.0)
+
+    conn.push_inbound(json.dumps({
+        "version": 1, "type": "gateway.command", "executionId": "exec-1", "eventId": None,
+        "payload": {"commandId": "cmd-1", "command": {"type": "agent.message", "payload": {"text": "hi"}}},
+    }))
+
+    assert _wait_until(lambda: len(received) == 1)
+    assert received[0]["commandId"] == "cmd-1"
+    assert received[0]["command"]["type"] == "agent.message"
+
+    relay.close()
+
+
+def test_recv_run_ignores_command_for_a_different_execution_id(monkeypatch) -> None:
+    conn = FakeConnection()
+    received = []
+
+    monkeypatch.setattr(relay_module.ws_client, "connect", lambda url, **kwargs: conn)
+    relay = RelayClient(
+        "http://localhost:3001", "test-token", "worker-1", "exec-1",
+        log=lambda *_: None, on_command=lambda payload: received.append(payload),
+    )
+    relay.start()
+    assert relay.connected_within(2.0)
+
+    conn.push_inbound(json.dumps({
+        "version": 1, "type": "gateway.command", "executionId": "some-other-exec", "eventId": None,
+        "payload": {"commandId": "cmd-1", "command": {"type": "agent.message", "payload": {"text": "hi"}}},
+    }))
+
+    time.sleep(0.3)
+    assert received == []
+
+    relay.close()
+
+
+def test_recv_run_ignores_malformed_payload_without_raising(monkeypatch) -> None:
+    conn = FakeConnection()
+    received = []
+
+    monkeypatch.setattr(relay_module.ws_client, "connect", lambda url, **kwargs: conn)
+    relay = RelayClient(
+        "http://localhost:3001", "test-token", "worker-1", "exec-1",
+        log=lambda *_: None, on_command=lambda payload: received.append(payload),
+    )
+    relay.start()
+    assert relay.connected_within(2.0)
+
+    conn.push_inbound("not valid json{{{")
+    conn.push_inbound(json.dumps({"version": 1, "type": "gateway.command", "executionId": "exec-1", "payload": "not-a-dict"}))
+    conn.push_inbound(json.dumps({
+        "version": 1, "type": "gateway.command", "executionId": "exec-1",
+        "payload": {"commandId": "cmd-2", "command": {"type": "agent.message", "payload": {"text": "still works"}}},
+    }))
+
+    assert _wait_until(lambda: len(received) == 1)
+    assert received[0]["commandId"] == "cmd-2"
+
+    relay.close()
+
+
+def test_recv_run_sends_explicit_rejection_ack_when_on_command_is_none(monkeypatch) -> None:
+    # ADR-0007 Phase 3D, confirmed against a real execution during this
+    # phase's own verification: a gateway.command can genuinely arrive
+    # before agent_server_adapter.py's late set_command_handler() call runs
+    # (the relay registers with the gateway before Conversation's own
+    # construction finishes). Rather than silently dropping it (which used
+    # to leave the browser waiting out the full ack-timeout window for a
+    # command that could never be answered), the receive loop must send an
+    # explicit "rejected" ack for this specific, detectable condition.
+    conn = FakeConnection()
+    monkeypatch.setattr(relay_module.ws_client, "connect", lambda url, **kwargs: conn)
+    relay = RelayClient("http://localhost:3001", "test-token", "worker-1", "exec-1", log=lambda *_: None)
+    relay.start()
+    assert relay.connected_within(2.0)
+
+    conn.push_inbound(json.dumps({
+        "version": 1, "type": "gateway.command", "executionId": "exec-1",
+        "payload": {"commandId": "cmd-1", "command": {"type": "agent.message", "payload": {"text": "hi"}}},
+    }))
+
+    assert _wait_until(lambda: any(m["type"] == "worker.command_ack" for m in conn.sent))
+    ack = next(m for m in conn.sent if m["type"] == "worker.command_ack")
+    assert ack["payload"]["commandId"] == "cmd-1"
+    assert ack["payload"]["status"] == "rejected"
+
+    relay.close()
+
+
+def test_on_command_exception_does_not_kill_the_receive_thread(monkeypatch) -> None:
+    conn = FakeConnection()
+    call_count = {"n": 0}
+
+    def flaky_handler(payload):
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            raise RuntimeError("boom")
+
+    monkeypatch.setattr(relay_module.ws_client, "connect", lambda url, **kwargs: conn)
+    relay = RelayClient(
+        "http://localhost:3001", "test-token", "worker-1", "exec-1",
+        log=lambda *_: None, on_command=flaky_handler,
+    )
+    relay.start()
+    assert relay.connected_within(2.0)
+
+    conn.push_inbound(json.dumps({
+        "version": 1, "type": "gateway.command", "executionId": "exec-1",
+        "payload": {"commandId": "cmd-1", "command": {"type": "agent.message", "payload": {"text": "first"}}},
+    }))
+    assert _wait_until(lambda: call_count["n"] == 1)
+
+    conn.push_inbound(json.dumps({
+        "version": 1, "type": "gateway.command", "executionId": "exec-1",
+        "payload": {"commandId": "cmd-2", "command": {"type": "agent.message", "payload": {"text": "second"}}},
+    }))
+    assert _wait_until(lambda: call_count["n"] == 2), "a raised exception in on_command must not kill the receive loop"
+
+    relay.close()
+
+
+def test_set_command_handler_late_binding_takes_effect(monkeypatch) -> None:
+    conn = FakeConnection()
+    monkeypatch.setattr(relay_module.ws_client, "connect", lambda url, **kwargs: conn)
+    relay = RelayClient("http://localhost:3001", "test-token", "worker-1", "exec-1", log=lambda *_: None)
+    relay.start()
+    assert relay.connected_within(2.0)
+
+    received = []
+    relay.set_command_handler(lambda payload: received.append(payload))
+
+    conn.push_inbound(json.dumps({
+        "version": 1, "type": "gateway.command", "executionId": "exec-1",
+        "payload": {"commandId": "cmd-1", "command": {"type": "agent.message", "payload": {"text": "hi"}}},
+    }))
+    assert _wait_until(lambda: len(received) == 1)
+
+    relay.close()
+
+
+def test_send_command_ack_delivers_worker_command_ack_envelope(monkeypatch) -> None:
+    conn = FakeConnection()
+    relay = make_relay(monkeypatch, connection=conn)
+    relay.start()
+    assert relay.connected_within(2.0)
+
+    relay.send_command_ack("cmd-1", "accepted")
+    assert _wait_until(lambda: any(m["type"] == "worker.command_ack" for m in conn.sent))
+    msg = next(m for m in conn.sent if m["type"] == "worker.command_ack")
+    assert msg["executionId"] == "exec-1"
+    assert msg["payload"] == {"commandId": "cmd-1", "status": "accepted"}
+
+    relay.send_command_ack("cmd-2", "failed", "boom")
+    assert _wait_until(lambda: len([m for m in conn.sent if m["type"] == "worker.command_ack"]) == 2)
+    msg2 = [m for m in conn.sent if m["type"] == "worker.command_ack"][1]
+    assert msg2["payload"] == {"commandId": "cmd-2", "status": "failed", "detail": "boom"}
+
+    relay.close()
+
+
+def test_send_command_ack_never_raises_even_if_relay_never_connected(monkeypatch) -> None:
+    relay = make_relay(monkeypatch, connect_error=OSError("connection refused"))
+    relay.start()
+    assert relay.connected_within(0.5) is False
+    relay.send_command_ack("cmd-1", "accepted")  # must not raise
+    relay.close()
 
 
 # --- static source-level safety assertions ---------------------------------

@@ -5,8 +5,13 @@ import { z } from "zod";
 import { db } from "../db.js";
 import { persistExecutionEvents } from "../execution-events.js";
 import { requireInternalToken } from "../internal-auth.js";
+import { controlRegistry } from "../realtime/control-registry.js";
 import { executionBroadcaster } from "../realtime/execution-broadcaster.js";
-import { RelayEnvelopeSchema, RelayExecutionEventPayloadSchema } from "../realtime/envelope.js";
+import {
+  RelayCommandAckPayloadSchema,
+  RelayEnvelopeSchema,
+  RelayExecutionEventPayloadSchema,
+} from "../realtime/envelope.js";
 import { relayRegistry } from "../realtime/relay-registry.js";
 
 // Matches the maxPayload bound configured on the @fastify/websocket plugin
@@ -147,6 +152,34 @@ async function handleRelayMessage(request: FastifyRequest, executionId: string, 
       { registeredFor: executionId, claimed: envelope.executionId },
       "relay envelope executionId mismatch, ignoring",
     );
+    return;
+  }
+
+  if (envelope.type === "worker.command_ack") {
+    // ADR-0007 Phase 3D — the worker's terminal outcome for one previously
+    // forwarded gateway.command. Routed to controlRegistry, which is what
+    // the browser-facing gateway (routes/realtime-gateway.ts) is actually
+    // waiting on — this route never talks to a browser socket directly.
+    const ackResult = RelayCommandAckPayloadSchema.safeParse(envelope.payload);
+    if (!ackResult.success) {
+      request.log.warn({ executionId }, "malformed worker.command_ack payload, ignoring");
+      return;
+    }
+    const { commandId, status, detail } = ackResult.data;
+    // Defense in depth, same convention as the executionId mismatch check
+    // above: an ack for a commandId this gateway process isn't currently
+    // tracking as pending for THIS execution is either a stray/duplicate ack
+    // (already resolved, e.g. by a timeout that fired moments earlier) or,
+    // in principle, a worker sending an ack scoped to the wrong execution —
+    // controlRegistry.resolveAck is already a safe no-op for an unknown
+    // commandId, so this check only adds a warning log, not new rejection
+    // logic that could itself become a bug.
+    const pendingExecutionId = controlRegistry.getPendingExecutionId(commandId);
+    if (pendingExecutionId !== undefined && pendingExecutionId !== executionId) {
+      request.log.warn({ executionId, commandId, pendingExecutionId }, "worker.command_ack executionId mismatch, ignoring");
+      return;
+    }
+    controlRegistry.resolveAck(commandId, status, detail);
     return;
   }
 

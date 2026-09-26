@@ -18,7 +18,8 @@ status section for the full rationale):
   - SESSION_API_KEY must never appear anywhere in this module — not in the
     registration request, not in a message, not in a log line. This module
     never imports or references it; it only ever handles already-serialized
-    OpenHands event dicts (the same ones EventForwarder already builds).
+    OpenHands event dicts (the same ones EventForwarder already builds) and
+    (Phase 3D) already-validated command dicts the gateway forwards.
   - Bounded, drop-oldest queue (MAX_QUEUED_MESSAGES): a slow or unreachable
     gateway must never grow unbounded memory on the worker, and must never
     block or slow down the actual dispatch. `send_event()` only ever
@@ -31,6 +32,27 @@ status section for the full rationale):
     stays gone for the rest of this dispatch, matching the worker's existing
     single-attempt style rather than adding new retry/backoff machinery this
     phase doesn't need. A future dispatch gets a brand-new RelayClient.
+
+ADR-0007 Phase 3D addition: this tunnel is now bidirectional. In addition to
+the existing outbound send thread (`_run`, above), a second background
+thread (`_recv_run`) reads inbound `gateway.command` envelopes and invokes an
+optional `on_command` callback supplied at construction time — this is how
+an authorized browser command (already authorized by apps/api's gateway
+before it ever reaches this process) reaches agent_server_adapter.py's own
+command-handling code, which re-issues it against the local, authenticated
+Agent Server connection using SESSION_API_KEY (never touched by this
+module). This is safe to run concurrently with the main dispatch thread's
+blocking `conversation.run()` call: the underlying
+`websockets.sync.client` connection already runs its own internal
+`recv_events` thread that continuously drains the socket into an in-library
+queue (confirmed by reading `websockets/sync/connection.py` directly, not
+assumed) — `.send()` from one thread and `.recv()` from another are both
+just talking to that same thread-safe queue/protocol-mutex machinery the
+library already provides, not two callers racing on the raw socket
+themselves. `on_command`'s own body (agent_server_adapter.py's handler) runs
+on this receive thread, never on the thread driving `.run()` — see that
+module's own docstring for why it deliberately does NOT call
+`conversation.run()` again from this thread.
 """
 
 from __future__ import annotations
@@ -82,18 +104,28 @@ class RelayClient:
         worker_id: str,
         execution_id: str,
         log: Callable[[str], None] = print,
+        on_command: Callable[[dict], None] | None = None,
     ) -> None:
         self._api_url = api_url
         self._internal_token = internal_token
         self._worker_id = worker_id
         self._execution_id = execution_id
         self._log = log
+        # ADR-0007 Phase 3D: invoked (on the receive thread, never the main
+        # dispatch thread) with the RelayCommandPayload dict
+        # ({"commandId": ..., "command": {"type": ..., "payload": ...}})
+        # every time a gateway.command envelope arrives for this execution.
+        # None (the default) means this relay behaves exactly like Phase 3B
+        # — a worker that never wired up command handling simply never acts
+        # on anything received, matching this dispatch's own contract.
+        self._on_command = on_command
 
         self._queue: deque[dict] = deque(maxlen=MAX_QUEUED_MESSAGES)
         self._queue_lock = threading.Lock()
         self._has_work = threading.Event()
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
+        self._recv_thread: threading.Thread | None = None
         self._ws: ws_client.ClientConnection | None = None
         self._connected = threading.Event()
         self._dropped_count = 0
@@ -142,6 +174,49 @@ class RelayClient:
         except Exception as err:  # noqa: BLE001 - must never affect the dispatch
             self._log(f"relay: failed to enqueue event (non-fatal): {err!r}")
 
+    def set_command_handler(self, handler: Callable[[dict], None] | None) -> None:
+        """Assigns (or clears) the callback the receive thread invokes for
+        each inbound gateway.command payload. Supports late-binding: `start()`
+        can be called before the caller has a `Conversation` object to bind a
+        handler to (agent_server_adapter.py constructs RelayClient before
+        Conversation, since the Conversation's own construction needs
+        RelayEventCallback(relay), which needs `relay` to already exist) —
+        the receive thread re-reads `self._on_command` on every message
+        rather than capturing it once at thread-start time, so calling this
+        after `start()` is safe and takes effect on the very next inbound
+        command. A plain attribute assignment is safe to read from another
+        thread without a lock in CPython (list/dict/attribute writes are
+        already atomic here); no new lock is introduced for this alone."""
+        self._on_command = handler
+
+    def send_command_ack(self, command_id: str, status: str, detail: str | None = None) -> None:
+        """Enqueues one worker.command_ack for a previously received
+        gateway.command (ADR-0007 Phase 3D). `status` must be one of
+        "accepted" | "rejected" | "failed" (apps/api/src/realtime/envelope.ts's
+        RelayCommandAckPayloadSchema is the source of truth for this shape;
+        duplicated here by necessity like every other envelope in this
+        module). Never blocks, never raises — a lost ack becomes the
+        browser's "uncertain" outcome, which is the deliberately safe v1
+        behavior, not a bug in this method."""
+        try:
+            payload: dict = {"commandId": command_id, "status": status}
+            if detail is not None:
+                payload["detail"] = detail
+            envelope = {
+                "version": RELAY_PROTOCOL_VERSION,
+                "type": "worker.command_ack",
+                "executionId": self._execution_id,
+                "eventId": None,
+                "payload": payload,
+            }
+            with self._queue_lock:
+                if len(self._queue) == self._queue.maxlen:
+                    self._dropped_count += 1
+                self._queue.append(envelope)
+            self._has_work.set()
+        except Exception as err:  # noqa: BLE001 - must never affect the dispatch
+            self._log(f"relay: failed to enqueue command ack (non-fatal): {err!r}")
+
     def close(self, timeout: float = CLOSE_JOIN_TIMEOUT_SECONDS) -> None:
         """Best-effort flush + clean close. Never raises, never blocks
         longer than `timeout`. Safe to call even if the relay never
@@ -160,6 +235,8 @@ class RelayClient:
                 self._ws.close()
         except Exception:  # noqa: BLE001
             pass
+        if self._recv_thread is not None:
+            self._recv_thread.join(timeout=timeout)
 
     @property
     def dropped_count(self) -> int:
@@ -207,6 +284,16 @@ class RelayClient:
         self._connected.set()
         self._enqueue_lifecycle("worker.ready")
 
+        # ADR-0007 Phase 3D: start the inbound-command receive thread only
+        # once the connection is up. If `_on_command` is None (no caller
+        # opted into command handling — e.g. worker.py's plain
+        # EXECUTION_ADAPTER=direct path, which never constructs a
+        # RelayClient with one), the thread still runs but simply has
+        # nothing to invoke — inbound gateway.command messages are received
+        # and silently ignored rather than left unread on the socket.
+        self._recv_thread = threading.Thread(target=self._recv_run, daemon=True)
+        self._recv_thread.start()
+
         try:
             while not self._stop.is_set():
                 self._has_work.wait(timeout=1.0)
@@ -231,3 +318,65 @@ class RelayClient:
                 self._ws.close()
             except Exception:  # noqa: BLE001
                 pass
+
+    def _recv_run(self) -> None:
+        """ADR-0007 Phase 3D receive loop. Runs on its own thread for the
+        life of this relay connection. Reads inbound frames via the
+        underlying library's own internal recv queue (see this module's
+        docstring on why this is safe to run concurrently with `_run`'s send
+        loop and with the main dispatch thread's blocking `.run()` call) and
+        dispatches `gateway.command` envelopes to `_on_command`. Never raises
+        out of this thread — an exception here must never affect the
+        dispatch or the outbound send path."""
+        while not self._stop.is_set():
+            try:
+                raw = self._ws.recv(timeout=1.0)
+            except TimeoutError:
+                continue
+            except Exception:  # noqa: BLE001 - connection gone; stop receiving for this dispatch
+                return
+
+            try:
+                envelope = json.loads(raw)
+            except Exception as err:  # noqa: BLE001
+                self._log(f"relay: received non-JSON message, ignoring: {err!r}")
+                continue
+
+            if not isinstance(envelope, dict):
+                continue
+            if envelope.get("type") != "gateway.command":
+                # worker.ready/relay.heartbeat/etc are never sent to the
+                # worker by apps/api today — a future message type arriving
+                # here is simply ignored, matching relay.ts's own
+                # log-and-ignore posture for anything it doesn't recognize.
+                continue
+            if envelope.get("executionId") != self._execution_id:
+                self._log("relay: gateway.command executionId mismatch, ignoring")
+                continue
+
+            payload = envelope.get("payload")
+            if not isinstance(payload, dict) or "commandId" not in payload or "command" not in payload:
+                self._log("relay: malformed gateway.command payload, ignoring")
+                continue
+
+            if self._on_command is None:
+                # A real, observed window (confirmed during this phase's own
+                # real-execution verification, not just theorized): the
+                # relay connects and registers with the gateway BEFORE
+                # agent_server_adapter.py's set_command_handler() call, which
+                # only happens once the Conversation object exists (several
+                # HTTP/WS round trips later). A command arriving in that gap
+                # is a real, deterministic condition this worker can already
+                # detect — sending an explicit "rejected" ack here (instead
+                # of silently dropping it, which used to leave the browser
+                # waiting out the full ack-timeout window for a command that
+                # was never going to be answered) turns an avoidable
+                # "uncertain" into a fast, honest "rejected." Never treated
+                # as "worker declined the command's content" — a browser or
+                # user retrying moments later is expected to succeed.
+                self.send_command_ack(payload["commandId"], "rejected", "worker is not ready to accept commands yet")
+                continue
+            try:
+                self._on_command(payload)
+            except Exception as err:  # noqa: BLE001 - must never affect the dispatch or this loop
+                self._log(f"relay: on_command callback raised (non-fatal): {err!r}")

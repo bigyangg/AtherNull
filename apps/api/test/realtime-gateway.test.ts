@@ -532,10 +532,30 @@ describe("realtime gateway: live delivery via the Phase 3B relay path", () => {
 });
 
 describe("realtime gateway: control messages are rejected explicitly", () => {
-  test("8. a browser sending a control-shaped message receives an explicit rejection, not silence", async () => {
+  // ADR-0007 Phase 3D note: this test originally connected as the task's
+  // OWNER, under Phase 3C's own premise that NO connection had any
+  // legitimate inbound message type at all. Phase 3D changed that premise —
+  // owner/admin now hold realtime:control (session.ts's
+  // hasRealtimeControlAuthority) — so an owner sending a control-shaped
+  // message is no longer testing "a view-only connection rejects control,"
+  // it would actually be testing "an authorized connection rejects an
+  // UNRECOGNIZED command shape," a materially different assertion. This test
+  // is updated to connect as a plain MEMBER instead — the actual Phase 3D
+  // "no realtime:control" case this test's own name and describe-block
+  // still describe — so its guarantee (a view-only connection's inbound
+  // messages are always rejected, never silently accepted) is preserved
+  // exactly, not weakened. Phase 3D's own realtime-control.test.ts covers
+  // the owner/admin-authorized path this test no longer exercises.
+  test("8. a browser without realtime:control sending a control-shaped message receives an explicit rejection, not silence", async () => {
     const suffix = randomUUID();
-    const { owner, taskId, executionId, workerId } = await createRunningTaskForNewOrg(suffix);
-    const client = await connectRealtime(taskId, { cookie: owner.jar.header });
+    const { owner, organizationId, projectId, agentProfileId } = await setUpOwnerWithOrg(suffix);
+    const member = await signUpVerifiedAndSignIn(`rt-member-${suffix}@example.com`, "correct horse battery", "Member");
+    await addMemberDirect(organizationId, member.userId, "member");
+    await setActiveOrg(member.jar, organizationId);
+    void owner;
+
+    const { taskId, executionId, workerId } = await createRunningExecutionDirect(organizationId, projectId, agentProfileId);
+    const client = await connectRealtime(taskId, { cookie: member.jar.header });
     await client.waitForType("history.ready");
 
     client.ws.send(

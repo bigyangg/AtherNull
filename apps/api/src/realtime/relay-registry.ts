@@ -1,5 +1,7 @@
 import type { WebSocket } from "ws";
 
+import { controlRegistry } from "./control-registry.js";
+
 export interface RelayConnection {
   executionId: string;
   workerId: string;
@@ -64,6 +66,31 @@ export class RelayRegistry {
   }
 
   /**
+   * ADR-0007 Phase 3D — sends a gateway->worker envelope (currently only
+   * ever `gateway.command`) over the currently-registered relay for
+   * executionId, if one exists and its socket is currently open. Returns
+   * false (never throws) when there is no active relay, or the socket
+   * exists but is not in the OPEN state, or the underlying send call itself
+   * throws — every one of these is exactly the "gateway cannot find relay
+   * before forwarding" / "relay disappeared" case the caller must treat as
+   * an immediate, explicit rejection (never a silent no-op it can't detect).
+   */
+  sendCommand(executionId: string, envelope: unknown): boolean {
+    const connection = this.connections.get(executionId);
+    if (!connection) return false;
+    // ws.OPEN === 1 — checked by numeric value here to avoid importing the
+    // `ws` module's WebSocket class just for its readyState constant; every
+    // other state (CONNECTING/CLOSING/CLOSED) must not attempt a send.
+    if (connection.socket.readyState !== 1) return false;
+    try {
+      connection.socket.send(JSON.stringify(envelope));
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
    * Removes the registration for executionId, but only if `socket` is still
    * the one currently registered — guards against a stale close/error
    * handler firing (possibly late, after the underlying TCP connection was
@@ -74,6 +101,12 @@ export class RelayRegistry {
     const existing = this.connections.get(executionId);
     if (existing && existing.socket === socket) {
       this.connections.delete(executionId);
+      // ADR-0007 Phase 3D: a worker disconnecting is exactly the
+      // "disconnected before acknowledgement" uncertain-delivery scenario
+      // for any command still awaiting this relay's ack — resolve them now
+      // rather than making the browser wait out the full ack timeout for a
+      // connection already known to be gone.
+      controlRegistry.abortAllForExecution(executionId);
     }
   }
 
@@ -94,6 +127,12 @@ export class RelayRegistry {
     if (!existing) return;
     this.connections.delete(executionId);
     this.closeSocket(existing.socket, CLOSE_CODE_SERVER_CLOSED, reason);
+    // ADR-0007 Phase 3D: same reasoning as unregister() above — a relay
+    // being closed out from under a still-pending command (lease reclaimed,
+    // or the execution completed) can never be silently reported as
+    // "executed"/"accepted" with no further ack possible. Resolve as
+    // uncertain immediately.
+    controlRegistry.abortAllForExecution(executionId);
   }
 
   private closeSocket(socket: WebSocket, code: number, reason: string): void {

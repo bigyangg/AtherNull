@@ -217,3 +217,172 @@ def test_failed_run_flushes_before_container_cleanup(monkeypatch) -> None:
     assert outcome == "failure"
     assert [event["id"] for event in received] == ["partial"]
     workspace.cleanup.assert_called_once()
+
+
+# --- ADR-0007 Phase 3D: CommandHandler (worker -> Agent Server control) ----
+
+
+def test_command_handler_forwards_agent_message_and_acks_accepted() -> None:
+    from unittest.mock import MagicMock
+
+    from coding_agent.agent_server_adapter import CommandHandler
+
+    conversation = MagicMock()
+    relay = MagicMock()
+    handler = CommandHandler(conversation, relay, log=lambda *_: None)
+
+    handler({"commandId": "cmd-1", "command": {"type": "agent.message", "payload": {"text": "hello agent"}}})
+
+    conversation.send_message.assert_called_once_with("hello agent")
+    relay.send_command_ack.assert_called_once_with("cmd-1", "accepted")
+
+
+def test_command_handler_never_calls_run_again_on_the_conversation() -> None:
+    # Deliberate: calling .run()/.pause()/.interrupt() again from this
+    # handler's thread would race the main dispatch thread's own in-flight
+    # blocking .run() call over RemoteConversation's shared _run_armed /
+    # _terminal_status_queue state (see this module's own CommandHandler
+    # docstring). send_message() alone is the only SDK call this handler is
+    # allowed to make.
+    from unittest.mock import MagicMock
+
+    from coding_agent.agent_server_adapter import CommandHandler
+
+    conversation = MagicMock()
+    relay = MagicMock()
+    handler = CommandHandler(conversation, relay, log=lambda *_: None)
+
+    handler({"commandId": "cmd-1", "command": {"type": "agent.message", "payload": {"text": "hi"}}})
+
+    conversation.run.assert_not_called()
+    conversation.pause.assert_not_called()
+    conversation.interrupt.assert_not_called()
+
+
+def test_command_handler_rejects_unsupported_command_type_without_touching_conversation() -> None:
+    from unittest.mock import MagicMock
+
+    from coding_agent.agent_server_adapter import CommandHandler
+
+    conversation = MagicMock()
+    relay = MagicMock()
+    handler = CommandHandler(conversation, relay, log=lambda *_: None)
+
+    handler({"commandId": "cmd-1", "command": {"type": "terminal.exec", "payload": {"cmd": "rm -rf /"}}})
+
+    conversation.send_message.assert_not_called()
+    relay.send_command_ack.assert_called_once()
+    args = relay.send_command_ack.call_args.args
+    assert args[0] == "cmd-1"
+    assert args[1] == "rejected"
+
+
+def test_command_handler_rejects_missing_or_empty_text() -> None:
+    from unittest.mock import MagicMock
+
+    from coding_agent.agent_server_adapter import CommandHandler
+
+    conversation = MagicMock()
+    relay = MagicMock()
+    handler = CommandHandler(conversation, relay, log=lambda *_: None)
+
+    handler({"commandId": "cmd-1", "command": {"type": "agent.message", "payload": {"text": "   "}}})
+
+    conversation.send_message.assert_not_called()
+    relay.send_command_ack.assert_called_once_with("cmd-1", "rejected", "missing or empty text")
+
+
+def test_command_handler_acks_failed_when_send_message_raises() -> None:
+    from unittest.mock import MagicMock
+
+    from coding_agent.agent_server_adapter import CommandHandler
+
+    conversation = MagicMock()
+    conversation.send_message.side_effect = RuntimeError("agent server 500")
+    relay = MagicMock()
+    handler = CommandHandler(conversation, relay, log=lambda *_: None)
+
+    handler({"commandId": "cmd-1", "command": {"type": "agent.message", "payload": {"text": "hello"}}})
+
+    relay.send_command_ack.assert_called_once()
+    args = relay.send_command_ack.call_args.args
+    assert args[0] == "cmd-1"
+    assert args[1] == "failed"
+
+
+def test_command_handler_drops_payload_with_no_commandid_without_raising() -> None:
+    from unittest.mock import MagicMock
+
+    from coding_agent.agent_server_adapter import CommandHandler
+
+    conversation = MagicMock()
+    relay = MagicMock()
+    handler = CommandHandler(conversation, relay, log=lambda *_: None)
+
+    handler({"command": {"type": "agent.message", "payload": {"text": "hi"}}})  # no commandId
+
+    conversation.send_message.assert_not_called()
+    relay.send_command_ack.assert_not_called()
+
+
+def test_run_dispatch_via_agent_server_wires_command_handler_after_conversation_exists(monkeypatch) -> None:
+    """Confirms the late-binding wiring in run_dispatch_via_agent_server: the
+    RelayClient's command handler is set to a real CommandHandler bound to
+    the actual Conversation object, not left None or bound to something
+    else."""
+    from unittest.mock import MagicMock
+
+    from coding_agent import agent_server_adapter as adapter
+
+    workspace = MagicMock()
+    workspace.host = "http://localhost:8000"
+
+    captured_relay = {}
+
+    class FakeRelay:
+        def __init__(self, *args, **kwargs):
+            self.handler = None
+            captured_relay["instance"] = self
+
+        def start(self):
+            pass
+
+        def send_event(self, *args, **kwargs):
+            pass
+
+        def set_command_handler(self, handler):
+            self.handler = handler
+
+        def close(self, *args, **kwargs):
+            pass
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/events"):
+            return httpx.Response(204)
+        return httpx.Response(200)
+
+    conversation = MagicMock()
+
+    def make_conversation(**kwargs):
+        return conversation
+
+    monkeypatch.setattr(adapter, "heartbeat_loop", lambda *args: None)
+    monkeypatch.setattr(adapter, "clone_repository", lambda *args: None)
+    monkeypatch.setattr(adapter, "require_api_key", lambda *args: "test-key")
+    monkeypatch.setattr(adapter, "LLM", MagicMock())
+    monkeypatch.setattr(adapter, "Agent", MagicMock())
+    monkeypatch.setattr(adapter, "LoopbackDockerWorkspace", lambda **kwargs: workspace)
+    monkeypatch.setattr(adapter, "Conversation", make_conversation)
+    monkeypatch.setattr(adapter, "resync_events", lambda *args: [])
+    monkeypatch.setattr(adapter, "RelayClient", FakeRelay)
+
+    with make_client(handler) as client:
+        adapter.run_dispatch_via_agent_server(client, {
+            "executionId": "exec-1", "repositorySnapshot": {},
+            "resolvedModel": "test-model", "objective": "test", "acceptanceCriteria": [],
+        })
+
+    relay_instance = captured_relay["instance"]
+    assert relay_instance.handler is not None
+    assert isinstance(relay_instance.handler, adapter.CommandHandler)
+    assert relay_instance.handler._conversation is conversation

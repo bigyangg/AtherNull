@@ -4,11 +4,9 @@
 // "how", not the "why" already recorded there.
 //
 // Scope, exactly: an authenticated AtherNull browser may SUBSCRIBE to a
-// RUNNING execution's event stream (persisted history + live tail). Nothing
-// in this file accepts, relays, or even parses an inbound browser message
-// into anything actionable — every inbound message is rejected explicitly
-// (see the "message" handler below). realtime:control (chat/bash forwarding,
-// command envelopes) is Phase 3D, not started here.
+// RUNNING execution's event stream (persisted history + live tail). This
+// paragraph describes the original Phase 3C (read-only) scope; the Phase 3D
+// addendum immediately below it describes what was added on top.
 //
 // This route never touches SESSION_API_KEY, never calls anything under
 // /internal/*, and never gives the browser any network coordinate for the
@@ -17,9 +15,23 @@
 // compat layer already reads) and (b) the in-process
 // executionBroadcaster/relayRegistry, both of which live entirely inside
 // apps/api.
+//
+// ADR-0007 Phase 3D adds realtime:control on top of the above, strictly
+// additively: a connection without it still hits the exact same
+// "control_not_supported" rejection Phase 3C always sent for any inbound
+// message. A connection WITH it may send exactly one legitimate message
+// shape (`execution.command`, packages/contracts/realtime-browser.ts),
+// which is authorized against CURRENT server-side state on every single
+// command (never just the connect-time check) before being forwarded to the
+// worker relay — see `handleControlMessage` below. This file still never
+// touches SESSION_API_KEY and never calls anything under /internal/*; the
+// command is forwarded over the exact same worker relay socket Phase 3B
+// already established (relayRegistry.sendCommand), never a new connection.
 
 import {
   REALTIME_BROWSER_PROTOCOL_VERSION,
+  RealtimeClientMessageSchema,
+  type CommandStatusValue,
   type RealtimeExecutionEvent,
   type RealtimeServerMessage,
 } from "@athernull/contracts";
@@ -28,6 +40,8 @@ import type { WebSocket } from "ws";
 import { z } from "zod";
 
 import { db } from "../db.js";
+import { RELAY_PROTOCOL_VERSION } from "../realtime/envelope.js";
+import { controlRegistry, type CommandAckStatus } from "../realtime/control-registry.js";
 import {
   executionBroadcaster,
   type BroadcastExecutionEvent,
@@ -35,13 +49,30 @@ import {
 } from "../realtime/execution-broadcaster.js";
 import { relayRegistry } from "../realtime/relay-registry.js";
 import { resolveConversationTarget } from "./openhands-compat.js";
-import { HttpError, requireOrgSession, sendHttpError } from "../session.js";
+import { HttpError, hasRealtimeControlAuthority, requireOrgSession, sendHttpError } from "../session.js";
 import { isTrustedOrigin } from "../trusted-origins.js";
+
+// ADR-0007 Phase 3D backpressure bounds (all in-memory, per this gateway
+// process — same "not durable" caveat as controlRegistry itself). None of
+// these are configurable via env var in v1: they are conservative,
+// hardcoded defaults, not a tuning surface this phase needs to expose.
+const MAX_CONTROL_MESSAGE_BYTES = 16 * 1024; // 16 KiB — comfortably above MAX_COMMAND_TEXT_LENGTH (8000) plus JSON/envelope overhead.
+const MAX_PENDING_COMMANDS_PER_CONNECTION = 5;
+const RATE_LIMIT_WINDOW_MS = 10_000;
+const RATE_LIMIT_MAX_COMMANDS_PER_WINDOW = 10;
 
 interface RealtimeAuth {
   executionId: string;
   taskId: string;
   executionStatus: string;
+  organizationId: string;
+  // ADR-0007 Phase 3D: decided once at connect time from the live role
+  // requireOrgSession's preValidation check already fetched — but NEVER
+  // trusted alone for an actual command (see handleControlMessage's own
+  // fresh requireOrgSession re-check). This flag only controls whether the
+  // connection is even allowed to attempt sending a command at all, and
+  // what `server.hello` reports to the frontend.
+  canControl: boolean;
 }
 
 declare module "fastify" {
@@ -59,6 +90,18 @@ const ParamsSchema = z.object({ id: z.string().min(1) });
 // different attempt than the one the tab is displaying" as an explicit
 // rejection instead of silently subscribing to the wrong attempt's stream.
 const QuerySchema = z.object({ executionId: z.string().min(1).optional() });
+
+// ADR-0007 Phase 3D — best-effort extraction of a commandId from an
+// otherwise-invalid inbound message, so a malformed/unrecognized command can
+// still be rejected as a specific commandId's "rejected" status rather than
+// a bare, un-actionable error frame the browser can't attribute to any one
+// in-flight submission. Never throws; returns undefined for anything that
+// isn't a plain object with a non-empty string `commandId` field.
+function extractCommandId(value: unknown): string | undefined {
+  if (typeof value !== "object" || value === null) return undefined;
+  const commandId = (value as Record<string, unknown>).commandId;
+  return typeof commandId === "string" && commandId.length > 0 ? commandId : undefined;
+}
 
 async function loadPersistedEvents(executionId: string): Promise<RealtimeExecutionEvent[]> {
   const rows = await db
@@ -116,7 +159,7 @@ export async function realtimeGatewayRoutes(app: FastifyInstance) {
           // removed member is rejected immediately, identical guarantee
           // Phase 2's own "removed member" test already proved for the
           // historical compat layer.
-          const { organizationId } = await requireOrgSession(request);
+          const { organizationId, role } = await requireOrgSession(request);
 
           const { id } = ParamsSchema.parse(request.params);
           const query = QuerySchema.parse(request.query);
@@ -151,6 +194,13 @@ export async function realtimeGatewayRoutes(app: FastifyInstance) {
             executionId: resolution.execution.id,
             taskId: resolution.task.id,
             executionStatus: resolution.execution.status,
+            organizationId,
+            // ADR-0007 Phase 3D authorization policy (session.ts's own
+            // header comment has the full rationale): realtime:control is
+            // gated on the exact same owner/admin tier that already gates
+            // fund/verify/accept/reject, reused deliberately rather than a
+            // new permission concept.
+            canControl: hasRealtimeControlAuthority(role),
           };
         } catch (err) {
           if (sendHttpError(reply, err)) return;
@@ -173,7 +223,7 @@ export async function realtimeGatewayRoutes(app: FastifyInstance) {
         socket.close(4003, "unauthenticated");
         return;
       }
-      const { executionId, taskId, executionStatus } = auth;
+      const { executionId, taskId, executionStatus, organizationId, canControl } = auth;
 
       let closed = false;
       let completionHandled = false;
@@ -188,6 +238,28 @@ export async function realtimeGatewayRoutes(app: FastifyInstance) {
         }
       }
 
+      // --- ADR-0007 Phase 3D: realtime:control state, scoped to this one
+      // connection --------------------------------------------------------
+      let pendingCommandCount = 0;
+      const rateLimitTimestamps: number[] = [];
+      const pendingCancels = new Map<string, () => void>();
+      // Commands this connection has seen accepted, awaiting the "executed"
+      // heuristic below — bounded, oldest-first, same reasoning as every
+      // other bound in this phase.
+      const acceptedAwaitingExecuted: string[] = [];
+      const MAX_ACCEPTED_AWAITING = 20;
+
+      function sendCommandStatus(commandId: string, status: CommandStatusValue, reason?: string): void {
+        send({
+          version: REALTIME_BROWSER_PROTOCOL_VERSION,
+          type: "command.status",
+          executionId,
+          commandId,
+          status,
+          ...(reason ? { reason } : {}),
+        });
+      }
+
       function sendEventOnce(event: BroadcastExecutionEvent | RealtimeExecutionEvent): void {
         if (sentIds.has(event.id)) return;
         sentIds.add(event.id);
@@ -197,6 +269,21 @@ export async function realtimeGatewayRoutes(app: FastifyInstance) {
           executionId,
           event: { id: event.id, kind: event.kind, occurredAt: event.occurredAt, payload: event.payload },
         });
+        // ADR-0007 Phase 3D — best-effort "executed" heuristic (explicitly
+        // NOT a precise per-command correlation — see the ADR's Phase 3D
+        // status section for why a real event<->commandId correlation is
+        // deferred to a future phase): the oldest command this connection
+        // has seen "accepted" is upgraded to "executed" the next time ANY
+        // execution.event is observed for this execution. This is honest
+        // about being a heuristic, not a guarantee that THIS specific event
+        // resulted from THAT specific command — but it is the "a normal
+        // OpenHands event proves execution" signal the ADR asks for, without
+        // inventing a second, un-audited event-identity scheme to correlate
+        // them exactly.
+        const nextCommandId = acceptedAwaitingExecuted.shift();
+        if (nextCommandId) {
+          sendCommandStatus(nextCommandId, "executed");
+        }
       }
 
       // --- History <-> live handoff -----------------------------------
@@ -248,6 +335,12 @@ export async function realtimeGatewayRoutes(app: FastifyInstance) {
         closed = true;
         unsubscribeEvent();
         unsubscribeCompletion();
+        // ADR-0007 Phase 3D: a command left waiting for a worker ack must
+        // never fire its status callback after this connection is gone
+        // (there is no browser left to send it to) — cancel every
+        // still-pending wait this connection registered.
+        for (const cancel of pendingCancels.values()) cancel();
+        pendingCancels.clear();
       }
 
       // --- Completion (server-driven only, per ADR-0007) ----------------
@@ -281,24 +374,214 @@ export async function realtimeGatewayRoutes(app: FastifyInstance) {
         request.log.warn({ executionId, taskId, err }, "realtime gateway socket error");
       });
 
-      // Read-only phase: there is no defined client->server message type at
-      // all. Every inbound message — whether it looks like a future
-      // realtime:control command (chat send, bash exec) or anything else —
-      // is rejected explicitly and logged, never silently dropped, per
-      // ADR-0007's Phase 3C scope boundary.
+      // ADR-0007 Phase 3D: a connection without realtime:control gets the
+      // exact same unconditional rejection Phase 3C always gave every
+      // inbound message — nothing about that default changes. A connection
+      // WITH realtime:control gets its messages routed to
+      // handleControlMessage instead, which re-validates everything
+      // (schema, authorization, execution/lease state, backpressure,
+      // dedupe) before ever forwarding anything.
       socket.on("message", (raw: Buffer) => {
-        request.log.warn(
-          { executionId, taskId, size: raw.byteLength },
-          "realtime gateway: rejected inbound browser message (view-only connection, no realtime:control in this phase)",
-        );
-        send({
-          version: REALTIME_BROWSER_PROTOCOL_VERSION,
-          type: "error",
-          code: "control_not_supported",
-          message:
-            "This connection is realtime:view only. Sending commands into a running execution is not supported (realtime:control is not implemented in this phase).",
-        });
+        if (!canControl) {
+          request.log.warn(
+            { executionId, taskId, size: raw.byteLength },
+            "realtime gateway: rejected inbound browser message (this connection does not hold realtime:control)",
+          );
+          send({
+            version: REALTIME_BROWSER_PROTOCOL_VERSION,
+            type: "error",
+            code: "control_not_supported",
+            message:
+              "This connection is realtime:view only. Sending commands into a running execution requires realtime:control.",
+          });
+          return;
+        }
+        void handleControlMessage(raw);
       });
+
+      // --- ADR-0007 Phase 3D: realtime:control inbound command handling --
+      async function handleControlMessage(raw: Buffer): Promise<void> {
+        if (raw.byteLength > MAX_CONTROL_MESSAGE_BYTES) {
+          request.log.warn({ executionId, taskId, size: raw.byteLength }, "realtime gateway: oversized control message, rejecting");
+          send({
+            version: REALTIME_BROWSER_PROTOCOL_VERSION,
+            type: "error",
+            code: "invalid_message",
+            message: "Message exceeds the maximum allowed size.",
+          });
+          return;
+        }
+
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(raw.toString("utf8"));
+        } catch {
+          send({ version: REALTIME_BROWSER_PROTOCOL_VERSION, type: "error", code: "invalid_message", message: "Malformed JSON." });
+          return;
+        }
+
+        const result = RealtimeClientMessageSchema.safeParse(parsed);
+        if (!result.success) {
+          // Salvage a commandId if the shape was close-but-invalid (e.g. an
+          // unknown command.type, or an oversized text field caught by the
+          // Zod schema itself) so the rejection can be attributed to a
+          // specific command rather than a bare, un-actionable error frame —
+          // this is exactly the "reject unknown fields/types" /
+          // "enforce size limits" requirement, done per-command wherever
+          // possible.
+          const maybeCommandId = extractCommandId(parsed);
+          if (maybeCommandId) {
+            sendCommandStatus(maybeCommandId, "rejected", "invalid_payload");
+          } else {
+            send({
+              version: REALTIME_BROWSER_PROTOCOL_VERSION,
+              type: "error",
+              code: "invalid_message",
+              message: "Unrecognized or malformed message.",
+            });
+          }
+          return;
+        }
+
+        const message = result.data;
+        const { commandId, executionId: claimedExecutionId, command } = message;
+
+        if (claimedExecutionId !== executionId) {
+          sendCommandStatus(commandId, "rejected", "execution_id_mismatch");
+          return;
+        }
+
+        // ADR-0007's own at-most-once rule: a commandId already forwarded
+        // once by this gateway process is never forwarded again, regardless
+        // of why the browser sent it twice (retry, reconnect, bug). This is
+        // an explicit, deliberate rejection, not a silent drop.
+        if (controlRegistry.hasBeenForwarded(commandId)) {
+          request.log.warn({ executionId, commandId }, "realtime gateway: duplicate commandId, not forwarding again");
+          sendCommandStatus(commandId, "rejected", "duplicate_command_id");
+          return;
+        }
+
+        // Backpressure — bounded per connection, checked before any DB work.
+        if (pendingCommandCount >= MAX_PENDING_COMMANDS_PER_CONNECTION) {
+          sendCommandStatus(commandId, "rejected", "too_many_pending");
+          return;
+        }
+        const now = Date.now();
+        while (rateLimitTimestamps.length > 0 && now - (rateLimitTimestamps[0] ?? now) > RATE_LIMIT_WINDOW_MS) {
+          rateLimitTimestamps.shift();
+        }
+        if (rateLimitTimestamps.length >= RATE_LIMIT_MAX_COMMANDS_PER_WINDOW) {
+          sendCommandStatus(commandId, "rejected", "rate_limited");
+          return;
+        }
+
+        sendCommandStatus(commandId, "received");
+
+        // ADR-0007: "do not rely only on authorization performed when the
+        // WebSocket first connected" — every command re-runs the real
+        // session + live org-membership check (the same
+        // auth.api.getActiveMember() re-query requireOrgSession already
+        // does), not just the connect-time snapshot. A demoted/removed
+        // member's very next command is rejected immediately, matching the
+        // guarantee Phase 2/3C already established for connection-level
+        // checks, now extended to command-level.
+        let freshRole: string;
+        try {
+          const fresh = await requireOrgSession(request);
+          if (fresh.organizationId !== organizationId) {
+            sendCommandStatus(commandId, "rejected", "not_authorized");
+            return;
+          }
+          freshRole = fresh.role;
+        } catch {
+          sendCommandStatus(commandId, "rejected", "not_authorized");
+          return;
+        }
+        if (!hasRealtimeControlAuthority(freshRole)) {
+          sendCommandStatus(commandId, "rejected", "not_authorized");
+          return;
+        }
+
+        // Fresh execution/lease/status revalidation — never trust the
+        // connect-time RUNNING check for a mutating command. Re-queries the
+        // same executions row internal.ts's own claim/heartbeat/complete
+        // handlers are the sole writers of, so this always reflects the
+        // current authoritative state, not a cached one.
+        const executionRow = await db
+          .selectFrom("executions")
+          .select(["id", "status", "lease_owner"])
+          .where("id", "=", executionId)
+          .executeTakeFirst();
+        if (!executionRow || executionRow.status !== "RUNNING") {
+          sendCommandStatus(commandId, "rejected", "execution_not_running");
+          return;
+        }
+        const relayConnection = relayRegistry.get(executionId);
+        if (!relayConnection) {
+          sendCommandStatus(commandId, "rejected", "no_active_relay");
+          return;
+        }
+        if (relayConnection.workerId !== executionRow.lease_owner) {
+          // The lease moved (or this connection is somehow stale) — never
+          // send a command into an execution whose lease no longer matches
+          // the relay we'd be forwarding through.
+          sendCommandStatus(commandId, "rejected", "lease_mismatch");
+          return;
+        }
+
+        sendCommandStatus(commandId, "authorized");
+
+        rateLimitTimestamps.push(now);
+        pendingCommandCount += 1;
+        controlRegistry.markForwarded(commandId, executionId);
+
+        const relayEnvelope = {
+          version: RELAY_PROTOCOL_VERSION,
+          type: "gateway.command" as const,
+          executionId,
+          eventId: null,
+          payload: { commandId, command },
+        };
+
+        const sent = relayRegistry.sendCommand(executionId, relayEnvelope);
+        if (!sent) {
+          pendingCommandCount = Math.max(0, pendingCommandCount - 1);
+          sendCommandStatus(commandId, "rejected", "no_active_relay");
+          return;
+        }
+
+        sendCommandStatus(commandId, "forwarded");
+
+        const { cancel } = controlRegistry.registerPending(commandId, executionId, {
+          onAck: (status: CommandAckStatus, detail?: string) => {
+            pendingCancels.delete(commandId);
+            pendingCommandCount = Math.max(0, pendingCommandCount - 1);
+            if (status === "accepted") {
+              sendCommandStatus(commandId, "accepted");
+              acceptedAwaitingExecuted.push(commandId);
+              if (acceptedAwaitingExecuted.length > MAX_ACCEPTED_AWAITING) {
+                acceptedAwaitingExecuted.shift();
+              }
+            } else if (status === "rejected") {
+              // The WORKER itself declined to forward — distinct from this
+              // gateway's own "rejected" above, but the same terminal
+              // status from the browser's point of view (AtherNull's own
+              // system chose not to let this command reach the agent).
+              sendCommandStatus(commandId, "rejected", detail ?? "worker_rejected");
+            } else {
+              sendCommandStatus(commandId, "failed", detail ?? "agent_server_error");
+            }
+          },
+          onTimeout: () => {
+            pendingCancels.delete(commandId);
+            pendingCommandCount = Math.max(0, pendingCommandCount - 1);
+            // ADR-0007's explicit v1 rule: never automatically resend. The
+            // browser is told, honestly, that the outcome is unknown.
+            sendCommandStatus(commandId, "uncertain", "ack_timeout");
+          },
+        });
+        pendingCancels.set(commandId, cancel);
+      }
 
       send({
         version: REALTIME_BROWSER_PROTOCOL_VERSION,
@@ -306,6 +589,7 @@ export async function realtimeGatewayRoutes(app: FastifyInstance) {
         executionId,
         taskId,
         executionStatus,
+        canControl,
       });
 
       // Relay-unavailable is informational, not fatal: historical data below

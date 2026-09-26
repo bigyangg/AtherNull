@@ -12,6 +12,7 @@ import {
 import { WorkspaceHeader, TaskWorkspaceHeader } from "@/components/workspace/workspace-header";
 import { ConversationPanel } from "@/components/workspace/conversation-panel";
 import { LiveConversationPanel } from "@/components/workspace/live-conversation-panel";
+import { ExecutionControlInput } from "@/components/workspace/execution-control-input";
 import { LivePreviewPanel } from "@/components/workspace/live-preview-panel";
 import { ActivityPanel } from "@/components/workspace/activity-panel";
 import { TerminalActivityPanel } from "@/components/workspace/terminal-activity-panel";
@@ -89,7 +90,22 @@ function RealWorkspaceView({
     })) ??
     polledEvents ??
     [];
-  const conversation = <LiveConversationPanel events={eventList} />;
+  // ADR-0007 Phase 3D: shown only when the gateway itself said this
+  // connection holds realtime:control AND the execution is still RUNNING —
+  // sending a command into a finished execution makes no sense and the
+  // gateway would reject it anyway, but there's no reason to show the
+  // affordance at all once there's nothing running to talk to.
+  const latestCommandStatus = realtime.commandStatuses.at(-1) ?? null;
+  const conversation = (
+    <div className="flex h-full flex-col">
+      <div className="flex-1 overflow-hidden">
+        <LiveConversationPanel events={eventList} />
+      </div>
+      {realtime.canControl && isExecutionRunning && (
+        <ExecutionControlInput onSend={realtime.sendMessage} latestStatus={latestCommandStatus} />
+      )}
+    </div>
+  );
   const terminal = <TerminalActivityPanel events={eventList} />;
   const files = <FileChangesPanel events={eventList} />;
 
