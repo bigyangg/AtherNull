@@ -202,6 +202,19 @@ class RelayClient:
         # after the first (i.e. real reconnects, not the initial connect).
         # Exposed for tests and the phase's own real-execution verification.
         self._reconnect_count = 0
+        # Deliberately separate from `attempt` (the consecutive-failure/
+        # backoff counter in `_run`): `attempt` resets to 0 whenever a
+        # connection was stable for >= STABLE_CONNECTION_SECONDS before
+        # dying, so it answers "should the NEXT connect back off?", not "is
+        # this a reconnect?". A real-execution verification run found that
+        # gating `reconnect_count` on `attempt > 0` silently under-reports
+        # the single most realistic case (a healthy relay that ran fine for
+        # a while and then dropped) — that reconnect succeeds but reports
+        # zero, because `attempt` was already reset to 0 by the time the new
+        # connection succeeds. `_has_connected_once` answers the actual
+        # question ("has this client ever held a connection before?")
+        # independently of the backoff policy, which is unchanged by this.
+        self._has_connected_once = False
 
     # -- public API: every method here is safe to call unconditionally and
     # never raises — a caller (agent_server_adapter.py) must never need a
@@ -418,9 +431,17 @@ class RelayClient:
                 self._log(f"relay: connect failed ({err!r}), will retry (attempt {attempt}/{MAX_RECONNECT_ATTEMPTS})")
                 continue
 
-            if attempt > 0:
+            # ADR-0007 Phase 3E fix: whether this counts as a "reconnect" for
+            # observability purposes must NOT depend on `attempt` — `attempt`
+            # can already be back at 0 here (a prior connection was stable
+            # for STABLE_CONNECTION_SECONDS before dying) even though this is
+            # very much a real reconnect. `_has_connected_once` tracks the
+            # actual question directly, independent of the backoff policy.
+            if self._has_connected_once:
                 self._reconnect_count += 1
                 self._log(f"relay: reconnected (attempt {attempt}, total reconnects {self._reconnect_count})")
+            else:
+                self._has_connected_once = True
             self._connected.set()
             self._enqueue_lifecycle("worker.ready")
             connected_at = time.monotonic()

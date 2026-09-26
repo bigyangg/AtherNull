@@ -450,7 +450,62 @@ def test_reconnects_after_a_transient_connect_failure(monkeypatch) -> None:
 
     assert relay.connected_within(5.0), "must eventually connect after one transient failure"
     assert attempts["n"] == 2, "exactly one failed attempt, then one successful attempt"
-    assert relay.reconnect_count == 1
+    # This is the client's first-ever ESTABLISHED connection — it took two
+    # attempts to get there, but no previously-established relay was ever
+    # lost, so this must not count as a reconnect (ADR-0007 Phase 3E fix:
+    # reconnect_count tracks "connected again after a loss," not "connect()
+    # was retried"). See test_reconnect_after_a_stable_connection_still_
+    # increments_reconnect_count below for the actual reconnect case.
+    assert relay.reconnect_count == 0
+
+    relay.close()
+
+
+def test_reconnect_after_a_stable_connection_still_increments_reconnect_count(monkeypatch) -> None:
+    """Regression test for a real bug found during Phase 3E's own
+    real-execution verification: `attempt` (the backoff counter) resets to 0
+    whenever a connection was stable for >= STABLE_CONNECTION_SECONDS before
+    dying (by design — a healthy relay that legitimately drops should not be
+    penalized with backoff). But `reconnect_count` must NOT be gated on
+    `attempt > 0`, because that made this exact, most-realistic case (a
+    healthy relay that ran fine and then dropped) silently report zero
+    reconnects despite genuinely reconnecting. Shrinks
+    STABLE_CONNECTION_SECONDS to a tiny value (same monkeypatch convention
+    this file already uses for BASE_BACKOFF_SECONDS/MAX_BACKOFF_SECONDS) so
+    the test proves the stable-reset path fires without sleeping 10+ real
+    seconds."""
+    monkeypatch.setattr(relay_module, "STABLE_CONNECTION_SECONDS", 0.05)
+
+    first_conn = FakeConnection(fail_after=1)  # worker.ready succeeds, next send fails
+    second_conn = FakeConnection()
+    connections = [first_conn, second_conn]
+    attempts = {"n": 0}
+
+    def fake_connect(url, **kwargs):
+        conn = connections[attempts["n"]]
+        attempts["n"] += 1
+        return conn
+
+    monkeypatch.setattr(relay_module.ws_client, "connect", fake_connect)
+    relay = RelayClient("http://localhost:3001", "test-token", "worker-1", "exec-1", log=lambda *_: None)
+    relay.start()
+    assert relay.connected_within(2.0)
+    assert relay.reconnect_count == 0, "the initial connection is not itself a reconnect"
+
+    # Outlast the (shrunk) stability threshold before the connection dies, so
+    # `attempt` resets to 0 on this drop -- exactly the condition that
+    # previously suppressed reconnect_count.
+    time.sleep(0.2)
+    relay.send_event({"id": "evt-1", "kind": "K", "occurredAt": "t", "payload": {}})
+
+    assert _wait_until(lambda: attempts["n"] == 2, timeout=5.0), "must reconnect onto the second connection"
+    assert _wait_until(lambda: relay.is_connected, timeout=5.0)
+
+    assert relay.reconnect_count == 1, (
+        "a real reconnect after a STABLE connection must still increment "
+        "reconnect_count, even though `attempt` was reset to 0 by the "
+        "stability window"
+    )
 
     relay.close()
 
