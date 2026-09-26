@@ -266,6 +266,31 @@ export interface ProjectEstimate {
   approvedAt: string | null;
 }
 
+// Phase 4B — mirrors ProjectBudgetAuthorizationsTable
+// (packages/database/src/schema.ts) / BudgetAuthorizationResponseSchema
+// (packages/contracts/src/budget-authorizations.ts). Never a task/funding/
+// settlement concept — see components/projects/budget-authorization-panel.tsx's
+// header comment for the exact vocabulary this UI must and must not use.
+export type BudgetAuthorizationSource = "ESTIMATE_PROPOSED_CAP" | "USER_SET";
+export type BudgetAuthorizationStatus = "ACTIVE" | "SUPERSEDED";
+
+export interface BudgetAuthorization {
+  id: string;
+  organizationId: string;
+  projectId: string;
+  estimateId: string;
+  estimateLineageId: string;
+  estimateVersion: number;
+  amountMinor: number;
+  currency: string;
+  source: BudgetAuthorizationSource;
+  status: BudgetAuthorizationStatus;
+  supersedesId: string | null;
+  authorizedBy: string;
+  authorizedAt: string;
+  createdAt: string;
+}
+
 export function formatMinor(minor: number, currency: string): string {
   return (minor / 100).toLocaleString("en-US", {
     style: "currency",

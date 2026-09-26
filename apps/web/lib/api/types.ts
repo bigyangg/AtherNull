@@ -1,5 +1,7 @@
 import type {
   AgentProfile,
+  BudgetAuthorization,
+  BudgetAuthorizationSource,
   EstimateResult,
   ExecutionEvent,
   Project,
@@ -55,6 +57,16 @@ export interface EstimateTaskInput {
   budgetMinor: number;
 }
 
+// Phase 4B — mirrors apps/api's AuthorizeBudgetRequestSchema
+// (packages/contracts/src/budget-authorizations.ts). amountMinor is omitted
+// when source is ESTIMATE_PROPOSED_CAP and the caller wants the server's own
+// persisted proposed_budget_cap_minor used verbatim.
+export interface AuthorizeBudgetInput {
+  source: BudgetAuthorizationSource;
+  amountMinor?: number;
+  currency: string;
+}
+
 // The real "Import Repository" / task-status dashboard's view of the
 // backend — implemented by lib/api/live.ts against apps/api's /v1/* routes.
 export interface TaskDashboardApi {
@@ -80,4 +92,15 @@ export interface TaskDashboardApi {
   getEstimate(projectId: string, estimateId: string): Promise<ProjectEstimate>;
   reviseEstimate(projectId: string, estimateId: string, prompt: string): Promise<ProjectEstimate>;
   approveEstimate(projectId: string, estimateId: string): Promise<ProjectEstimate>;
+
+  // Phase 4B — authorized project budget. Committing a real money amount
+  // against an APPROVED estimate — never funding, never settlement, never a
+  // task (see apps/api/src/routes/budget-authorizations.ts's header
+  // comment).
+  authorizeBudget(
+    projectId: string,
+    estimateId: string,
+    input: AuthorizeBudgetInput,
+  ): Promise<BudgetAuthorization>;
+  listBudgetAuthorizations(projectId: string, estimateId: string): Promise<BudgetAuthorization[]>;
 }

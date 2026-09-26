@@ -9,6 +9,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
 import { IconBadge } from "@/components/icon-badge";
+import { BudgetAuthorizationPanel } from "@/components/projects/budget-authorization-panel";
 import {
   useApproveEstimate,
   useGenerateEstimate,
@@ -254,6 +255,10 @@ export function ScopeEstimatePanel({ projectId }: { projectId: string }) {
           </Card>
 
           <CostCard estimate={head} />
+
+          {head.status === "APPROVED" && (
+            <BudgetAuthorizationPanel projectId={projectId} estimate={head} />
+          )}
 
           <div className="flex gap-2">
             <Button

@@ -5,6 +5,7 @@ import Fastify, { type FastifyInstance } from "fastify";
 
 import { auth } from "./auth.js";
 import { agentProfileRoutes } from "./routes/agent-profiles.js";
+import { budgetAuthorizationRoutes } from "./routes/budget-authorizations.js";
 import { estimateRoutes } from "./routes/estimates.js";
 import { internalRoutes } from "./routes/internal.js";
 import { jobRoutes } from "./routes/jobs.js";
@@ -44,6 +45,12 @@ export async function buildApp(opts: { logger?: boolean } = {}): Promise<Fastify
   // tasks/executions or reach dispatch (see routes/estimates.ts's header
   // comment and apps/api/test/estimates-no-execution-path.test.ts).
   await app.register(estimateRoutes);
+  // Phase 4B — authorized project budget. Also deliberately its own route
+  // file, not merged into estimates.ts or jobs.ts: authorizing a budget
+  // never creates a task/execution/payment_intents row in this phase (see
+  // routes/budget-authorizations.ts's header comment and
+  // apps/api/test/budget-authorizations-no-execution-path.test.ts).
+  await app.register(budgetAuthorizationRoutes);
   await app.register(usageRoutes);
   await app.register(internalRoutes);
   // ADR-0007 Phase 3B — worker -> apps/api outbound relay tunnel.

@@ -1,5 +1,6 @@
 import type {
   AgentProfile,
+  BudgetAuthorization,
   EstimateResult,
   Execution,
   ExecutionEvent,
@@ -12,6 +13,7 @@ import type {
   VerificationRun,
 } from "@/lib/types";
 import type {
+  AuthorizeBudgetInput,
   CreateRepoProjectInput,
   CreateTaskInput,
   EstimateTaskInput,
@@ -342,5 +344,25 @@ export const liveApi: TaskDashboardApi = {
     return apiFetch<ProjectEstimate>(`/v1/projects/${projectId}/estimates/${estimateId}/approve`, {
       method: "POST",
     });
+  },
+
+  // Phase 4B — apps/api's budget-authorization responses
+  // (BudgetAuthorizationResponseSchema) are already camelCase, not raw DB
+  // rows — no raw/to mapping needed here, same as the estimate responses
+  // above.
+  async authorizeBudget(projectId: string, estimateId: string, input: AuthorizeBudgetInput) {
+    return apiFetch<BudgetAuthorization>(
+      `/v1/projects/${projectId}/estimates/${estimateId}/budget-authorization`,
+      {
+        method: "POST",
+        body: JSON.stringify(input),
+      },
+    );
+  },
+
+  async listBudgetAuthorizations(projectId: string, estimateId: string) {
+    return apiFetch<BudgetAuthorization[]>(
+      `/v1/projects/${projectId}/estimates/${estimateId}/budget-authorizations`,
+    );
   },
 };

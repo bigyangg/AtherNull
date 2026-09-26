@@ -146,6 +146,14 @@ latest rendered UI state.
 
 ## Relationship to Phase 4B: Authorized Project Budget
 
+> **Superseded by ADR-0009.** The paragraph below was this ADR's original,
+> *proposed* sketch of Phase 4B, written before that phase was audited and
+> built. The actual Phase 4B decision differs materially — it creates
+> **zero** `tasks` rows and does **not** add `tasks.source_estimate_id` (see
+> `docs/adr/0009-authorized-project-budget.md` for why, and for the real
+> implementation). Kept here only for historical context, not as a
+> description of what exists.
+
 Phase 4B is the seam that turns "accept this scope" into "commit money to
 it." Proposed shape: once an estimate is `APPROVED` (ideally `PRICED`, or
 with an explicit manually-entered cap if not), a privileged member

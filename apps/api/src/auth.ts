@@ -83,6 +83,15 @@ export const auth = betterAuth({
       // real limit.
       "/sign-in/email": { window: 60, max: Number(process.env.AUTH_TEST_RATE_LIMIT_MAX ?? 5) },
       "/sign-up/email": { window: 60, max: Number(process.env.AUTH_TEST_RATE_LIMIT_MAX ?? 5) },
+      // Same rationale as above, extended to org creation: Phase 4B's
+      // budget-authorizations-lifecycle.test.ts legitimately creates far
+      // more orgs than any prior test file (many small, independent
+      // eligibility/pricing/concurrency/tenant-integrity cases, each with
+      // its own fresh org) inside one shared-bucket 60s window. Default (30)
+      // is unchanged from the prior global-fallback behavior, so no
+      // existing test or production behavior changes unless
+      // AUTH_TEST_RATE_LIMIT_MAX is explicitly set.
+      "/organization/create": { window: 60, max: Number(process.env.AUTH_TEST_RATE_LIMIT_MAX ?? 30) },
       "/sign-in/magic-link": { window: 60, max: 5 },
       "/request-password-reset": { window: 60, max: 3 },
       "/reset-password": { window: 60, max: 5 },
