@@ -282,6 +282,60 @@ describe("estimate generation", () => {
       installDefaultFakePlanner();
     }
   });
+
+  test("Phase 4A.1: both attempts failing (malformed, then malformed again) creates zero project_estimates rows", async () => {
+    const suffix = randomUUID();
+    const { owner, projectId } = await ownerOrgAndProject(suffix);
+
+    let calls = 0;
+    setPlannerClientForTests(async () => {
+      calls++;
+      // Schema-invalid both times — classified malformed_output, so this
+      // correctly exercises the bounded retry (unlike a raw, unclassified
+      // Error, which this module deliberately treats as terminal/no-retry).
+      return { goal: "missing everything else" };
+    });
+    try {
+      const res = await generate(owner.jar, projectId, "Build something");
+      assert.equal(res.statusCode, 502, `expected both-failed to be rejected: ${res.body}`);
+    } finally {
+      installDefaultFakePlanner();
+    }
+    assert.equal(calls, 2, "the bounded retry must have made exactly one retry attempt");
+
+    const rows = await db
+      .selectFrom("project_estimates")
+      .select(["id"])
+      .where("project_id", "=", projectId)
+      .execute();
+    assert.equal(rows.length, 0, "no row may exist when both planner attempts fail");
+  });
+
+  test("Phase 4A.1: a successful repair retry (malformed, then valid) creates exactly one estimate row", async () => {
+    const suffix = randomUUID();
+    const { owner, projectId } = await ownerOrgAndProject(suffix);
+
+    let calls = 0;
+    setPlannerClientForTests(async () => {
+      calls++;
+      if (calls === 1) return { goal: "missing everything else" }; // schema-invalid
+      return fakePlannerOutput("Recovered on retry");
+    });
+    try {
+      const res = await generate(owner.jar, projectId, "Build something");
+      assert.equal(res.statusCode, 201, `expected the retry to succeed: ${res.body}`);
+    } finally {
+      installDefaultFakePlanner();
+    }
+    assert.equal(calls, 2);
+
+    const rows = await db
+      .selectFrom("project_estimates")
+      .select(["id"])
+      .where("project_id", "=", projectId)
+      .execute();
+    assert.equal(rows.length, 1, "exactly one row must exist after a successful repair retry, not zero and not two");
+  });
 });
 
 describe("estimate listing and reading", () => {
