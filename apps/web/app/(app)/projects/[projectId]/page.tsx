@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { FolderGit2, ListChecks, Plus } from "lucide-react";
+import { FolderGit2, ListChecks, Plus, Target } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -81,6 +81,13 @@ export default function ProjectDetailPage() {
             {project.revision ? `Pinned at ${project.revision}` : "Tracks default branch"}
             {project.scope ? ` · ${project.scope}` : ""}
           </>
+        }
+        trailing={
+          <Link href={`/projects/${project.id}/scope`}>
+            <Button size="sm" variant="outline">
+              <Target /> Scope & estimate
+            </Button>
+          </Link>
         }
       />
 

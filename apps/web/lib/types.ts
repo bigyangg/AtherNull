@@ -210,6 +210,62 @@ export interface UsageSummary {
   taskCountsByStatus: Partial<Record<TaskStatus, number>>;
 }
 
+// --- Phase 4A: project scope/build-plan/cost-estimate lineage ---
+// Backs apps/api's /v1/projects/:projectId/estimates/* routes
+// (packages/contracts/src/estimates.ts's EstimateResponseSchema, already
+// camelCase — no raw/to mapping needed in lib/api/live.ts, same as
+// EstimateResult above).
+
+export type EstimateStatus = "DRAFT" | "READY_FOR_REVIEW" | "APPROVED" | "SUPERSEDED";
+export type PricingStatus = "UNPRICED" | "PRICED";
+
+export interface ResourceEstimate {
+  complexity: number;
+  estimatedDurationHours: { min: number; max: number };
+  inferenceRequirements: {
+    estimatedTier: string;
+    estimatedTokens?: { min: number; max: number };
+  };
+  storageRequirements?: string;
+  computeRequirements?: string;
+  deploymentType?: string;
+}
+
+export interface PlannerOutput {
+  goal: string;
+  scope: { included: string[]; excluded: string[] };
+  deliverables: string[];
+  implementationPlan: string[];
+  assumptions: string[];
+  acceptanceCriteria: string[];
+  infrastructureRequirements: string[];
+  risks: string[];
+  resourceEstimate: ResourceEstimate;
+}
+
+export interface ProjectEstimate {
+  id: string;
+  lineageId: string;
+  version: number;
+  status: EstimateStatus;
+  organizationId: string;
+  projectId: string;
+  sourcePrompt: string;
+  plannerOutput: PlannerOutput;
+  plannerModel: string;
+  pricingStatus: PricingStatus;
+  currency: string | null;
+  estimatedMinMinor: number | null;
+  estimatedMaxMinor: number | null;
+  proposedBudgetCapMinor: number | null;
+  pricingBreakdown: unknown;
+  rateVersion: string | null;
+  createdBy: string;
+  createdAt: string;
+  approvedBy: string | null;
+  approvedAt: string | null;
+}
+
 export function formatMinor(minor: number, currency: string): string {
   return (minor / 100).toLocaleString("en-US", {
     style: "currency",

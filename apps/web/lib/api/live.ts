@@ -4,6 +4,7 @@ import type {
   Execution,
   ExecutionEvent,
   ModelTier,
+  ProjectEstimate,
   RepoProject,
   Task,
   TaskDetail,
@@ -310,5 +311,36 @@ export const liveApi: TaskDashboardApi = {
       `/v1/jobs/${taskId}/executions/${executionId}/events`,
     );
     return raw.map(toExecutionEvent);
+  },
+
+  // apps/api's estimate responses (EstimateResponseSchema) are already
+  // camelCase, not raw DB rows — no raw/to mapping needed here, same as
+  // estimateTask above.
+  async generateEstimate(projectId: string, prompt: string) {
+    return apiFetch<ProjectEstimate>(`/v1/projects/${projectId}/estimates`, {
+      method: "POST",
+      body: JSON.stringify({ prompt }),
+    });
+  },
+
+  async listEstimates(projectId: string) {
+    return apiFetch<ProjectEstimate[]>(`/v1/projects/${projectId}/estimates`);
+  },
+
+  async getEstimate(projectId: string, estimateId: string) {
+    return apiFetch<ProjectEstimate>(`/v1/projects/${projectId}/estimates/${estimateId}`);
+  },
+
+  async reviseEstimate(projectId: string, estimateId: string, prompt: string) {
+    return apiFetch<ProjectEstimate>(`/v1/projects/${projectId}/estimates/${estimateId}/revise`, {
+      method: "POST",
+      body: JSON.stringify({ prompt }),
+    });
+  },
+
+  async approveEstimate(projectId: string, estimateId: string) {
+    return apiFetch<ProjectEstimate>(`/v1/projects/${projectId}/estimates/${estimateId}/approve`, {
+      method: "POST",
+    });
   },
 };

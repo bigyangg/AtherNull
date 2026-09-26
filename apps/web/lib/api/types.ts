@@ -3,6 +3,7 @@ import type {
   EstimateResult,
   ExecutionEvent,
   Project,
+  ProjectEstimate,
   RepoProject,
   Task,
   TaskDetail,
@@ -70,4 +71,13 @@ export interface TaskDashboardApi {
   rejectTask(taskId: string, reason?: string): Promise<Task>;
   getUsageSummary(): Promise<UsageSummary>;
   getExecutionEvents(taskId: string, executionId: string): Promise<ExecutionEvent[]>;
+
+  // Phase 4A — project scope/build-plan/cost-estimate lineage. Purely a
+  // planning/pricing surface: none of these ever create or touch a task or
+  // execution (see apps/api/src/routes/estimates.ts's header comment).
+  generateEstimate(projectId: string, prompt: string): Promise<ProjectEstimate>;
+  listEstimates(projectId: string): Promise<ProjectEstimate[]>;
+  getEstimate(projectId: string, estimateId: string): Promise<ProjectEstimate>;
+  reviseEstimate(projectId: string, estimateId: string, prompt: string): Promise<ProjectEstimate>;
+  approveEstimate(projectId: string, estimateId: string): Promise<ProjectEstimate>;
 }

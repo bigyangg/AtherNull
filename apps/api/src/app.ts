@@ -5,6 +5,7 @@ import Fastify, { type FastifyInstance } from "fastify";
 
 import { auth } from "./auth.js";
 import { agentProfileRoutes } from "./routes/agent-profiles.js";
+import { estimateRoutes } from "./routes/estimates.js";
 import { internalRoutes } from "./routes/internal.js";
 import { jobRoutes } from "./routes/jobs.js";
 import { openhandsCompatRoutes } from "./routes/openhands-compat.js";
@@ -38,6 +39,11 @@ export async function buildApp(opts: { logger?: boolean } = {}): Promise<Fastify
   await app.register(projectRoutes);
   await app.register(jobRoutes);
   await app.register(agentProfileRoutes);
+  // Phase 4A — project scope/build-plan/cost-estimate lineage. Deliberately
+  // its own route file, not merged into jobs.ts: estimates never touch
+  // tasks/executions or reach dispatch (see routes/estimates.ts's header
+  // comment and apps/api/test/estimates-no-execution-path.test.ts).
+  await app.register(estimateRoutes);
   await app.register(usageRoutes);
   await app.register(internalRoutes);
   // ADR-0007 Phase 3B — worker -> apps/api outbound relay tunnel.
