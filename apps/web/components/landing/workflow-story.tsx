@@ -146,7 +146,13 @@ export function WorkflowStory() {
         gsap.set(screen.querySelectorAll<HTMLElement>("[data-reveal-item]"), { autoAlpha: 0, y: 10 });
       });
 
-      const story = gsap.timeline({ scrollTrigger: { trigger: "[data-story-layout]", start: "top 18%", end: "+=1700", scrub: 0.5, pin: "[data-story-visual]", anticipatePin: 1, snap: { snapTo: "labelsDirectional", duration: { min: 0.2, max: 0.45 }, ease: "power2.out" }, onUpdate: (self) => { if (railFill) gsap.set(railFill, { scaleY: self.progress }); } } });
+      // Play the crossfade once as the visual scrolls into view instead of
+      // pinning + scrubbing it to scroll position: pin + snap fights native
+      // touch/momentum scrolling on mobile and was reported as scrolling
+      // getting stuck/broken through this section.
+      const story = gsap.timeline({
+        scrollTrigger: { trigger: "[data-story-visual]", start: "top 75%", toggleActions: "play none none none" },
+      });
       story.addLabel("brief");
       steps.slice(1).forEach((step, index) => {
         const previousScreen = screens[index];
@@ -157,6 +163,7 @@ export function WorkflowStory() {
         story
           .to(previousStep, { autoAlpha: 0.32, "--dot-color": "#c7c6ce", duration: 0.4 })
           .to(step, { autoAlpha: 1, "--dot-color": "#5b52e6", duration: 0.4 }, "<")
+          .to(railFill ?? [], { scaleY: (index + 2) / screens.length, duration: 0.4 }, "<")
           .to(previousScreen, { scale: 0.97, duration: 0.5, ease: "power2.inOut" }, "<")
           .to(nextScreen, { clipPath: "inset(0% 0% 0% 0%)", duration: 0.5, ease: "power2.inOut" }, "<")
           .to(revealItems, { autoAlpha: 1, y: 0, duration: 0.45, stagger: 0.09, ease: "power2.out" }, "-=0.25")

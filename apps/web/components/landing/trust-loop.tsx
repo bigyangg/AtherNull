@@ -1,5 +1,8 @@
+"use client";
+
 import { GitBranch, Repeat, ShieldCheck, Wallet } from "lucide-react";
 import type { CSSProperties } from "react";
+import { useEffect, useRef, useState } from "react";
 import styles from "./trust-loop.module.css";
 
 const SIZE = 440;
@@ -18,8 +21,22 @@ function point(angle: number) {
 }
 
 export function TrustLoop() {
+  const rootRef = useRef<HTMLDivElement>(null);
+  const [active, setActive] = useState(false);
+
+  useEffect(() => {
+    const node = rootRef.current;
+    if (!node) return;
+    // The loop's continuous animations only matter once it's on screen —
+    // running them from mount burned main-thread time on every scroll frame
+    // well before this section (near the bottom of the page) came into view.
+    const observer = new IntersectionObserver(([entry]) => setActive(entry?.isIntersecting ?? false), { threshold: 0.2 });
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, []);
+
   return (
-    <div className={styles.diagram} role="img" aria-label="A repeating loop: budget is set, escrow holds the funds, then the release stage returns to budgeting the next task.">
+    <div ref={rootRef} className={styles.diagram} data-active={active || undefined} role="img" aria-label="A repeating loop: budget is set, escrow holds the funds, then the release stage returns to budgeting the next task.">
       <svg className={styles.paths} viewBox={`0 0 ${SIZE} ${SIZE}`} fill="none" aria-hidden="true">
         <circle className={styles.outer} cx={CENTER} cy={CENTER} r={RADIUS + 40} />
         <circle className={styles.outer} cx={CENTER} cy={CENTER} r={RADIUS + 20} />

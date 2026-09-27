@@ -4,9 +4,11 @@
 .surface { fill: #f5f3fb; stroke: none; }
 .spoke { stroke: #e5e2ef; stroke-dasharray: 2 6; }
 .track { fill: none; stroke: #d3cee2; stroke-width: 1.2; }
-.flow, .flowGlow { fill: none; stroke: #6a57e0; stroke-width: 2.2; stroke-linecap: round; stroke-dasharray: 24 276; stroke-dashoffset: 24; animation: travel 4s linear infinite; }
+.flow, .flowGlow { fill: none; stroke: #6a57e0; stroke-width: 2.2; stroke-linecap: round; stroke-dasharray: 24 276; stroke-dashoffset: 24; }
 .flowGlow { stroke-width: 9; opacity: .14; }
-.flowHead { fill: none; stroke: #6a57e0; stroke-width: 4; stroke-linecap: round; stroke-dasharray: .5 299.5; animation: headTravel 4s linear infinite; }
+.flowHead { fill: none; stroke: #6a57e0; stroke-width: 4; stroke-linecap: round; stroke-dasharray: .5 299.5; }
+.diagram[data-active] .flow, .diagram[data-active] .flowGlow { animation: travel 4s linear infinite; }
+.diagram[data-active] .flowHead { animation: headTravel 4s linear infinite; }
 
 .center { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); display: flex; flex-direction: column; align-items: center; text-align: center; }
 .centerIcon { display: grid; place-items: center; width: 46px; height: 46px; margin-bottom: 13px; background: linear-gradient(145deg, #fff, #ede6fc); border: 1px solid #ded4f5; border-radius: 50%; color: #7955cb; box-shadow: 0 6px 16px #7153b80f; }
@@ -15,7 +17,13 @@
 .centerCaption { margin-top: 12px; white-space: nowrap; color: #5c526b; font-size: 10px; font-weight: 700; letter-spacing: .03em; }
 
 .node { position: absolute; transform: translate(-50%, -50%); }
-.nodeIcon { position: relative; z-index: 1; display: grid; place-items: center; width: 52px; height: 52px; border: 1px solid #ded9e8; border-radius: 50%; background: #fff; color: #7a7385; box-shadow: 0 4px 12px #28203906; animation: activate 4s linear infinite; animation-delay: var(--delay); }
+.nodeIcon { position: relative; z-index: 1; display: grid; place-items: center; width: 52px; height: 52px; border: 1px solid #ded9e8; border-radius: 50%; background: #fff; color: #7a7385; box-shadow: 0 4px 12px #28203906; }
+/* The highlight ring is a static box-shadow on a pseudo-element whose opacity
+   is animated instead of animating box-shadow directly — box-shadow is a
+   paint property (repaints every frame), opacity is compositor-only. */
+.nodeIcon::before { content: ""; position: absolute; inset: -5px; border-radius: 50%; box-shadow: 0 0 0 5px #a279dd12, 0 4px 16px #8253c614; opacity: 0; }
+.diagram[data-active] .nodeIcon { animation: activateColor 4s linear infinite; animation-delay: var(--delay); }
+.diagram[data-active] .nodeIcon::before { animation: activateGlow 4s linear infinite; animation-delay: var(--delay); }
 .nodeIcon svg { width: 21px; height: 21px; }
 .nodeLabel { position: absolute; color: #514a61; font-size: 13px; font-weight: 650; white-space: nowrap; }
 .node[data-pos="top"] .nodeLabel { bottom: calc(100% + 11px); left: 50%; transform: translateX(-50%); }
@@ -27,9 +35,13 @@
 
 @keyframes travel { to { stroke-dashoffset: -276; } }
 @keyframes headTravel { to { stroke-dashoffset: -300; } }
-@keyframes activate {
-  0%, 6%, 100% { background: #eee6ff; border-color: #b9a0eb; color: #7545c8; box-shadow: 0 0 0 5px #a279dd12, 0 4px 16px #8253c614; }
-  22%, 90% { background: #fff; border-color: #ded9e8; color: #7a7385; box-shadow: 0 4px 12px #28203906; }
+@keyframes activateColor {
+  0%, 6%, 100% { background: #eee6ff; border-color: #b9a0eb; color: #7545c8; }
+  22%, 90% { background: #fff; border-color: #ded9e8; color: #7a7385; }
+}
+@keyframes activateGlow {
+  0%, 6%, 100% { opacity: 1; }
+  22%, 90% { opacity: 0; }
 }
 
 @media (max-width: 760px) {
@@ -43,8 +55,11 @@
   .centerIcon svg { width: 17px; height: 17px; }
   .centerCaption { font-size: 9px; }
   .caption { font-size: 9px; bottom: -24px; }
+  /* Drop the blurred duplicate stroke layer — one less continuously
+     animated layer for weaker mobile GPUs to composite. */
+  .flowGlow { display: none; }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .flow, .flowGlow, .flowHead, .nodeIcon { animation: none; }
+  .flow, .flowGlow, .flowHead, .nodeIcon, .nodeIcon::before { animation: none; }
 }
