@@ -30,13 +30,17 @@ import secrets
 import shutil
 import tempfile
 import threading
+from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import urlencode
 
 import httpx
 import websockets.sync.client as ws_client
 from openhands.sdk import LLM, Agent, Conversation, Tool
+from openhands.sdk.conversation.conversation_stats import ConversationStats
 from openhands.sdk.event.base import Event
+from openhands.sdk.event.conversation_state import ConversationStateUpdateEvent
 from openhands.tools.file_editor import FileEditorTool
 from openhands.tools.terminal import TerminalTool
 
@@ -145,6 +149,210 @@ class EventForwarder:
                 except httpx.HTTPError as err:
                     log(f"event forward request failed: {err!r}")
                     return
+
+
+def _split_provider_and_model(full_model: str) -> tuple[str, str]:
+    """Same "<provider>/<model>" prefix convention coding_agent.llm's
+    resolve_api_key/require_api_key already rely on (LiteLLM's own model
+    string format) — split once on the FIRST '/' so a model id that itself
+    contains slashes (e.g. "nvidia/nemotron-3-super-120b-a12b") stays intact
+    after the provider prefix is removed. Falls back to (full_model,
+    full_model) for a malformed string with no '/' at all, rather than
+    raising — this is best-effort attribution, never something that should
+    crash a usage poll."""
+    provider, sep, rest = full_model.partition("/")
+    if not sep:
+        return full_model, full_model
+    return provider, rest
+
+
+class UsageForwarder:
+    """Registered as a third `Conversation` callback alongside (never instead
+    of) EventForwarder and RelayEventCallback — see
+    `run_dispatch_via_agent_server`'s `callbacks=[...]` list. Turns the
+    per-response stats-update trigger the SDK already fires today
+    (`ConversationStateUpdateEvent(key="stats")`, emitted synchronously by
+    `Telemetry.on_response` after EVERY LLM completion — see
+    openhands/agent_server/event_service.py's `_setup_stats_streaming`) into
+    real, deduped usage rows in apps/api, without ever trusting that event's
+    own payload as usage data.
+
+    Why the event's own `.value` is never read for usage: by the time that
+    event is constructed server-side, `ConversationStateUpdateEvent`'s own
+    field validator (openhands/sdk/event/conversation_state.py,
+    `validate_value`) has unconditionally forced
+    `ConversationStats.model_dump(mode="json", context={"use_snapshot":
+    True})` on it — snapshot mode drops the real per-response
+    `usage_to_metrics[*].token_usages` lists entirely and keeps only a lossy
+    cumulative total (`MetricsSnapshot.accumulated_token_usage`) whose own
+    `response_id` is permanently the value from the FIRST call ever made
+    (`TokenUsage.__add__` always keeps `self.response_id`) — confirmed by
+    reading metrics.py's `add_token_usage`/`__add__` directly. So this event
+    is treated purely as a wake-up signal.
+
+    On each trigger, this forces a genuine REST poll via
+    `conversation.state.refresh_from_server()` — deliberately NOT
+    `conversation.stats` or `conversation.conversation_stats` directly.
+    `RemoteState._get_conversation_info()` (what those properties read from)
+    returns whatever is already cached without ever hitting the network once
+    `_cached_state` is non-None — and the SDK's own internal
+    `state_update_callback` (registered on every `RemoteConversation`,
+    alongside this one) unconditionally overwrites
+    `_cached_state["stats"]` with that exact same lossy snapshot on receipt
+    of the very same event this class reacts to. Reading the property after
+    the trigger would therefore silently hand back the lossy value this
+    whole mechanism exists to avoid. `refresh_from_server()` bypasses the
+    cache unconditionally and issues a real
+    `GET {conversation_info_base_path}/{id}`, whose server-side handler
+    (openhands/agent_server/conversation_service.py's
+    `_compose_conversation_info`) does NOT pass a snapshot context — so the
+    `"stats"` field in that response carries genuine, full-fidelity
+    `ConversationStats.usage_to_metrics[*].token_usages`, each entry with its
+    own real, distinct `response_id` (LiteLLM's `ModelResponse.id`, which is
+    always populated — either the provider's own id or, if the provider
+    omits one, a fresh `uuid.uuid4()` LiteLLM generates itself; confirmed by
+    reading litellm/types/utils.py's `ModelResponse`/`ModelResponseStream`
+    constructors — so `response_id` uniqueness per genuine response is a
+    property of LiteLLM's own id assignment, not an assumption this class
+    makes on its own).
+
+    Runs the poll on a dedicated background thread woken by a
+    `threading.Event`, never blocking the WebSocket thread that invokes this
+    callback on a network round trip — a burst of stats-update triggers
+    naturally coalesces into a single poll+forward cycle. `_seen_response_ids`
+    is purely a bandwidth optimization (skip re-sending entries this process
+    already forwarded successfully); correctness never depends on it — a
+    worker restart resets it to empty, and it is the database's own
+    `unique(execution_id, provider_request_id)` constraint
+    (0011_usage_metering.sql, unchanged from 0002's original) that actually
+    makes resending the full cumulative history on every poll (or after a
+    reconnect) safe, never worker memory.
+
+    `poll_once()` is also called synchronously and directly — bypassing the
+    background thread's debounce entirely — exactly once at teardown, before
+    the container is cleaned up, as the explicit final reconciliation pass
+    required to catch a response whose stats-update trigger raced the
+    completion path (see `run_dispatch_via_agent_server`'s `finally` block).
+    """
+
+    def __init__(
+        self,
+        client: httpx.Client,
+        execution_id: str,
+        worker_id: str,
+        get_conversation: Callable[[], object | None],
+        log: Callable[[str], None],
+    ) -> None:
+        self._client = client
+        self._execution_id = execution_id
+        self._worker_id = worker_id
+        self._get_conversation = get_conversation
+        self._log = log
+        self._wake = threading.Event()
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+        # Serializes poll_once() calls so a background-thread poll and the
+        # teardown-time direct call never run concurrently against the same
+        # REST connection / _seen_response_ids set.
+        self._poll_lock = threading.Lock()
+        self._seen_response_ids: set[str] = set()
+
+    def start(self) -> None:
+        def loop() -> None:
+            while True:
+                self._wake.wait()
+                if self._stop.is_set():
+                    return
+                self._wake.clear()
+                self.poll_once()
+
+        self._thread = threading.Thread(target=loop, daemon=True)
+        self._thread.start()
+
+    def close(self) -> None:
+        self._stop.set()
+        self._wake.set()
+        if self._thread is not None:
+            self._thread.join(timeout=10)
+
+    def __call__(self, event: Event) -> None:
+        # Never inspect event.value for usage data — see class docstring.
+        # Purely a wake-up signal for the background poller.
+        if isinstance(event, ConversationStateUpdateEvent) and event.key == "stats":
+            self._wake.set()
+
+    def poll_once(self) -> None:
+        """Force a genuine REST poll of conversation.stats and forward any
+        not-yet-forwarded usage rows. Safe to call repeatedly, safe to call
+        from multiple threads (serialized internally), and safe to call even
+        when nothing new has happened (a no-op POST is simply skipped)."""
+        conversation = self._get_conversation()
+        if conversation is None:
+            return
+
+        with self._poll_lock:
+            try:
+                info = conversation.state.refresh_from_server()
+            except Exception as err:  # noqa: BLE001 - must never affect the dispatch
+                self._log(f"usage poll: refresh_from_server failed: {err!r}")
+                return
+
+            try:
+                stats = ConversationStats.model_validate(info.get("stats") or {})
+            except Exception as err:  # noqa: BLE001
+                self._log(f"usage poll: failed to parse ConversationStats: {err!r}")
+                return
+
+            payload_events: list[dict] = []
+            observed_at = datetime.now(UTC).isoformat()
+            for metrics in stats.usage_to_metrics.values():
+                for usage in metrics.token_usages:
+                    response_id = usage.response_id
+                    if not response_id or response_id in self._seen_response_ids:
+                        continue
+                    provider, model = _split_provider_and_model(usage.model)
+                    payload_events.append(
+                        {
+                            "providerRequestId": response_id,
+                            "provider": provider,
+                            "model": model,
+                            "inputTokens": usage.prompt_tokens,
+                            "outputTokens": usage.completion_tokens,
+                            "cacheReadTokens": usage.cache_read_tokens,
+                            "cacheWriteTokens": usage.cache_write_tokens,
+                            "reasoningTokens": usage.reasoning_tokens,
+                            "observedAt": observed_at,
+                        }
+                    )
+
+            if not payload_events:
+                return
+
+            try:
+                res = self._client.post(
+                    f"{API_URL}/internal/executions/{self._execution_id}/usage",
+                    json={"workerId": self._worker_id, "usageEvents": payload_events},
+                    headers=api_headers(),
+                    timeout=10.0,
+                )
+                if res.status_code != 204:
+                    self._log(f"usage forward failed ({res.status_code}): {res.text}")
+                    return
+            except httpx.HTTPError as err:
+                self._log(f"usage forward request failed: {err!r}")
+                return
+
+            # Mark as seen only after a confirmed successful POST — a failed
+            # send is retried on the NEXT poll (which resends the full
+            # still-unseen set; DB dedupe on (execution_id,
+            # provider_request_id) makes that safe even in the rare case a
+            # POST actually succeeded server-side but the response was lost).
+            for event in payload_events:
+                self._seen_response_ids.add(event["providerRequestId"])
+            self._log(
+                f"usage: forwarded {len(payload_events)} new usage row(s) "
+                f"(total distinct so far: {len(self._seen_response_ids)})"
+            )
 
 
 class CommandHandler:
@@ -345,6 +553,7 @@ def run_dispatch_via_agent_server(client: httpx.Client, dispatch: dict) -> str:
     docker_workspace: LoopbackDockerWorkspace | None = None
     forwarder: EventForwarder | None = None
     relay: RelayClient | None = None
+    usage_forwarder: UsageForwarder | None = None
     conversation = None
 
     # A random per-execution key so this container's Agent Server actually
@@ -391,10 +600,22 @@ def run_dispatch_via_agent_server(client: httpx.Client, dispatch: dict) -> str:
         relay = RelayClient(API_URL, INTERNAL_TOKEN, WORKER_ID, execution_id, log=log)
         relay.start()
 
+        # Phase 4D.1 — real usage metering. `lambda: conversation` closes
+        # over this function's own `conversation` local variable, not a copy
+        # of its current (still-None) value — the same late-bind trick this
+        # function already relies on for CommandHandler below (Conversation's
+        # own construction needs this forwarder in its callbacks list before
+        # `conversation` exists at all). By the time UsageForwarder's
+        # background thread or teardown's final poll_once() actually calls
+        # this lambda, `conversation` has long since been reassigned to the
+        # real object below.
+        usage_forwarder = UsageForwarder(client, execution_id, WORKER_ID, lambda: conversation, log)
+        usage_forwarder.start()
+
         conversation = Conversation(
             agent=agent,
             workspace=docker_workspace,
-            callbacks=[forwarder, RelayEventCallback(relay)],
+            callbacks=[forwarder, RelayEventCallback(relay), usage_forwarder],
         )
         _report_conversation_id(client, execution_id, WORKER_ID, str(conversation.id))
 
@@ -441,12 +662,29 @@ def run_dispatch_via_agent_server(client: httpx.Client, dispatch: dict) -> str:
             except Exception as relay_close_err:  # noqa: BLE001
                 log(f"relay close warning: {relay_close_err!r}")
         if conversation is not None and docker_workspace is not None:
+            if usage_forwarder is not None:
+                try:
+                    # Phase 4D.1 — required final reconciliation pass: a
+                    # response whose stats-update trigger raced the
+                    # completion path (the agent's very last LLM call, whose
+                    # stats-update callback might fire after .run() has
+                    # already returned/raised) must still be captured before
+                    # the container that holds the real usage data is torn
+                    # down. Called synchronously and directly (bypasses the
+                    # background thread's debounce) — this is a genuine REST
+                    # poll of conversation.stats, not the lossy event
+                    # payload, exactly like every other poll_once() call.
+                    usage_forwarder.poll_once()
+                except Exception as usage_err:  # noqa: BLE001
+                    log(f"final usage poll warning: {usage_err!r}")
             try:
                 # Replay all events: the SDK can deliver older events late.
                 resynced = resync_events(docker_workspace.host, session_key, str(conversation.id), None)
                 _forward_resynced_events(client, execution_id, WORKER_ID, resynced)
             except Exception as recovery_err:  # noqa: BLE001
                 log(f"event recovery warning: {recovery_err!r}")
+        if usage_forwarder is not None:
+            usage_forwarder.close()
         stop_heartbeat.set()
         heartbeat_thread.join(timeout=5)
         os.environ.pop("SESSION_API_KEY", None)

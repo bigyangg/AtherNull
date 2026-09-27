@@ -647,22 +647,65 @@ export async function jobRoutes(app: FastifyInstance) {
         .orderBy("created_at", "desc")
         .execute();
 
-      // No spend if there are no executions yet — left join + coalesce
-      // rather than a plain sum, which would return null for that case.
+      // Phase 4D.1 — real usage metering. budgetSpentMinor must never
+      // silently render a fabricated $0.00: it is a genuine 0 only when no
+      // usage_events row exists at all for this task's executions (nothing
+      // has run yet, so nothing could have cost anything); it becomes null
+      // the moment ANY row exists with pricing_status = 'UNPRICED' (which is
+      // every row this phase's worker ever writes — no rate card exists yet,
+      // see apps/api/src/pricing/rates.ts), because a real dollar total
+      // cannot be truthfully computed while part of the underlying usage is
+      // of genuinely unknown price. Summing across ALL executions under the
+      // task (not just the latest) preserves the pre-existing behavior of
+      // adding a retried attempt's usage to the task-level total rather than
+      // resetting it.
       const spend = await db
         .selectFrom("executions")
         .leftJoin("usage_events", "usage_events.execution_id", "executions.id")
         .select(({ fn }) => [
-          fn.coalesce(fn.sum<string>("usage_events.cost_minor"), sql<string>`0`).as("total"),
+          fn.coalesce(
+            fn.sum<string>("usage_events.cost_minor"),
+            sql<string>`0`,
+          ).as("pricedTotal"),
+          fn
+            .count<string>(
+              sql`case when usage_events.pricing_status = 'UNPRICED' then 1 end`,
+            )
+            .as("unpricedCount"),
+          fn.count<string>("usage_events.id").as("usageRowCount"),
+          fn.coalesce(fn.sum<string>("usage_events.input_tokens"), sql<string>`0`).as("inputTokens"),
+          fn.coalesce(fn.sum<string>("usage_events.output_tokens"), sql<string>`0`).as("outputTokens"),
+          fn.coalesce(fn.sum<string>("usage_events.cache_read_tokens"), sql<string>`0`).as("cacheReadTokens"),
+          fn.coalesce(fn.sum<string>("usage_events.cache_write_tokens"), sql<string>`0`).as("cacheWriteTokens"),
+          fn.coalesce(fn.sum<string>("usage_events.reasoning_tokens"), sql<string>`0`).as("reasoningTokens"),
+          fn.coalesce(fn.sum<string>("usage_events.total_tokens"), sql<string>`0`).as("totalTokens"),
         ])
         .where("executions.task_id", "=", id)
         .executeTakeFirstOrThrow();
+
+      const hasUnpricedUsage = Number(spend.unpricedCount) > 0;
+      const budgetSpentMinor = hasUnpricedUsage ? null : Number(spend.pricedTotal);
 
       reply.send({
         ...task,
         executions,
         verificationRuns,
-        budgetSpentMinor: Number(spend.total),
+        budgetSpentMinor,
+        usage: {
+          inputTokens: Number(spend.inputTokens),
+          outputTokens: Number(spend.outputTokens),
+          cacheReadTokens: Number(spend.cacheReadTokens),
+          cacheWriteTokens: Number(spend.cacheWriteTokens),
+          reasoningTokens: Number(spend.reasoningTokens),
+          totalTokens: Number(spend.totalTokens),
+        },
+        // Always UNPRICED in this phase — no rate card exists yet
+        // (apps/api/src/pricing/rates.ts's RATE_CONFIG is null), so nothing
+        // anywhere in this codebase can currently produce a PRICED
+        // usage_events row. This field exists so the API is future-proof
+        // for Phase 4D.2 without another shape change, and so today's
+        // clients never have to infer "unpriced" from an absent field.
+        pricing: { status: "UNPRICED", amountMinor: null, currency: null },
       });
     } catch (err) {
       if (sendHttpError(reply, err)) return;

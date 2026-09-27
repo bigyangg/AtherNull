@@ -85,14 +85,41 @@ export interface ExecutionsTable {
   created_at: Timestamp;
 }
 
+// Phase 4D.1 — real usage metering (0011_usage_metering.sql). Attribution
+// (task_id/project_id/organization_id) is always derived server-side from
+// the trusted execution_id -> task_id -> project_id/organization_id chain
+// (apps/api/src/usage-events.ts) — never accepted as worker-supplied input.
+// Raw token categories mirror the OpenHands SDK's TokenUsage fields exactly;
+// total_tokens is derived server-side as input_tokens + output_tokens (see
+// the migration's own comment for why). pricing_status is always 'UNPRICED'
+// in this phase (cost_minor/currency/rate_version always null together,
+// enforced by usage_events_pricing_consistency) — no rate card exists yet
+// (apps/api/src/pricing/rates.ts's RATE_CONFIG is null). observed_at (not
+// occurred_at) because no genuine provider-side completion timestamp
+// survives into the data this table is populated from; recorded_at is the
+// separate DB-insert-time column, mirroring execution_events'
+// occurred_at/created_at split.
 export interface UsageEventsTable {
   id: Generated<string>;
   execution_id: string;
+  task_id: string;
+  project_id: string;
+  organization_id: string;
   provider_request_id: string;
+  provider: string;
   model: string;
-  tokens: number;
-  cost_minor: string;
-  created_at: Timestamp;
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens: Generated<number>; // default 0
+  cache_write_tokens: Generated<number>; // default 0
+  reasoning_tokens: Generated<number>; // default 0
+  total_tokens: number;
+  pricing_status: Generated<string>; // "UNPRICED" | "PRICED" — always UNPRICED in this phase
+  cost_minor: string | null; // bigint — Kysely/pg returns bigint as string by default; null iff UNPRICED
+  currency: string | null;
+  rate_version: string | null;
+  observed_at: Timestamp;
+  recorded_at: Timestamp;
 }
 
 // The Agent Server's own event stream for an execution

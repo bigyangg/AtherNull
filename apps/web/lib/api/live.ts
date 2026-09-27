@@ -123,10 +123,30 @@ interface RawVerificationRun {
   created_at: string;
 }
 
+interface RawUsageTotals {
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  reasoningTokens: number;
+  totalTokens: number;
+}
+
+interface RawPricingInfo {
+  status: "UNPRICED" | "PRICED";
+  amountMinor: number | null;
+  currency: string | null;
+}
+
 interface RawTaskDetail extends RawTask {
   executions: RawExecution[];
   verificationRuns: RawVerificationRun[];
-  budgetSpentMinor: number;
+  // Phase 4D.1 — null (never a fabricated 0) once real, genuinely unpriced
+  // usage exists for this task; a real 0 only when no usage_events row
+  // exists at all yet. See apps/api/src/routes/jobs.ts.
+  budgetSpentMinor: number | null;
+  usage: RawUsageTotals;
+  pricing: RawPricingInfo;
 }
 
 interface RawExecutionEvent {
@@ -279,6 +299,8 @@ export const liveApi: TaskDashboardApi = {
       executions: raw.executions.map(toExecution),
       verificationRuns: raw.verificationRuns.map(toVerificationRun),
       budgetSpentMinor: raw.budgetSpentMinor,
+      usage: raw.usage,
+      pricing: raw.pricing,
     };
   },
 

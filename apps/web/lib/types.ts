@@ -161,10 +161,37 @@ export interface VerificationRun {
   createdAt: string;
 }
 
+// Phase 4D.1 — real usage metering. Raw token totals aggregated across every
+// execution attempt under a task (apps/api's GET /v1/jobs/:id, GET
+// /v1/usage/summary) — never a monetary figure.
+export interface UsageTotals {
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  reasoningTokens: number;
+  totalTokens: number;
+}
+
+// Always { status: "UNPRICED", amountMinor: null, currency: null } in this
+// phase — no rate card exists yet (apps/api/src/pricing/rates.ts). Reuses
+// the same PricingStatus union project_estimates already uses (defined
+// further below in this file) rather than a second, disagreeing one.
+export interface PricingInfo {
+  status: PricingStatus;
+  amountMinor: number | null;
+  currency: string | null;
+}
+
 export interface TaskDetail extends Task {
   executions: Execution[];
   verificationRuns: VerificationRun[];
-  budgetSpentMinor: number;
+  // null (never a fabricated 0) once real usage exists whose cost is
+  // genuinely unknown (always true in this phase — see PricingInfo above).
+  // A real 0 only when zero usage_events rows exist at all for this task.
+  budgetSpentMinor: number | null;
+  usage: UsageTotals;
+  pricing: PricingInfo;
 }
 
 // The Agent Server's own event stream for an execution (apps/api's
@@ -214,6 +241,11 @@ export interface UsageSummary {
   currency: string;
   dailySpend: DailySpend[];
   taskCountsByStatus: Partial<Record<TaskStatus, number>>;
+  // Phase 4D.1 — additive real usage/pricing fields alongside the
+  // pre-existing fields above, which keep their prior shape and computation
+  // unchanged (see apps/api/src/routes/usage.ts).
+  usage: UsageTotals;
+  pricing: PricingInfo;
 }
 
 // --- Phase 4A: project scope/build-plan/cost-estimate lineage ---

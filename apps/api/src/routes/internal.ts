@@ -9,6 +9,7 @@ import { requireInternalToken } from "../internal-auth.js";
 import { executionBroadcaster } from "../realtime/execution-broadcaster.js";
 import { relayRegistry } from "../realtime/relay-registry.js";
 import { resolveRouting } from "../routing.js";
+import { persistUsageEvents } from "../usage-events.js";
 
 const MAX_EXECUTION_ATTEMPTS = 3;
 
@@ -302,6 +303,61 @@ export async function internalRoutes(app: FastifyInstance) {
     for (const event of normalizedEvents) {
       executionBroadcaster.publishEvent(id, event);
     }
+
+    reply.status(204).send();
+  });
+
+  // Phase 4D.1 — real usage metering. The worker's agent_server_adapter.py
+  // UsageForwarder posts here after every genuine conversation.stats REST
+  // poll (triggered by the stats-update event, plus one final poll at
+  // teardown) — never on the lossy ConversationStateUpdateEvent(key="stats")
+  // payload itself. Same lease-ownership check as every other worker->API
+  // route here. task_id/project_id/organization_id are deliberately never
+  // accepted in this request body — persistUsageEvents derives them itself
+  // from the trusted execution_id it already owns. No cost field exists on
+  // this wire shape at all: this route can never write a price, by
+  // construction, not just by convention.
+  app.post("/internal/executions/:id/usage", async (request, reply) => {
+    if (!requireInternalToken(request, reply)) return;
+
+    const { id } = z.object({ id: z.string() }).parse(request.params);
+    const { workerId, usageEvents } = z
+      .object({
+        workerId: z.string().min(1),
+        usageEvents: z
+          .array(
+            z.object({
+              providerRequestId: z.string().min(1),
+              provider: z.string().min(1),
+              model: z.string().min(1),
+              inputTokens: z.number().int().min(0),
+              outputTokens: z.number().int().min(0),
+              cacheReadTokens: z.number().int().min(0),
+              cacheWriteTokens: z.number().int().min(0),
+              reasoningTokens: z.number().int().min(0),
+              observedAt: z.string(),
+            }),
+          )
+          .min(1),
+      })
+      .parse(request.body);
+
+    const execution = await db
+      .selectFrom("executions")
+      .select(["id", "lease_owner"])
+      .where("id", "=", id)
+      .executeTakeFirst();
+
+    if (!execution) {
+      reply.status(404).send({ error: "Not found" });
+      return;
+    }
+    if (execution.lease_owner !== workerId) {
+      reply.status(409).send({ error: "Lease no longer owned by this worker" });
+      return;
+    }
+
+    await persistUsageEvents(id, usageEvents);
 
     reply.status(204).send();
   });
