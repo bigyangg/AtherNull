@@ -28,6 +28,25 @@ async function loadOwnedTask(taskId: string, organizationId: string) {
     .executeTakeFirst();
 }
 
+// Phase 4C — legacy task-creation compatibility gate.
+//
+// POST /v1/jobs is no longer the canonical way to create a task (that's now
+// POST /v1/projects/:projectId/tasks/from-budget-authorization,
+// routes/task-provenance.ts) — it's a compatibility-only path that never
+// produces provenance, and a task it creates can never pass the hardened
+// /fund preconditions below regardless of this flag's state.
+//
+// Fail-closed by default: the flag must be the EXACT string "true" (not
+// "1", not "TRUE", not any other truthy-looking value) or legacy creation is
+// rejected with 403. A production deployment simply never sets this
+// variable. Test/dev processes that still exercise the legacy path (see
+// apps/api/test/{job-lifecycle,tenant-authorization}.test.ts and the Phase 3
+// realtime test files) set it explicitly near the top of the file, the same
+// way they already set AUTH_TEST_RATE_LIMIT_MAX.
+function legacyJobCreationEnabled(): boolean {
+  return process.env.ALLOW_LEGACY_JOB_CREATION === "true";
+}
+
 export async function jobRoutes(app: FastifyInstance) {
   // Read-only cost quote, no task row created. Any org member can price a
   // task before asking an admin to fund it — reuses the exact same
@@ -69,9 +88,21 @@ export async function jobRoutes(app: FastifyInstance) {
     }
   });
 
+  // Legacy, compatibility-only task creation — see legacyJobCreationEnabled()'s
+  // comment above. Narrowed to requirePrivilegedRole even when enabled: this
+  // closes "any org member can self-serve a task" in the compatibility path,
+  // matching the canonical endpoint's own privileged-only gate.
   app.post("/v1/jobs", async (request, reply) => {
     try {
-      const { organizationId } = await requireOrgSession(request);
+      if (!legacyJobCreationEnabled()) {
+        reply.status(403).send({
+          error:
+            "Legacy task creation is disabled. Use POST /v1/projects/:projectId/tasks/from-budget-authorization instead.",
+        });
+        return;
+      }
+      const { organizationId, role } = await requireOrgSession(request);
+      requirePrivilegedRole(role);
       const body = CreateJobRequestSchema.parse(request.body);
 
       const project = await db
@@ -163,6 +194,87 @@ export async function jobRoutes(app: FastifyInstance) {
           .executeTakeFirst();
         if (!task) {
           throw new HttpError(404, "Not found");
+        }
+
+        // Phase 4C hardening: /fund now requires the task to carry valid,
+        // fully-chained provenance all the way back to an APPROVED estimate
+        // and a CONSUMED authorization that exists solely to fund this one
+        // task. This is always active, independent of
+        // ALLOW_LEGACY_JOB_CREATION's state — a provenance-less task (any
+        // task created via the legacy path, or a fabricated fixture) can be
+        // created but can never reach QUEUED. There are zero historical
+        // AWAITING_FUNDING tasks affected by this (confirmed by the Phase 4C
+        // preflight), so this has zero blast radius on existing data.
+        if (!task.source_estimate_id || !task.source_budget_authorization_id) {
+          throw new HttpError(
+            409,
+            "Task has no provenance (source_estimate_id/source_budget_authorization_id) — only a task created via POST /v1/projects/:projectId/tasks/from-budget-authorization can be funded",
+          );
+        }
+
+        const sourceEstimate = await trx
+          .selectFrom("project_estimates")
+          .selectAll()
+          .where("id", "=", task.source_estimate_id)
+          .executeTakeFirst();
+        if (
+          !sourceEstimate ||
+          sourceEstimate.project_id !== task.project_id ||
+          sourceEstimate.organization_id !== task.organization_id
+        ) {
+          throw new HttpError(
+            409,
+            "Task's source estimate is missing or does not match this task's project/organization",
+          );
+        }
+        if (sourceEstimate.status !== "APPROVED") {
+          throw new HttpError(
+            409,
+            `Task's source estimate ${sourceEstimate.id} is ${sourceEstimate.status}, not APPROVED`,
+          );
+        }
+
+        const sourceAuthorization = await trx
+          .selectFrom("project_budget_authorizations")
+          .selectAll()
+          .where("id", "=", task.source_budget_authorization_id)
+          .executeTakeFirst();
+        if (
+          !sourceAuthorization ||
+          sourceAuthorization.organization_id !== task.organization_id ||
+          sourceAuthorization.project_id !== task.project_id
+        ) {
+          throw new HttpError(
+            409,
+            "Task's source budget authorization is missing or does not match this task's project/organization",
+          );
+        }
+        if (sourceAuthorization.estimate_id !== task.source_estimate_id) {
+          throw new HttpError(
+            409,
+            "Task's source budget authorization does not reference the task's own source estimate",
+          );
+        }
+        if (sourceAuthorization.status !== "CONSUMED") {
+          throw new HttpError(
+            409,
+            `Task's source budget authorization ${sourceAuthorization.id} is ${sourceAuthorization.status}, not CONSUMED`,
+          );
+        }
+
+        // Defensive: should be structurally guaranteed by
+        // tasks_one_per_source_budget_authorization already — confirmed
+        // here rather than assumed.
+        const linkedTaskCount = await trx
+          .selectFrom("tasks")
+          .select(({ fn }) => [fn.count<string>("id").as("n")])
+          .where("source_budget_authorization_id", "=", sourceAuthorization.id)
+          .executeTakeFirstOrThrow();
+        if (Number(linkedTaskCount.n) !== 1) {
+          throw new HttpError(
+            500,
+            `Integrity anomaly: budget authorization ${sourceAuthorization.id} is referenced by ${linkedTaskCount.n} tasks, expected exactly 1`,
+          );
         }
 
         const current = task.status as TaskStatus;

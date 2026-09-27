@@ -197,22 +197,91 @@ async function setUpOwnerWithOrg(suffix: string) {
   return { owner, organizationId, projectId, agentProfileId };
 }
 
+// Phase 4C: /fund now requires real provenance (see
+// job-lifecycle.test.ts's createFundedTask, mirrored here exactly) —
+// fixture-only insert of an APPROVED estimate + ACTIVE authorization,
+// bypassing the planner LLM, then create + fund through the real HTTP
+// endpoints.
+function fakePlannerOutputForJobPayload(payload: ReturnType<typeof createJobPayload>) {
+  return {
+    goal: payload.objective,
+    scope: { included: ["core feature set"], excluded: [] },
+    deliverables: ["A deployed change"],
+    implementationPlan: ["Implement the objective"],
+    assumptions: [],
+    acceptanceCriteria: payload.acceptanceCriteria,
+    infrastructureRequirements: [],
+    risks: [],
+    resourceEstimate: {
+      complexity: 0.5,
+      estimatedDurationHours: { min: 1, max: 2 },
+      inferenceRequirements: { estimatedTier: "standard" },
+    },
+  };
+}
+
 // Creates + funds a task as the owner, returning its id without claiming it
 // (used for the "zero executions yet" case).
-async function createFundedTask(ownerCookie: string, projectId: string, agentProfileId: string) {
+async function createFundedTask(
+  owner: { jar: CookieJar; userId: string },
+  organizationId: string,
+  projectId: string,
+  agentProfileId: string,
+) {
+  const payload = createJobPayload(projectId, agentProfileId);
+
+  const estimate = await db
+    .insertInto("project_estimates")
+    .values({
+      lineage_id: randomUUID(),
+      version: 1,
+      status: "APPROVED",
+      organization_id: organizationId,
+      project_id: projectId,
+      source_prompt: "fixture prompt",
+      planner_output: JSON.stringify(fakePlannerOutputForJobPayload(payload)),
+      planner_model: "test-fixture",
+      created_by: owner.userId,
+      approved_by: owner.userId,
+      approved_at: new Date(),
+    })
+    .returningAll()
+    .executeTakeFirstOrThrow();
+
+  const authorization = await db
+    .insertInto("project_budget_authorizations")
+    .values({
+      organization_id: organizationId,
+      project_id: projectId,
+      estimate_id: estimate.id,
+      estimate_lineage_id: estimate.lineage_id,
+      estimate_version: estimate.version,
+      amount_minor: String(payload.budgetMinor),
+      currency: payload.currency,
+      source: "USER_SET",
+      status: "ACTIVE",
+      authorized_by: owner.userId,
+    })
+    .returningAll()
+    .executeTakeFirstOrThrow();
+
   const created = await app.inject({
     method: "POST",
-    url: "/v1/jobs",
-    headers: { cookie: ownerCookie },
-    payload: createJobPayload(projectId, agentProfileId),
+    url: `/v1/projects/${projectId}/tasks/from-budget-authorization`,
+    headers: { cookie: owner.jar.header },
+    payload: {
+      budgetAuthorizationId: authorization.id,
+      agentProfileId,
+      repositoryRevision: payload.repositoryRevision,
+    },
   });
-  assert.equal(created.statusCode, 201, `job creation failed: ${created.body}`);
+  assert.equal(created.statusCode, 201, `canonical task creation failed: ${created.body}`);
   const taskId = (JSON.parse(created.body) as { id: string }).id;
 
   const funded = await app.inject({
     method: "POST",
     url: `/v1/jobs/${taskId}/fund`,
-    headers: { cookie: ownerCookie },
+    headers: { cookie: owner.jar.header },
   });
   assert.equal(funded.statusCode, 200, `fund failed: ${funded.body}`);
   return taskId;
@@ -364,12 +433,13 @@ async function completeExecution(executionId: string, workerId: string, outcome:
 // /complete are exercised for real, which is what the read surface under
 // test in this file actually depends on.
 async function createFundedAndRunningTaskWithConversation(
-  ownerCookie: string,
+  owner: { jar: CookieJar; userId: string },
+  organizationId: string,
   projectId: string,
   agentProfileId: string,
   opts: { events?: ReturnType<typeof messageEvent>[]; completeOutcome?: "success" | "failure" } = {},
 ) {
-  const taskId = await createFundedTask(ownerCookie, projectId, agentProfileId);
+  const taskId = await createFundedTask(owner, organizationId, projectId, agentProfileId);
   const { executionId, workerId } = await claimTaskDirect(taskId);
   const conversationId = `oh-conv-${randomUUID()}`;
   await reportConversation(executionId, workerId, conversationId);
@@ -396,7 +466,8 @@ describe("openhands-compat: tenant-scoped conversation reads", () => {
 
     const events = [messageEvent("first"), messageEvent("second")];
     const { taskId, conversationId, taskStatus } = await createFundedAndRunningTaskWithConversation(
-      owner.jar.header,
+      owner,
+      organizationId,
       projectId,
       agentProfileId,
       { events },
@@ -441,11 +512,12 @@ describe("openhands-compat: tenant-scoped conversation reads", () => {
   test("a user from a different organization cannot resolve it (null result, not an error)", async () => {
     const suffixA = randomUUID();
     const suffixB = randomUUID();
-    const { owner: ownerA, projectId, agentProfileId } = await setUpOwnerWithOrg(suffixA);
+    const { owner: ownerA, organizationId: organizationIdA, projectId, agentProfileId } = await setUpOwnerWithOrg(suffixA);
     const { owner: ownerB } = await setUpOwnerWithOrg(suffixB);
 
     const { conversationId } = await createFundedAndRunningTaskWithConversation(
-      ownerA.jar.header,
+      ownerA,
+      organizationIdA,
       projectId,
       agentProfileId,
     );
@@ -523,9 +595,10 @@ describe("openhands-compat: tenant-scoped conversation reads", () => {
 describe("openhands-compat: singular conversation detail (GET /api/conversations/:id)", () => {
   test("canonical conversation_id resolves to the matching AppConversation", async () => {
     const suffix = randomUUID();
-    const { owner, projectId, agentProfileId } = await setUpOwnerWithOrg(suffix);
+    const { owner, organizationId, projectId, agentProfileId } = await setUpOwnerWithOrg(suffix);
     const { conversationId, executionId } = await createFundedAndRunningTaskWithConversation(
-      owner.jar.header,
+      owner,
+      organizationId,
       projectId,
       agentProfileId,
     );
@@ -543,9 +616,10 @@ describe("openhands-compat: singular conversation detail (GET /api/conversations
 
   test("a legacy task id falls back to the task's latest execution", async () => {
     const suffix = randomUUID();
-    const { owner, projectId, agentProfileId } = await setUpOwnerWithOrg(suffix);
+    const { owner, organizationId, projectId, agentProfileId } = await setUpOwnerWithOrg(suffix);
     const { taskId, conversationId } = await createFundedAndRunningTaskWithConversation(
-      owner.jar.header,
+      owner,
+      organizationId,
       projectId,
       agentProfileId,
     );
@@ -563,10 +637,11 @@ describe("openhands-compat: singular conversation detail (GET /api/conversations
   test("a cross-org id, and a genuinely unknown id, both 404 with a null body", async () => {
     const suffixA = randomUUID();
     const suffixB = randomUUID();
-    const { owner: ownerA, projectId, agentProfileId } = await setUpOwnerWithOrg(suffixA);
+    const { owner: ownerA, organizationId: organizationIdA, projectId, agentProfileId } = await setUpOwnerWithOrg(suffixA);
     const { owner: ownerB } = await setUpOwnerWithOrg(suffixB);
     const { conversationId } = await createFundedAndRunningTaskWithConversation(
-      ownerA.jar.header,
+      ownerA,
+      organizationIdA,
       projectId,
       agentProfileId,
     );
@@ -594,7 +669,8 @@ describe("openhands-compat: resolver behavior (resolveConversationTarget)", () =
     const suffix = randomUUID();
     const { owner, organizationId, projectId, agentProfileId } = await setUpOwnerWithOrg(suffix);
     const { executionId, conversationId } = await createFundedAndRunningTaskWithConversation(
-      owner.jar.header,
+      owner,
+      organizationId,
       projectId,
       agentProfileId,
     );
@@ -609,7 +685,8 @@ describe("openhands-compat: resolver behavior (resolveConversationTarget)", () =
     const suffix = randomUUID();
     const { owner, organizationId, projectId, agentProfileId } = await setUpOwnerWithOrg(suffix);
     const { taskId, executionId } = await createFundedAndRunningTaskWithConversation(
-      owner.jar.header,
+      owner,
+      organizationId,
       projectId,
       agentProfileId,
     );
@@ -623,7 +700,7 @@ describe("openhands-compat: resolver behavior (resolveConversationTarget)", () =
   test("a task with zero executions yet resolves to an explicit 'not started' state, not 'not found'", async () => {
     const suffix = randomUUID();
     const { owner, organizationId, projectId, agentProfileId } = await setUpOwnerWithOrg(suffix);
-    const taskId = await createFundedTask(owner.jar.header, projectId, agentProfileId);
+    const taskId = await createFundedTask(owner, organizationId, projectId, agentProfileId);
 
     // Not claimed by any worker yet — zero rows in `executions` for this task.
     const resolution = await resolveConversationTarget(taskId, organizationId);
@@ -669,7 +746,7 @@ describe("openhands-compat: resolver behavior (resolveConversationTarget)", () =
   test("two execution attempts for one task remain distinct (different ids, different event sets)", async () => {
     const suffix = randomUUID();
     const { owner, organizationId, projectId, agentProfileId } = await setUpOwnerWithOrg(suffix);
-    const taskId = await createFundedTask(owner.jar.header, projectId, agentProfileId);
+    const taskId = await createFundedTask(owner, organizationId, projectId, agentProfileId);
 
     // Attempt 1: fails, and MAX_EXECUTION_ATTEMPTS (3) means the task loops
     // back to QUEUED for a retry rather than terminally FAILED.

@@ -67,6 +67,18 @@ export interface AuthorizeBudgetInput {
   currency: string;
 }
 
+// Phase 4C — mirrors apps/api's PrepareBuildRequestSchema
+// (packages/contracts/src/task-provenance.ts). Never sends
+// organizationId/estimateId/amount/currency — the server derives all of that
+// from the persisted budgetAuthorizationId. agentProfileId/repositoryRevision
+// are still caller-supplied, same as legacy CreateTaskInput, since nothing
+// upstream (planner/estimate/authorization) produces either of them yet.
+export interface PrepareBuildInput {
+  budgetAuthorizationId: string;
+  agentProfileId: string;
+  repositoryRevision: string;
+}
+
 // The real "Import Repository" / task-status dashboard's view of the
 // backend — implemented by lib/api/live.ts against apps/api's /v1/* routes.
 export interface TaskDashboardApi {
@@ -103,4 +115,17 @@ export interface TaskDashboardApi {
     input: AuthorizeBudgetInput,
   ): Promise<BudgetAuthorization>;
   listBudgetAuthorizations(projectId: string, estimateId: string): Promise<BudgetAuthorization[]>;
+
+  // Phase 4C — every budget authorization across every estimate in a
+  // project (current + superseded + consumed), used to let a privileged
+  // member pick an ACTIVE one to prepare a build from.
+  listProjectBudgetAuthorizations(projectId: string): Promise<BudgetAuthorization[]>;
+
+  // Phase 4C — the canonical, provenance-bound way to create a task. Lands
+  // the task at AWAITING_FUNDING and stops there: no execution, no funding,
+  // no payment movement. A separate, later "Activate Build" action (still
+  // dashboardApi.fundTask under the hood) is what moves it to QUEUED. Never
+  // call this "funding" or "paying" in any UI copy — see
+  // components/projects/add-task-form.tsx's header comment.
+  prepareBuild(projectId: string, input: PrepareBuildInput): Promise<Task>;
 }

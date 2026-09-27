@@ -6,17 +6,27 @@ import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
 import { useAgentProfiles } from "@/lib/hooks/use-agent-profiles";
-import { useCreateTask, useEstimateTask, useFundTask } from "@/lib/hooks/use-tasks";
+import { useProjectBudgetAuthorizations } from "@/lib/hooks/use-budget-authorizations";
+import { usePrepareBuild } from "@/lib/hooks/use-tasks";
+import { formatMinor } from "@/lib/types";
 
-function parseAcceptanceCriteria(text: string): string[] {
-  return text
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean);
-}
-
+// Phase 4C — Provenance-Bound Task Creation and Execution Activation Gate.
+//
+// This panel replaces the old ad-hoc "type an objective, guess a budget,
+// create + fund in one click" flow. A task can now only be prepared from an
+// ACTIVE budget authorization, which itself only exists against an APPROVED
+// scope estimate (see scope-estimate-panel.tsx / budget-authorization-panel.tsx).
+// Submitting here calls the canonical
+// POST /v1/projects/:projectId/tasks/from-budget-authorization endpoint,
+// which lands the task at AWAITING_FUNDING and stops — no execution, no
+// funding, no payment movement happens here. A separate, later "Activate
+// Build" action (on the task detail page) is what moves it to QUEUED.
+//
+// Vocabulary rule for this component and anything downstream of it: never
+// "Fund"/"Pay"/"Deposit"/"Escrow" — only "Prepare Build" / "Activate Build" /
+// "Awaiting Funding", since no real payment rail exists anywhere in this
+// codebase yet (see docs/adr/0010-provenance-bound-task-creation.md).
 export function AddTaskForm({
   projectId,
   defaultRevision,
@@ -25,65 +35,75 @@ export function AddTaskForm({
   defaultRevision: string;
 }) {
   const router = useRouter();
-  const createTask = useCreateTask();
-  const fundTask = useFundTask();
-  const estimateTask = useEstimateTask();
+  const prepareBuild = usePrepareBuild(projectId);
   const { data: agentProfiles, isLoading: profilesLoading } = useAgentProfiles();
+  const { data: authorizations, isLoading: authorizationsLoading } =
+    useProjectBudgetAuthorizations(projectId);
   const noAgentProfiles = !profilesLoading && (agentProfiles?.length ?? 0) === 0;
 
+  const activeAuthorizations = authorizations?.filter((a) => a.status === "ACTIVE") ?? [];
+
   const [repositoryRevision, setRepositoryRevision] = useState(defaultRevision);
-  const [objective, setObjective] = useState("");
-  const [acceptanceCriteria, setAcceptanceCriteria] = useState("");
-  const [maxBudgetUsd, setMaxBudgetUsd] = useState("5.00");
+  const [budgetAuthorizationId, setBudgetAuthorizationId] = useState("");
   const [error, setError] = useState<string | null>(null);
 
   const agentProfileId = agentProfiles?.[0]?.id ?? "";
+  const selectedAuthorizationId = budgetAuthorizationId || activeAuthorizations[0]?.id || "";
   const canSubmit =
     repositoryRevision.trim().length > 0 &&
-    objective.trim().length > 0 &&
     agentProfileId.length > 0 &&
-    !createTask.isPending &&
-    !fundTask.isPending;
-
-  async function handlePreviewEstimate() {
-    setError(null);
-    try {
-      await estimateTask.mutateAsync({
-        agentProfileId,
-        objective: objective.trim(),
-        acceptanceCriteria: parseAcceptanceCriteria(acceptanceCriteria),
-        budgetMinor: Math.round(parseFloat(maxBudgetUsd || "0") * 100),
-      });
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Something went wrong.");
-    }
-  }
+    selectedAuthorizationId.length > 0 &&
+    !prepareBuild.isPending;
 
   async function handleSubmit() {
     setError(null);
     try {
-      const task = await createTask.mutateAsync({
-        projectId,
-        repositoryRevision: repositoryRevision.trim(),
-        objective: objective.trim(),
-        acceptanceCriteria: parseAcceptanceCriteria(acceptanceCriteria),
+      const task = await prepareBuild.mutateAsync({
+        budgetAuthorizationId: selectedAuthorizationId,
         agentProfileId,
-        budgetMinor: Math.round(parseFloat(maxBudgetUsd || "0") * 100),
-        currency: "usd",
+        repositoryRevision: repositoryRevision.trim(),
       });
-      await fundTask.mutateAsync(task.id);
       router.push(`/projects/${projectId}/tasks/${task.id}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Something went wrong.");
     }
   }
 
+  const isLoading = profilesLoading || authorizationsLoading;
+
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="text-base">New task</CardTitle>
+        <CardTitle className="text-base">Prepare a build</CardTitle>
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
+        {isLoading ? (
+          <p className="text-sm text-muted-foreground">Loading…</p>
+        ) : activeAuthorizations.length === 0 ? (
+          <p className="text-sm text-muted-foreground">
+            No active budget authorization yet. Generate and approve a scope estimate, then
+            authorize a budget against it, before a build can be prepared.
+          </p>
+        ) : (
+          <div className="flex flex-col gap-1.5">
+            <label className="text-sm font-medium" htmlFor="add-task-authorization">
+              Budget authorization
+            </label>
+            <select
+              id="add-task-authorization"
+              className="h-9 rounded-md border border-input bg-transparent px-3 text-sm shadow-xs"
+              value={selectedAuthorizationId}
+              onChange={(event) => setBudgetAuthorizationId(event.target.value)}
+            >
+              {activeAuthorizations.map((authorization) => (
+                <option key={authorization.id} value={authorization.id}>
+                  {formatMinor(authorization.amountMinor, authorization.currency)} — estimate v
+                  {authorization.estimateVersion}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
         <div className="flex flex-col gap-1.5">
           <label className="text-sm font-medium" htmlFor="add-task-revision">
             Repository revision
@@ -94,70 +114,18 @@ export function AddTaskForm({
             onChange={(event) => setRepositoryRevision(event.target.value)}
           />
         </div>
-        <div className="flex flex-col gap-1.5">
-          <label className="text-sm font-medium" htmlFor="add-task-objective">
-            Objective
-          </label>
-          <Textarea
-            id="add-task-objective"
-            rows={3}
-            value={objective}
-            onChange={(event) => setObjective(event.target.value)}
-          />
-        </div>
-        <div className="flex flex-col gap-1.5">
-          <label className="text-sm font-medium" htmlFor="add-task-criteria">
-            Acceptance criteria (one per line)
-          </label>
-          <Textarea
-            id="add-task-criteria"
-            rows={3}
-            value={acceptanceCriteria}
-            onChange={(event) => setAcceptanceCriteria(event.target.value)}
-          />
-        </div>
-        <div className="flex flex-col gap-1.5">
-          <label className="text-sm font-medium" htmlFor="add-task-budget">
-            Max AI development budget (USD)
-          </label>
-          <Input
-            id="add-task-budget"
-            type="number"
-            min="0"
-            step="0.5"
-            value={maxBudgetUsd}
-            onChange={(event) => setMaxBudgetUsd(event.target.value)}
-          />
-        </div>
-        <div className="flex flex-col gap-2">
-          <Button
-            type="button"
-            variant="outline"
-            disabled={objective.trim().length === 0 || agentProfileId.length === 0 || estimateTask.isPending}
-            onClick={handlePreviewEstimate}
-            className="self-start"
-          >
-            {estimateTask.isPending ? "Estimating…" : "Preview estimate"}
-          </Button>
-          {estimateTask.data && (
-            <p className="rounded-lg border border-border bg-muted/40 p-3 text-sm text-muted-foreground">
-              <span className="font-medium text-foreground">{estimateTask.data.tier}</span> tier ·{" "}
-              {estimateTask.data.model} — {estimateTask.data.reason}
-            </p>
-          )}
-        </div>
       </CardContent>
       <CardFooter className="flex-col items-stretch gap-2">
         {noAgentProfiles && (
           <p className="text-sm text-warning">
             No agent profiles are configured for this organization — an admin
-            needs to add one before a task can start.
+            needs to add one before a build can be prepared.
           </p>
         )}
         <div className="flex items-center justify-between">
           {error ? <p className="text-sm text-destructive">{error}</p> : <span />}
           <Button disabled={!canSubmit} onClick={handleSubmit}>
-            {createTask.isPending || fundTask.isPending ? "Starting…" : "Start task"}
+            {prepareBuild.isPending ? "Preparing…" : "Prepare Build"}
           </Button>
         </div>
       </CardFooter>

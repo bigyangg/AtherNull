@@ -17,6 +17,7 @@ import type {
   CreateRepoProjectInput,
   CreateTaskInput,
   EstimateTaskInput,
+  PrepareBuildInput,
   TaskDashboardApi,
 } from "@/lib/api/types";
 
@@ -106,6 +107,9 @@ interface RawTask {
   status: Task["status"];
   created_at: string;
   updated_at: string;
+  // Phase 4C — null for a legacy task, both set for a canonically-created one.
+  source_estimate_id: string | null;
+  source_budget_authorization_id: string | null;
 }
 
 interface RawVerificationRun {
@@ -225,6 +229,8 @@ function toTask(raw: RawTask): Task {
     status: raw.status,
     createdAt: raw.created_at,
     updatedAt: raw.updated_at,
+    sourceEstimateId: raw.source_estimate_id,
+    sourceBudgetAuthorizationId: raw.source_budget_authorization_id,
   };
 }
 
@@ -364,5 +370,18 @@ export const liveApi: TaskDashboardApi = {
     return apiFetch<BudgetAuthorization[]>(
       `/v1/projects/${projectId}/estimates/${estimateId}/budget-authorizations`,
     );
+  },
+
+  async listProjectBudgetAuthorizations(projectId: string) {
+    return apiFetch<BudgetAuthorization[]>(`/v1/projects/${projectId}/budget-authorizations`);
+  },
+
+  // Phase 4C — the canonical, provenance-bound way to create a task.
+  async prepareBuild(projectId: string, input: PrepareBuildInput) {
+    const raw = await apiFetch<RawTask>(`/v1/projects/${projectId}/tasks/from-budget-authorization`, {
+      method: "POST",
+      body: JSON.stringify(input),
+    });
+    return toTask(raw);
   },
 };

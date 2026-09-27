@@ -53,6 +53,15 @@ export interface TasksTable {
   version: Generated<number>;
   created_at: Timestamp;
   updated_at: Timestamp;
+  // Phase 4C — provenance-bound task creation (0010_task_provenance.sql).
+  // Both null for every historical task created before this phase (legacy
+  // /v1/jobs path, or any task predating provenance tracking); both set,
+  // never one alone (tasks_provenance_paired), for every task created via
+  // the canonical POST /v1/projects/:projectId/tasks/from-budget-authorization
+  // endpoint. Immutable once set — never included in any updateTable("tasks")
+  // call site, exactly like max_budget_minor/currency.
+  source_estimate_id: string | null;
+  source_budget_authorization_id: string | null;
 }
 
 export interface ExecutionsTable {
@@ -175,7 +184,10 @@ export interface ProjectBudgetAuthorizationsTable {
   amount_minor: string; // bigint — Kysely/pg returns bigint as string by default
   currency: string;
   source: Generated<string>; // "ESTIMATE_PROPOSED_CAP" | "USER_SET" (packages/contracts) — text column, no DB-level enum
-  status: Generated<string>; // "ACTIVE" | "SUPERSEDED"
+  // "ACTIVE" | "SUPERSEDED" | "CONSUMED" (Phase 4C adds CONSUMED — a
+  // canonical task was created from this exact authorization; permanently
+  // terminal, never reverts to ACTIVE, never superseded again).
+  status: Generated<string>;
   supersedes_id: string | null;
   authorized_by: string;
   authorized_at: Timestamp;

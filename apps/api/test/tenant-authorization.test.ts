@@ -32,6 +32,12 @@ delete process.env.RESEND_API_KEY;
 // client IP, so every call shares one bucket (see auth.ts). Raised for this
 // process only.
 process.env.AUTH_TEST_RATE_LIMIT_MAX ??= "50";
+// Phase 4C: this file specifically exercises the legacy, compatibility-only
+// POST /v1/jobs path (cross-org rejection, removed-member rejection, a
+// privileged owner's own creation) — mirrors how AUTH_TEST_RATE_LIMIT_MAX
+// above is already set explicitly per-process for this exact reason. Must be
+// the exact string "true" — see routes/jobs.ts's legacyJobCreationEnabled().
+process.env.ALLOW_LEGACY_JOB_CREATION ??= "true";
 
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
@@ -400,13 +406,71 @@ describe("tenant authorization", () => {
     const organizationId = await createOrgAsOwner(owner.jar, `Org ${suffix}`, `org-${suffix}`);
     const { projectId, agentProfileId } = await seedProjectAndAgentProfile(organizationId, owner.userId);
 
+    // Phase 4C: /fund now requires real provenance — build it via the
+    // canonical flow's fixture shape (fixture-only APPROVED estimate +
+    // ACTIVE authorization, bypassing the planner LLM, then the real
+    // canonical create endpoint), same pattern as
+    // job-lifecycle.test.ts's createFundedTask.
+    const payload = createJobPayload(projectId, agentProfileId);
+    const estimate = await db
+      .insertInto("project_estimates")
+      .values({
+        lineage_id: randomUUID(),
+        version: 1,
+        status: "APPROVED",
+        organization_id: organizationId,
+        project_id: projectId,
+        source_prompt: "fixture prompt",
+        planner_output: JSON.stringify({
+          goal: payload.objective,
+          scope: { included: ["core feature set"], excluded: [] },
+          deliverables: ["A deployed change"],
+          implementationPlan: ["Implement the objective"],
+          assumptions: [],
+          acceptanceCriteria: payload.acceptanceCriteria,
+          infrastructureRequirements: [],
+          risks: [],
+          resourceEstimate: {
+            complexity: 0.5,
+            estimatedDurationHours: { min: 1, max: 2 },
+            inferenceRequirements: { estimatedTier: "standard" },
+          },
+        }),
+        planner_model: "test-fixture",
+        created_by: owner.userId,
+        approved_by: owner.userId,
+        approved_at: new Date(),
+      })
+      .returningAll()
+      .executeTakeFirstOrThrow();
+    const authorization = await db
+      .insertInto("project_budget_authorizations")
+      .values({
+        organization_id: organizationId,
+        project_id: projectId,
+        estimate_id: estimate.id,
+        estimate_lineage_id: estimate.lineage_id,
+        estimate_version: estimate.version,
+        amount_minor: String(payload.budgetMinor),
+        currency: payload.currency,
+        source: "USER_SET",
+        status: "ACTIVE",
+        authorized_by: owner.userId,
+      })
+      .returningAll()
+      .executeTakeFirstOrThrow();
+
     const created = await app.inject({
       method: "POST",
-      url: "/v1/jobs",
+      url: `/v1/projects/${projectId}/tasks/from-budget-authorization`,
       headers: { cookie: owner.jar.header },
-      payload: createJobPayload(projectId, agentProfileId),
+      payload: {
+        budgetAuthorizationId: authorization.id,
+        agentProfileId,
+        repositoryRevision: payload.repositoryRevision,
+      },
     });
-    assert.equal(created.statusCode, 201, `job creation failed: ${created.body}`);
+    assert.equal(created.statusCode, 201, `canonical task creation failed: ${created.body}`);
     const taskId = (JSON.parse(created.body) as { id: string }).id;
 
     // Two genuinely concurrent requests against the same app instance —

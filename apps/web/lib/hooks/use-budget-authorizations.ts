@@ -30,3 +30,14 @@ export function useAuthorizeBudget(projectId: string, estimateId: string | null)
     },
   });
 }
+
+// Phase 4C — every budget authorization across every estimate in a project,
+// used by the "Prepare Build" flow to offer a privileged member a choice of
+// ACTIVE authorizations to build from.
+export function useProjectBudgetAuthorizations(projectId: string) {
+  return useQuery({
+    queryKey: ["budget-authorizations", "project", projectId],
+    queryFn: () => dashboardApi.listProjectBudgetAuthorizations(projectId),
+    enabled: Boolean(projectId),
+  });
+}

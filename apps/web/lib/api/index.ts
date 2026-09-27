@@ -16,6 +16,7 @@ export type {
   CreateRepoProjectInput,
   CreateTaskInput,
   EstimateTaskInput,
+  PrepareBuildInput,
   TaskDashboardApi,
   WorkspaceApi,
 } from "@/lib/api/types";

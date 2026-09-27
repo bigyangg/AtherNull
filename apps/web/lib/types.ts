@@ -142,6 +142,12 @@ export interface Task {
   status: TaskStatus;
   createdAt: string;
   updatedAt: string;
+  // Phase 4C — provenance-bound task creation. Both null for a legacy task
+  // (or any task predating this phase); both set for a task created via the
+  // canonical POST /v1/projects/:projectId/tasks/from-budget-authorization
+  // endpoint. See docs/adr/0010-provenance-bound-task-creation.md.
+  sourceEstimateId: string | null;
+  sourceBudgetAuthorizationId: string | null;
 }
 
 export interface VerificationRun {
@@ -272,7 +278,10 @@ export interface ProjectEstimate {
 // settlement concept — see components/projects/budget-authorization-panel.tsx's
 // header comment for the exact vocabulary this UI must and must not use.
 export type BudgetAuthorizationSource = "ESTIMATE_PROPOSED_CAP" | "USER_SET";
-export type BudgetAuthorizationStatus = "ACTIVE" | "SUPERSEDED";
+// Phase 4C adds CONSUMED: a canonical task was created from this exact
+// authorization. Permanently terminal — never reverts to ACTIVE, never
+// superseded again.
+export type BudgetAuthorizationStatus = "ACTIVE" | "SUPERSEDED" | "CONSUMED";
 
 export interface BudgetAuthorization {
   id: string;

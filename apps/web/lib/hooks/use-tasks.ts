@@ -2,7 +2,12 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
-import { dashboardApi, type CreateTaskInput, type EstimateTaskInput } from "@/lib/api";
+import {
+  dashboardApi,
+  type CreateTaskInput,
+  type EstimateTaskInput,
+  type PrepareBuildInput,
+} from "@/lib/api";
 import { isTaskActive } from "@/lib/types";
 
 // GET /v1/jobs returns every task in the org (apps/api has no per-project
@@ -49,12 +54,30 @@ export function useCreateTask() {
   });
 }
 
+// Phase 4C — "Activate Build": moves an AWAITING_FUNDING task to QUEUED.
+// Deliberately still named useFundTask (matches dashboardApi.fundTask and
+// apps/api's own /fund endpoint) — the UI-facing label is "Activate Build",
+// never "Fund"/"Pay"/"Deposit" (see add-task-form.tsx's header comment).
 export function useFundTask() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (taskId: string) => dashboardApi.fundTask(taskId),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["tasks"] });
+      queryClient.invalidateQueries({ queryKey: ["task"] });
+    },
+  });
+}
+
+// Phase 4C — the canonical, provenance-bound way to create a task
+// ("Prepare Build"). Lands the task at AWAITING_FUNDING and stops there.
+export function usePrepareBuild(projectId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: PrepareBuildInput) => dashboardApi.prepareBuild(projectId, input),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["tasks"] });
+      queryClient.invalidateQueries({ queryKey: ["budget-authorizations", "project", projectId] });
     },
   });
 }

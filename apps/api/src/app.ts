@@ -13,6 +13,7 @@ import { openhandsCompatRoutes } from "./routes/openhands-compat.js";
 import { projectRoutes } from "./routes/projects.js";
 import { realtimeGatewayRoutes } from "./routes/realtime-gateway.js";
 import { MAX_RELAY_MESSAGE_BYTES, relayRoutes } from "./routes/relay.js";
+import { taskProvenanceRoutes } from "./routes/task-provenance.js";
 import { getTrustedOrigins } from "./trusted-origins.js";
 import { usageRoutes } from "./routes/usage.js";
 
@@ -51,6 +52,10 @@ export async function buildApp(opts: { logger?: boolean } = {}): Promise<Fastify
   // routes/budget-authorizations.ts's header comment and
   // apps/api/test/budget-authorizations-no-execution-path.test.ts).
   await app.register(budgetAuthorizationRoutes);
+  // Phase 4C — the canonical, provenance-bound way to create a task. Also
+  // deliberately its own route file: see routes/task-provenance.ts's header
+  // comment and apps/api/test/task-provenance-no-execution-path.test.ts.
+  await app.register(taskProvenanceRoutes);
   await app.register(usageRoutes);
   await app.register(internalRoutes);
   // ADR-0007 Phase 3B — worker -> apps/api outbound relay tunnel.

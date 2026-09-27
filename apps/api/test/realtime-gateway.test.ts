@@ -167,20 +167,89 @@ async function setUpOwnerWithOrg(suffix: string) {
   return { owner, organizationId, projectId, agentProfileId };
 }
 
-async function createFundedTask(ownerCookie: string, projectId: string, agentProfileId: string) {
+// Phase 4C: /fund now requires real provenance (see
+// job-lifecycle.test.ts's createFundedTask, mirrored here exactly) —
+// fixture-only insert of an APPROVED estimate + ACTIVE authorization,
+// bypassing the planner LLM, then create + fund through the real HTTP
+// endpoints.
+function fakePlannerOutputForJobPayload(payload: ReturnType<typeof createJobPayload>) {
+  return {
+    goal: payload.objective,
+    scope: { included: ["core feature set"], excluded: [] },
+    deliverables: ["A deployed change"],
+    implementationPlan: ["Implement the objective"],
+    assumptions: [],
+    acceptanceCriteria: payload.acceptanceCriteria,
+    infrastructureRequirements: [],
+    risks: [],
+    resourceEstimate: {
+      complexity: 0.5,
+      estimatedDurationHours: { min: 1, max: 2 },
+      inferenceRequirements: { estimatedTier: "standard" },
+    },
+  };
+}
+
+async function createFundedTask(
+  owner: { jar: CookieJar; userId: string },
+  organizationId: string,
+  projectId: string,
+  agentProfileId: string,
+) {
+  const payload = createJobPayload(projectId, agentProfileId);
+
+  const estimate = await db
+    .insertInto("project_estimates")
+    .values({
+      lineage_id: randomUUID(),
+      version: 1,
+      status: "APPROVED",
+      organization_id: organizationId,
+      project_id: projectId,
+      source_prompt: "fixture prompt",
+      planner_output: JSON.stringify(fakePlannerOutputForJobPayload(payload)),
+      planner_model: "test-fixture",
+      created_by: owner.userId,
+      approved_by: owner.userId,
+      approved_at: new Date(),
+    })
+    .returningAll()
+    .executeTakeFirstOrThrow();
+
+  const authorization = await db
+    .insertInto("project_budget_authorizations")
+    .values({
+      organization_id: organizationId,
+      project_id: projectId,
+      estimate_id: estimate.id,
+      estimate_lineage_id: estimate.lineage_id,
+      estimate_version: estimate.version,
+      amount_minor: String(payload.budgetMinor),
+      currency: payload.currency,
+      source: "USER_SET",
+      status: "ACTIVE",
+      authorized_by: owner.userId,
+    })
+    .returningAll()
+    .executeTakeFirstOrThrow();
+
   const created = await app.inject({
     method: "POST",
-    url: "/v1/jobs",
-    headers: { cookie: ownerCookie },
-    payload: createJobPayload(projectId, agentProfileId),
+    url: `/v1/projects/${projectId}/tasks/from-budget-authorization`,
+    headers: { cookie: owner.jar.header },
+    payload: {
+      budgetAuthorizationId: authorization.id,
+      agentProfileId,
+      repositoryRevision: payload.repositoryRevision,
+    },
   });
-  assert.equal(created.statusCode, 201, `job creation failed: ${created.body}`);
+  assert.equal(created.statusCode, 201, `canonical task creation failed: ${created.body}`);
   const taskId = (JSON.parse(created.body) as { id: string }).id;
 
   const funded = await app.inject({
     method: "POST",
     url: `/v1/jobs/${taskId}/fund`,
-    headers: { cookie: ownerCookie },
+    headers: { cookie: owner.jar.header },
   });
   assert.equal(funded.statusCode, 200, `fund failed: ${funded.body}`);
   return taskId;
@@ -736,8 +805,8 @@ describe("realtime gateway: relay-unavailable and completion", () => {
 describe("realtime gateway: relay/execution resolution edge cases", () => {
   test("a task with no execution yet is rejected distinctly from not-found (not a security boundary, own-org data)", async () => {
     const suffix = randomUUID();
-    const { owner, projectId, agentProfileId } = await setUpOwnerWithOrg(suffix);
-    const taskId = await createFundedTask(owner.jar.header, projectId, agentProfileId);
+    const { owner, organizationId, projectId, agentProfileId } = await setUpOwnerWithOrg(suffix);
+    const taskId = await createFundedTask(owner, organizationId, projectId, agentProfileId);
     await expectRealtimeRejected(taskId, { cookie: owner.jar.header }, 409);
 
     // taskId must stay QUEUED (unclaimed) for the assertion above — nothing

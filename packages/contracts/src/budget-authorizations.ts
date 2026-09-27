@@ -18,7 +18,12 @@ export const BudgetAuthorizationSourceSchema = z.enum([
 ]);
 export type BudgetAuthorizationSource = z.infer<typeof BudgetAuthorizationSourceSchema>;
 
-export const BudgetAuthorizationStatusSchema = z.enum(["ACTIVE", "SUPERSEDED"]);
+// Phase 4C adds CONSUMED: a canonical task
+// (POST /v1/projects/:projectId/tasks/from-budget-authorization) was created
+// from this exact authorization. Permanently terminal — a CONSUMED row can
+// never revert to ACTIVE and can never be superseded again (see
+// docs/adr/0010-provenance-bound-task-creation.md).
+export const BudgetAuthorizationStatusSchema = z.enum(["ACTIVE", "SUPERSEDED", "CONSUMED"]);
 export type BudgetAuthorizationStatus = z.infer<typeof BudgetAuthorizationStatusSchema>;
 
 // Upper bound mirrors the DB check constraint

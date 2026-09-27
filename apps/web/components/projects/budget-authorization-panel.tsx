@@ -30,6 +30,12 @@ import { formatMinor, type BudgetAuthorizationStatus, type ProjectEstimate } fro
 const STATUS_VARIANT: Record<BudgetAuthorizationStatus, "muted" | "success"> = {
   ACTIVE: "success",
   SUPERSEDED: "muted",
+  // Phase 4C — a canonical task was created from this exact authorization.
+  // Rendered as a quiet, successful terminal state, same tone as ACTIVE
+  // (this was a legitimate, completed use of the authorization), never
+  // implying anything about payment ("CONSUMED" here means "spent on
+  // preparing a build," not "paid").
+  CONSUMED: "success",
 };
 
 export function BudgetAuthorizationPanel({
@@ -175,7 +181,8 @@ export function BudgetAuthorizationPanel({
             <ul className="flex flex-col gap-1 text-sm text-muted-foreground">
               {history.map((a) => (
                 <li key={a.id}>
-                  {formatMinor(a.amountMinor, a.currency)} — superseded, authorized{" "}
+                  {formatMinor(a.amountMinor, a.currency)} —{" "}
+                  {a.status === "CONSUMED" ? "used to prepare a build" : "superseded"}, authorized{" "}
                   {new Date(a.authorizedAt).toLocaleString()}
                 </li>
               ))}
