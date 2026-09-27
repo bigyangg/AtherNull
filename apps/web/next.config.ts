@@ -3,6 +3,11 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   reactStrictMode: true,
+  // @athernull/contracts ships untranspiled TypeScript (main: src/index.ts,
+  // internal exports written with .js specifiers per its own moduleResolution
+  // config) — without this, Next treats it as an opaque external package and
+  // fails to resolve those .js specifiers against the actual .ts files.
+  transpilePackages: ["@athernull/contracts"],
   // Self-contained server bundle (.next/standalone) for the Docker image —
   // pulls in only the node_modules this app's build actually traced, instead
   // of shipping the whole monorepo's node_modules.

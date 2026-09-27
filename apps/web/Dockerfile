@@ -10,6 +10,7 @@ FROM base AS deps
 WORKDIR /repo
 COPY package.json pnpm-workspace.yaml pnpm-lock.yaml ./
 COPY apps/web/package.json apps/web/package.json
+COPY packages/contracts/package.json packages/contracts/package.json
 RUN pnpm install --frozen-lockfile --filter @athernull/web...
 
 # ---- builder: full source, produce .next/standalone ----
@@ -18,6 +19,7 @@ WORKDIR /repo
 COPY --from=deps /repo/node_modules ./node_modules
 COPY --from=deps /repo/apps/web/node_modules ./apps/web/node_modules
 COPY tsconfig.base.json ./
+COPY packages/contracts packages/contracts
 COPY apps/web apps/web
 ENV NEXT_TELEMETRY_DISABLED=1
 RUN pnpm --filter @athernull/web build
