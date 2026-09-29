@@ -26,13 +26,14 @@ const edges = stages.map((stage, i) => {
 });
 const perimeter = edges.reduce((sum, edge) => sum + edge, 0);
 const circuitDuration = 5.4;
+const circuitCenter = "280 250";
 
 export function OwnershipFlow() {
   const diagramRef = useRef<HTMLDivElement>(null);
 
   useGSAP(() => {
     const diagram = diagramRef.current;
-    if (!diagram || window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    if (!diagram) return;
 
     const nodes = gsap.utils.toArray<HTMLElement>(diagram.querySelectorAll("[data-flow-node]"));
     const trace = diagram.querySelectorAll<SVGPathElement>("[data-flow-trace]");
@@ -51,7 +52,24 @@ export function OwnershipFlow() {
     const deactivate = () => nodes.forEach((node) => { node.dataset.active = "false"; });
     activate(0);
 
-    const timeline = gsap.timeline({ repeat: -1, paused: true });
+    const resetCycle = () => {
+      gsap.set(trace, { strokeDashoffset: 0 });
+      gsap.set(waves, { svgOrigin: circuitCenter, x: 0, y: 0, rotation: 0, scale: 1, opacity: 0 });
+      activate(0);
+    };
+
+    // Do not use GSAP's repeat state here. Each pass restarts from the exact
+    // first-frame setup, preventing SVG transforms from carrying over between
+    // cycles and making every pass identical to the initial one.
+    let timeline: gsap.core.Timeline;
+    timeline = gsap.timeline({
+      paused: true,
+      onComplete: () => {
+        resetCycle();
+        timeline.restart();
+      },
+    });
+    resetCycle();
     timeline.fromTo(trace, { strokeDashoffset: 0 }, { strokeDashoffset: -600, duration: circuitDuration, ease: "none" }, 0);
     let distance = 0;
     stages.forEach((_, index) => {
@@ -61,7 +79,7 @@ export function OwnershipFlow() {
       // then fully fades before the signal reaches the next vertex.
       waves.forEach((wave, waveIndex) => {
         timeline.fromTo(wave,
-          { scale: 1, opacity: 0.5, transformOrigin: "50% 50%" },
+          { svgOrigin: circuitCenter, x: 0, y: 0, rotation: 0, scale: 1, opacity: 0.5 },
           { scale: 1.23, opacity: 0, duration: 0.55, ease: "power2.out", immediateRender: false },
           arrival + waveIndex * 0.09,
         );
@@ -85,9 +103,6 @@ export function OwnershipFlow() {
   return (
     <div ref={diagramRef} className={styles.diagram} role="img" aria-label="Agent workflow: brief, plan, execute, validate, review, and observe. Each stage lights up as the work progresses, while you stay in control.">
       <svg className={styles.paths} viewBox="0 0 560 500" fill="none" aria-hidden="true">
-        <path className={styles.wave} d={circuit} data-flow-wave />
-        <path className={styles.wave} d={circuit} data-flow-wave />
-        <path className={styles.wave} d={circuit} data-flow-wave />
         <path className={styles.surface} d={circuit} />
         {stages.map(({ label, x, y }) => <path key={label} className={styles.spoke} d={`M280 250 L${x} ${y}`} />)}
         <path className={styles.track} d={circuit} />
@@ -106,6 +121,11 @@ export function OwnershipFlow() {
           <span className={styles.nodeLabel}>{label}</span>
         </div>
       ))}
+      <svg className={styles.waveOverlay} viewBox="0 0 560 500" fill="none" aria-hidden="true">
+        <path className={styles.wave} d={circuit} data-flow-wave />
+        <path className={styles.wave} d={circuit} data-flow-wave />
+        <path className={styles.wave} d={circuit} data-flow-wave />
+      </svg>
     </div>
   );
 }
