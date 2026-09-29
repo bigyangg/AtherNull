@@ -32,7 +32,7 @@ export function OwnershipFlow() {
 
   useGSAP(() => {
     const diagram = diagramRef.current;
-    if (!diagram || window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    if (!diagram) return;
 
     const nodes = gsap.utils.toArray<HTMLElement>(diagram.querySelectorAll("[data-flow-node]"));
     const trace = diagram.querySelectorAll<SVGPathElement>("[data-flow-trace]");
