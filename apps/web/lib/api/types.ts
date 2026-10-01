@@ -9,6 +9,7 @@ import type {
   RepoProject,
   Task,
   TaskDetail,
+  UsagePolicy,
   UsageSummary,
   WorkspaceState,
 } from "@/lib/types";
@@ -115,6 +116,19 @@ export interface TaskDashboardApi {
     input: AuthorizeBudgetInput,
   ): Promise<BudgetAuthorization>;
   listBudgetAuthorizations(projectId: string, estimateId: string): Promise<BudgetAuthorization[]>;
+
+  // Phase 4D.2A — operational usage limits + pause/resume. A SOFT,
+  // POST-RESPONSE token limit, never monetary — see
+  // apps/api/src/routes/usage-policies.ts's header comment and
+  // docs/adr/0012-operational-usage-limits.md. createUsagePolicy fails with
+  // an error if one is already ACTIVE (use extendUsagePolicy instead);
+  // extendUsagePolicy only ever accepts a strictly greater limitQuantity.
+  // resumeUsageLimit takes no input — which resume architecture applies
+  // (same live conversation vs. a brand-new attempt) is derived server-side
+  // from the task's own state, never a client choice.
+  createUsagePolicy(projectId: string, taskId: string, limitQuantity: number): Promise<UsagePolicy>;
+  extendUsagePolicy(projectId: string, taskId: string, limitQuantity: number, expectedVersion: number): Promise<UsagePolicy>;
+  resumeUsageLimit(projectId: string, taskId: string): Promise<{ mode: "SAME_EXECUTION" | "NEW_ATTEMPT" }>;
 
   // Phase 4C — every budget authorization across every estimate in a
   // project (current + superseded + consumed), used to let a privileged

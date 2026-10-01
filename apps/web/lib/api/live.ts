@@ -9,6 +9,8 @@ import type {
   RepoProject,
   Task,
   TaskDetail,
+  TaskUsageLimit,
+  UsagePolicy,
   UsageSummary,
   VerificationRun,
 } from "@/lib/types";
@@ -147,6 +149,11 @@ interface RawTaskDetail extends RawTask {
   budgetSpentMinor: number | null;
   usage: RawUsageTotals;
   pricing: RawPricingInfo;
+  // Phase 4D.2A — apps/api's GET /v1/jobs/:id already sends this camelCase
+  // (built from usage-policies.ts's own toUsagePolicyResponse/
+  // toUsagePauseResponse helpers) — no raw/to mapping needed for its inner
+  // shape, unlike everything else in this file.
+  usageLimit: TaskUsageLimit | null;
 }
 
 interface RawExecutionEvent {
@@ -301,7 +308,31 @@ export const liveApi: TaskDashboardApi = {
       budgetSpentMinor: raw.budgetSpentMinor,
       usage: raw.usage,
       pricing: raw.pricing,
+      usageLimit: raw.usageLimit,
     };
+  },
+
+  // Phase 4D.2A — operational usage limits + pause/resume. Response bodies
+  // are already camelCase (apps/api's usage-policies.ts), no raw/to mapping.
+  async createUsagePolicy(projectId: string, taskId: string, limitQuantity: number) {
+    return apiFetch<UsagePolicy>(`/v1/projects/${projectId}/tasks/${taskId}/usage-policy`, {
+      method: "POST",
+      body: JSON.stringify({ limitQuantity }),
+    });
+  },
+
+  async extendUsagePolicy(projectId: string, taskId: string, limitQuantity: number, expectedVersion: number) {
+    return apiFetch<UsagePolicy>(`/v1/projects/${projectId}/tasks/${taskId}/usage-policy/extend`, {
+      method: "POST",
+      body: JSON.stringify({ limitQuantity, expectedVersion }),
+    });
+  },
+
+  async resumeUsageLimit(projectId: string, taskId: string) {
+    return apiFetch<{ mode: "SAME_EXECUTION" | "NEW_ATTEMPT" }>(
+      `/v1/projects/${projectId}/tasks/${taskId}/usage-limit/resume`,
+      { method: "POST" },
+    );
   },
 
   async estimateTask(input: EstimateTaskInput) {

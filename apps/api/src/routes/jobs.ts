@@ -12,6 +12,7 @@ import { z } from "zod";
 
 import { db } from "../db.js";
 import { resolveRouting } from "../routing.js";
+import { getActivePolicy, latestOpenPause, toUsagePauseResponse, toUsagePolicyResponse } from "../usage-policies.js";
 import {
   HttpError,
   requireOrgSession,
@@ -686,6 +687,23 @@ export async function jobRoutes(app: FastifyInstance) {
       const hasUnpricedUsage = Number(spend.unpricedCount) > 0;
       const budgetSpentMinor = hasUnpricedUsage ? null : Number(spend.pricedTotal);
 
+      // Phase 4D.2A — SOFT, POST-RESPONSE token-usage limit surfaced
+      // alongside the existing (monetary) budget fields, never merged into
+      // them: `usageLimit` is null when no ACTIVE task_usage_policies row
+      // exists for this task (correction 19 — no policy, no new behavior).
+      // `openPause` is the task's current unresolved pause record, if any
+      // (correction 20: always the REAL observed usage, never clamped to
+      // configuredLimit).
+      const activeUsagePolicy = await getActivePolicy(id);
+      const openPause = await latestOpenPause(id);
+      const usageLimit = activeUsagePolicy
+        ? {
+            policy: toUsagePolicyResponse(activeUsagePolicy),
+            cumulativeUsage: Number(spend.totalTokens),
+            openPause: openPause ? toUsagePauseResponse(openPause) : null,
+          }
+        : null;
+
       reply.send({
         ...task,
         executions,
@@ -706,6 +724,7 @@ export async function jobRoutes(app: FastifyInstance) {
         // for Phase 4D.2 without another shape change, and so today's
         // clients never have to infer "unpriced" from an absent field.
         pricing: { status: "UNPRICED", amountMinor: null, currency: null },
+        usageLimit,
       });
     } catch (err) {
       if (sendHttpError(reply, err)) return;

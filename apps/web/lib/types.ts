@@ -18,7 +18,10 @@ export type TaskStatus =
   | "REJECTED"
   | "DISPUTED"
   | "REFUNDING"
-  | "REFUNDED";
+  | "REFUNDED"
+  // Phase 4D.2A — a SOFT, POST-RESPONSE operational token-usage pause, never
+  // a monetary/hard limit. See docs/adr/0012-operational-usage-limits.md.
+  | "PAUSED_USAGE_LIMIT";
 
 export const TASK_STATUS_DISPLAY: Record<
   TaskStatus,
@@ -40,6 +43,7 @@ export const TASK_STATUS_DISPLAY: Record<
   DISPUTED: { label: "Disputed", tone: "destructive" },
   REFUNDING: { label: "Refunding", tone: "warning" },
   REFUNDED: { label: "Refunded", tone: "muted" },
+  PAUSED_USAGE_LIMIT: { label: "Paused: usage limit reached", tone: "warning" },
 };
 
 // A task status counts as "settled" once the workspace should stop polling
@@ -183,6 +187,43 @@ export interface PricingInfo {
   currency: string | null;
 }
 
+// Phase 4D.2A — Operational Usage Limits + Pause/Resume. A SOFT,
+// POST-RESPONSE operational token limit: once observed cumulative usage
+// reaches or exceeds limitQuantity, AtherNull pauses the execution at the
+// next safe OpenHands step boundary. Never monetary — see
+// docs/adr/0012-operational-usage-limits.md. NEVER render any `$`,
+// "Add Funds", "Spent", "Paid", "Deposit", or "Escrow" language anywhere
+// this type is used.
+export interface UsagePolicy {
+  id: string;
+  version: number;
+  metric: "TOTAL_LLM_TOKENS";
+  limitQuantity: number;
+  status: "ACTIVE" | "SUPERSEDED";
+}
+
+// observedUsage is the REAL, possibly-over-limitQuantity value — a paused
+// build may genuinely have used more than the configured limit (one
+// already-in-flight response/step can overshoot); this must never be shown
+// clamped to configuredLimit.
+export interface UsagePause {
+  id: string;
+  executionId: string;
+  metric: "TOTAL_LLM_TOKENS";
+  configuredLimit: number;
+  observedUsage: number;
+  enforcementAction: "PAUSE" | "INTERRUPT";
+  resumeMode: "SAME_EXECUTION" | "NEW_ATTEMPT";
+  pausedAt: string;
+  resumedAt: string | null;
+}
+
+export interface TaskUsageLimit {
+  policy: UsagePolicy;
+  cumulativeUsage: number;
+  openPause: UsagePause | null;
+}
+
 export interface TaskDetail extends Task {
   executions: Execution[];
   verificationRuns: VerificationRun[];
@@ -192,6 +233,9 @@ export interface TaskDetail extends Task {
   budgetSpentMinor: number | null;
   usage: UsageTotals;
   pricing: PricingInfo;
+  // null whenever no ACTIVE task_usage_policies row exists for this task —
+  // the pre-existing behavior, unchanged (correction 19).
+  usageLimit: TaskUsageLimit | null;
 }
 
 // The Agent Server's own event stream for an execution (apps/api's

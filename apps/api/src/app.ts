@@ -16,6 +16,7 @@ import { MAX_RELAY_MESSAGE_BYTES, relayRoutes } from "./routes/relay.js";
 import { taskProvenanceRoutes } from "./routes/task-provenance.js";
 import { getTrustedOrigins } from "./trusted-origins.js";
 import { usageRoutes } from "./routes/usage.js";
+import { usagePolicyRoutes } from "./routes/usage-policies.js";
 
 // Split from index.ts so tests can build the app in-process (Fastify's
 // `inject()`) against a real test database, without binding a real port.
@@ -57,6 +58,12 @@ export async function buildApp(opts: { logger?: boolean } = {}): Promise<Fastify
   // comment and apps/api/test/task-provenance-no-execution-path.test.ts.
   await app.register(taskProvenanceRoutes);
   await app.register(usageRoutes);
+  // Phase 4D.2A — operational usage limits + pause/resume. A SOFT,
+  // POST-RESPONSE token limit, never monetary — deliberately its own route
+  // file: see routes/usage-policies.ts's header comment. Never writes
+  // task.max_budget_minor/project_budget_authorizations/cost_minor/
+  // payment_intents (correction 23).
+  await app.register(usagePolicyRoutes);
   await app.register(internalRoutes);
   // ADR-0007 Phase 3B — worker -> apps/api outbound relay tunnel.
   // @fastify/websocket must be registered before relayRoutes (it decorates

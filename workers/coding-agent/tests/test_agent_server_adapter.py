@@ -222,7 +222,7 @@ def test_failed_run_flushes_before_container_cleanup(monkeypatch) -> None:
             "executionId": "exec-1", "repositorySnapshot": {},
             "resolvedModel": "test-model", "objective": "test", "acceptanceCriteria": [],
         })
-    assert outcome == "failure"
+    assert outcome == ("failure", None)
     assert [event["id"] for event in received] == ["partial"]
     workspace.cleanup.assert_called_once()
 
@@ -727,7 +727,7 @@ def test_run_dispatch_via_agent_server_wires_usage_forwarder_and_polls_once_at_t
     captured = {}
 
     class FakeUsageForwarder:
-        def __init__(self, client, execution_id, worker_id, get_conversation, log):
+        def __init__(self, client, execution_id, worker_id, get_conversation, log, usage_limit_state=None, get_docker_workspace=None):
             captured["get_conversation"] = get_conversation
             captured["instance"] = self
             self.started = False
@@ -747,6 +747,11 @@ def test_run_dispatch_via_agent_server_wires_usage_forwarder_and_polls_once_at_t
             pass
 
     conversation = MagicMock()
+    # A genuinely FINISHED status so this wiring-only test's incidental
+    # outcome assertion reflects a real positive confirmation (correction 1's
+    # whitelist), not a MagicMock default that would otherwise be parsed as
+    # an unrecognized/anomalous status.
+    conversation.state.refresh_from_server.return_value = {"execution_status": "finished"}
 
     def make_conversation(**kwargs):
         captured["callbacks"] = kwargs["callbacks"]
@@ -771,7 +776,7 @@ def test_run_dispatch_via_agent_server_wires_usage_forwarder_and_polls_once_at_t
             "resolvedModel": "test-model", "objective": "test", "acceptanceCriteria": [],
         })
 
-    assert outcome == "success"
+    assert outcome == ("success", None)
     usage_forwarder = captured["instance"]
     assert usage_forwarder.started
     assert usage_forwarder in captured["callbacks"]

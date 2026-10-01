@@ -76,10 +76,19 @@ def heartbeat(client: httpx.Client, execution_id: str) -> None:
         log(f"heartbeat failed ({res.status_code}): {res.text}")
 
 
-def complete(client: httpx.Client, execution_id: str, outcome: str) -> None:
+def complete(client: httpx.Client, execution_id: str, outcome: str, reason: str | None = None) -> None:
+    # Phase 4D.2A correction 12 — `reason` is an optional machine-readable
+    # string (today, the only value ever sent is the literal
+    # "USAGE_ENFORCEMENT_FAILED", set exclusively by
+    # agent_server_adapter.py's fail-closed usage-enforcement path). Omitted
+    # entirely (not sent as null) for every ordinary completion, matching
+    # this route's own optional-field contract (routes/internal.ts).
+    payload: dict = {"workerId": WORKER_ID, "outcome": outcome}
+    if reason is not None:
+        payload["reason"] = reason
     res = client.post(
         f"{API_URL}/internal/executions/{execution_id}/complete",
-        json={"workerId": WORKER_ID, "outcome": outcome},
+        json=payload,
         headers=api_headers(),
     )
     res.raise_for_status()
@@ -142,6 +151,12 @@ def run_dispatch(client: httpx.Client, dispatch: dict) -> str:
         conversation.send_message(message)
         conversation.run()
 
+        from coding_agent.agent_server_adapter import get_fresh_execution_status
+        from openhands.sdk.conversation.state import ConversationExecutionStatus
+
+        if get_fresh_execution_status(conversation) != ConversationExecutionStatus.FINISHED:
+            return "failure"
+
         log(f"agent run finished for execution {execution_id}")
         return "success"
     except Exception as err:  # noqa: BLE001 - any failure here must report "failure", not crash the worker loop
@@ -190,12 +205,35 @@ def main() -> None:
                 continue
 
             log(f"claimed job={dispatch['jobId']} execution={dispatch['executionId']}")
+            reason: str | None = None
             try:
-                outcome = dispatch_fn(client, dispatch)
+                if dispatch.get("usagePolicy") and EXECUTION_ADAPTER == "direct":
+                    from coding_agent.agent_server_adapter import run_dispatch_via_agent_server
+
+                    result = run_dispatch_via_agent_server(client, dispatch)
+                else:
+                    result = dispatch_fn(client, dispatch)
             except MissingCredentialError as err:
                 log(f"missing credential, reporting failure: {err}")
-                outcome = "failure"
-            complete(client, dispatch["executionId"], outcome)
+                result = "failure"
+
+            # The "direct" adapter (run_dispatch) returns a plain
+            # "success"/"failure" string — unchanged by this phase, no usage
+            # enforcement exists on that path. The "agent_server" adapter
+            # (run_dispatch_via_agent_server, Phase 4D.2A) returns
+            # (outcome, reason); outcome can also be "paused" (correction 12
+            # NEW_ATTEMPT recovery), which must NEVER be reported to
+            # /internal/executions/:id/complete — apps/api has already
+            # transitioned the task to PAUSED_USAGE_LIMIT itself, via the
+            # worker's own POST .../usage-pause call, before this dispatch
+            # returned at all.
+            outcome, reason = (result, None) if isinstance(result, str) else result
+
+            if outcome == "paused":
+                log(f"execution {dispatch['executionId']} ended in a usage-limit pause — not calling /complete")
+                continue
+
+            complete(client, dispatch["executionId"], outcome, reason)
 
 
 if __name__ == "__main__":

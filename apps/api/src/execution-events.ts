@@ -1,4 +1,6 @@
 import { db } from "./db.js";
+import type { Transaction } from "kysely";
+import type { Database } from "@athernull/database";
 
 export interface ExecutionEventRecord {
   id: string;
@@ -17,9 +19,10 @@ export interface ExecutionEventRecord {
 export async function persistExecutionEvents(
   executionId: string,
   events: ExecutionEventRecord[],
+  connection: typeof db | Transaction<Database> = db,
 ): Promise<void> {
   if (events.length === 0) return;
-  await db
+  await connection
     .insertInto("execution_events")
     .values(
       events.map((event) => ({

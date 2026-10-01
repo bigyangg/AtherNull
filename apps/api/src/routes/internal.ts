@@ -3,15 +3,21 @@ import type { FastifyInstance } from "fastify";
 import { sql } from "kysely";
 import { z } from "zod";
 
+import { randomUUID } from "node:crypto";
+
 import { db } from "../db.js";
 import { persistExecutionEvents } from "../execution-events.js";
 import { requireInternalToken } from "../internal-auth.js";
 import { executionBroadcaster } from "../realtime/execution-broadcaster.js";
 import { relayRegistry } from "../realtime/relay-registry.js";
 import { resolveRouting } from "../routing.js";
+import { cumulativeTaskUsage, getActivePolicy, toUsagePauseResponse } from "../usage-policies.js";
 import { persistUsageEvents } from "../usage-events.js";
 
-const MAX_EXECUTION_ATTEMPTS = 3;
+// Exported so routes/usage-policies.ts's resume-to-NEW_ATTEMPT path can
+// enforce the exact same cap before allowing PAUSED_USAGE_LIMIT -> QUEUED —
+// one shared constant, never a second copy that could silently drift.
+export const MAX_EXECUTION_ATTEMPTS = 3;
 
 function leaseSeconds(): number {
   return Number(process.env.EXECUTION_LEASE_SECONDS ?? 300);
@@ -102,6 +108,15 @@ export async function internalRoutes(app: FastifyInstance) {
         .returningAll()
         .executeTakeFirstOrThrow();
 
+      const recoveryPause = await trx.selectFrom("task_usage_pauses").select("id")
+        .where("task_id", "=", task.id).where("resume_mode", "=", "NEW_ATTEMPT")
+        .where("resumed_at", "is not", null).where("resume_execution_id", "is", null)
+        .orderBy("paused_at", "desc").executeTakeFirst();
+      if (recoveryPause) {
+        await trx.updateTable("task_usage_pauses").set({ resume_execution_id: execution.id })
+          .where("id", "=", recoveryPause.id).execute();
+      }
+
       return { task, execution, reclaimedExecutionId };
     });
 
@@ -150,6 +165,20 @@ export async function internalRoutes(app: FastifyInstance) {
       .where("id", "=", task.project_id)
       .executeTakeFirst();
 
+    // Phase 4D.2A — correction 2/19: only present when an ACTIVE
+    // task_usage_policies row genuinely exists for this task; a task with no
+    // policy gets `usagePolicy: null` and the worker must trigger ZERO new
+    // enforcement code paths for it — exactly the pre-existing behavior.
+    // `usageBaseline` is the durable sum of usage_events.total_tokens across
+    // every OTHER execution already recorded for this task (this brand-new
+    // execution row has no usage_events rows yet, so "every other execution"
+    // and "the task's cumulative usage right now" are the same query) — the
+    // worker adds its own locally-observed current-attempt usage on top of
+    // this fixed baseline for its fast-path check (correction 2), while
+    // Postgres usage_events remains the durable source of truth throughout.
+    const activePolicy = await getActivePolicy(task.id);
+    const usageBaseline = await cumulativeTaskUsage(task.id);
+
     // repositorySnapshot pairs the project's repo with the revision
     // snapshotted on the task at creation time (task.repository_revision,
     // 0004_task_reproducibility_snapshot.sql) — not the project's current
@@ -171,6 +200,14 @@ export async function internalRoutes(app: FastifyInstance) {
       budgetMinor: Number(task.max_budget_minor),
       deadline: new Date(Date.now() + seconds * 1000).toISOString(),
       policyVersion: task.agent_policy_version,
+      usagePolicy: activePolicy
+        ? {
+            policyId: activePolicy.id,
+            metric: activePolicy.metric,
+            limitQuantity: Number(activePolicy.limit_quantity),
+          }
+        : null,
+      usageBaseline,
     });
   });
 
@@ -344,7 +381,7 @@ export async function internalRoutes(app: FastifyInstance) {
 
     const execution = await db
       .selectFrom("executions")
-      .select(["id", "lease_owner"])
+      .select(["id", "lease_owner", "task_id"])
       .where("id", "=", id)
       .executeTakeFirst();
 
@@ -359,15 +396,215 @@ export async function internalRoutes(app: FastifyInstance) {
 
     await persistUsageEvents(id, usageEvents);
 
+    const policy = await getActivePolicy(execution.task_id);
+    if (policy) {
+      const prior = await db.selectFrom("usage_events")
+        .select(({ fn }) => fn.coalesce(fn.sum<string>("total_tokens"), sql<string>`0`).as("total"))
+        .where("task_id", "=", execution.task_id).where("execution_id", "!=", id).executeTakeFirstOrThrow();
+      reply.header("x-task-prior-usage", String(prior.total));
+    }
     reply.status(204).send();
+  });
+
+  // Phase 4D.2A — worker->API usage-limit pause persistence. Called from
+  // agent_server_adapter.py's usage-monitor background thread (the same
+  // thread that already calls conversation.pause()/interrupt() — see
+  // CommandHandler's own docstring for why calling those REST methods from a
+  // dedicated monitoring thread, distinct from the thread blocking on
+  // .run(), is safe) after that thread has already confirmed, by re-polling
+  // the conversation's real execution_status, that the agent genuinely
+  // stopped (never trusted from a 200 response alone).
+  //
+  // Idempotency (correction 10a/11): a duplicate/replayed call for the same
+  // execution — worker retry, relay/event replay, a second stats-update
+  // trigger racing the first — must never re-run enforcement or double
+  // transition the task. Guarded two ways: (1) task_usage_pauses_one_open_per
+  // _execution (0012_task_usage_policies.sql) makes a second OPEN row for the
+  // same execution_id impossible at the DB level; (2) this handler checks for
+  // an existing open pause row for this exact execution first and, if found,
+  // returns it unchanged (200) rather than erroring or re-transitioning —
+  // structurally idempotent, not just "unlikely to duplicate."
+  app.post("/internal/executions/:id/usage-pause", async (request, reply) => {
+    if (!requireInternalToken(request, reply)) return;
+
+    const { id } = z.object({ id: z.string() }).parse(request.params);
+    const body = z
+      .object({
+        workerId: z.string().min(1),
+        policyId: z.string().min(1),
+        metric: z.enum(["TOTAL_LLM_TOKENS"]),
+        configuredLimit: z.number().int().positive(),
+        observedUsage: z.number().int().min(0),
+        enforcementAction: z.enum(["PAUSE", "INTERRUPT"]),
+        resumeMode: z.enum(["SAME_EXECUTION", "NEW_ATTEMPT"]),
+      })
+      .parse(request.body);
+
+    const execution = await db
+      .selectFrom("executions")
+      .innerJoin("tasks", "tasks.id", "executions.task_id")
+      .select([
+        "executions.id as execution_id",
+        "executions.lease_owner as lease_owner",
+        "tasks.id as task_id",
+        "tasks.project_id as project_id",
+        "tasks.organization_id as organization_id",
+        "tasks.status as task_status",
+      ])
+      .where("executions.id", "=", id)
+      .executeTakeFirst();
+
+    if (!execution) {
+      reply.status(404).send({ error: "Not found" });
+      return;
+    }
+    if (execution.lease_owner !== body.workerId) {
+      reply.status(409).send({ error: "Lease no longer owned by this worker" });
+      return;
+    }
+
+    const existingOpenPause = await db
+      .selectFrom("task_usage_pauses")
+      .selectAll()
+      .where("execution_id", "=", id)
+      .where("resumed_at", "is", null)
+      .executeTakeFirst();
+    if (existingOpenPause) {
+      // Structurally idempotent replay — never re-enforce, never
+      // re-transition. Same enforcement decision, same durable record.
+      reply.status(200).send(toUsagePauseResponse(existingOpenPause));
+      return;
+    }
+
+    if (execution.task_status !== "RUNNING") {
+      // Not a genuine replay (no open pause row exists), yet the task isn't
+      // RUNNING either — an anomalous state this handler must reject rather
+      // than silently accept, since transitioning would violate the FSM.
+      reply.status(409).send({ error: `Task is not RUNNING (currently ${execution.task_status})` });
+      return;
+    }
+
+    const eventRecord = {
+      id: randomUUID(),
+      kind: "usage_limit_reached",
+      occurredAt: new Date().toISOString(),
+      payload: {
+        executionId: id,
+        taskId: execution.task_id,
+        policyId: body.policyId,
+        metric: body.metric,
+        configuredLimit: body.configuredLimit,
+        observedUsage: body.observedUsage,
+        enforcementAction: body.enforcementAction,
+        resumeMode: body.resumeMode,
+        timestamp: new Date().toISOString(),
+      },
+    };
+    const result = await db.transaction().execute(async (trx) => {
+      const task = await trx.selectFrom("tasks").select("status")
+        .where("id", "=", execution.task_id).forUpdate().executeTakeFirstOrThrow();
+      const replay = await trx.selectFrom("task_usage_pauses").selectAll()
+        .where("execution_id", "=", id).where("policy_id", "=", body.policyId)
+        .orderBy("paused_at", "desc").executeTakeFirst();
+      if (replay) return { pause: replay, created: false };
+      if (task.status !== "RUNNING") return null;
+      const policy = await trx.selectFrom("task_usage_policies").selectAll()
+        .where("id", "=", body.policyId).where("task_id", "=", execution.task_id).executeTakeFirst();
+      if (!policy || Number(policy.limit_quantity) !== body.configuredLimit ||
+          (body.enforcementAction === "INTERRUPT" && body.resumeMode !== "NEW_ATTEMPT")) return null;
+      const inserted = await trx
+        .insertInto("task_usage_pauses")
+        .values({
+          organization_id: execution.organization_id,
+          project_id: execution.project_id,
+          task_id: execution.task_id,
+          execution_id: id,
+          policy_id: body.policyId,
+          metric: body.metric,
+          configured_limit: String(body.configuredLimit),
+          observed_usage: String(body.observedUsage),
+          enforcement_action: body.enforcementAction,
+          resume_mode: body.resumeMode,
+        })
+        .returningAll()
+        .executeTakeFirstOrThrow();
+
+      assertTransition("RUNNING", "PAUSED_USAGE_LIMIT");
+      await trx
+        .updateTable("tasks")
+        .set({ status: "PAUSED_USAGE_LIMIT", updated_at: new Date() })
+        .where("id", "=", execution.task_id)
+        .execute();
+
+      // INTERRUPT/NEW_ATTEMPT: this execution row is done for good — it will
+      // never be resumed, only ever superseded by a brand-new execution row
+      // once the task is later re-queued (correction 17). PAUSE/
+      // SAME_EXECUTION deliberately leaves executions.status untouched
+      // ("RUNNING") — it is still, structurally, the live attempt.
+      if (body.enforcementAction === "INTERRUPT") {
+        await trx
+          .updateTable("executions")
+          .set({ status: "PAUSED_USAGE_LIMIT", ended_at: new Date() })
+          .where("id", "=", id)
+          .execute();
+      }
+
+      await persistExecutionEvents(id, [eventRecord], trx);
+      return { pause: inserted, created: true };
+    });
+
+    // Correction 11: reuse the existing execution_events/executionBroadcaster
+    // pipe — never a new realtime channel. Payload carries no
+    // prompts/secrets/provider credentials.
+    if (!result) { reply.status(409).send({ error: "Pause no longer matches the task or policy" }); return; }
+    if (result.created) executionBroadcaster.publishEvent(id, eventRecord);
+    reply.status(result.created ? 201 : 200).send(toUsagePauseResponse(result.pause));
+  });
+
+  // The relay is a wake-up signal; only this durable authorization lets a
+  // paused worker run again. Polling also recovers a dropped relay command.
+  app.post("/internal/executions/:id/usage-resume", async (request, reply) => {
+    if (!requireInternalToken(request, reply)) return;
+    const { id } = z.object({ id: z.string() }).parse(request.params);
+    const { workerId } = z.object({ workerId: z.string().min(1) }).parse(request.body);
+    const execution = await db.selectFrom("executions").selectAll().where("id", "=", id).executeTakeFirst();
+    if (!execution) { reply.status(404).send({ error: "Not found" }); return; }
+    if (execution.lease_owner !== workerId || execution.status !== "RUNNING" ||
+        !execution.lease_expires_at || new Date(execution.lease_expires_at).getTime() <= Date.now()) {
+      reply.status(409).send({ error: "Execution lease is no longer valid" }); return;
+    }
+    const task = await db.selectFrom("tasks").select("status").where("id", "=", execution.task_id).executeTakeFirstOrThrow();
+    const pause = await db.selectFrom("task_usage_pauses").selectAll()
+      .where("execution_id", "=", id).orderBy("paused_at", "desc").executeTakeFirst();
+    if (task.status !== "RUNNING" || !pause?.resumed_at || pause.resume_execution_id !== id) {
+      reply.status(204).send(); return;
+    }
+    const policy = await getActivePolicy(execution.task_id);
+    const usage = await cumulativeTaskUsage(execution.task_id);
+    if (!policy || Number(policy.limit_quantity) <= Math.max(usage, Number(pause.observed_usage))) {
+      reply.status(204).send(); return;
+    }
+    reply.send({ policyId: policy.id, limitQuantity: Number(policy.limit_quantity) });
   });
 
   app.post("/internal/executions/:id/complete", async (request, reply) => {
     if (!requireInternalToken(request, reply)) return;
 
     const { id } = z.object({ id: z.string() }).parse(request.params);
-    const { workerId, outcome } = z
-      .object({ workerId: z.string().min(1), outcome: z.enum(["success", "failure"]) })
+    // Phase 4D.2A correction 12 — `reason` is an optional machine-readable
+    // string, deliberately NOT a new TaskStatus: the only value this
+    // codebase's worker ever sends is the literal 'USAGE_ENFORCEMENT_FAILED',
+    // set exclusively by agent_server_adapter.py's fail-closed path (both
+    // conversation.pause() and conversation.interrupt() failed). Persisted
+    // verbatim to executions.failure_reason; never interpreted or branched on
+    // here — this route's own outcome/FSM handling is completely unchanged
+    // by whether reason is present.
+    const { workerId, outcome, reason } = z
+      .object({
+        workerId: z.string().min(1),
+        outcome: z.enum(["success", "failure"]),
+        reason: z.string().min(1).optional(),
+      })
       .parse(request.body);
 
     const execution = await db
@@ -400,6 +637,7 @@ export async function internalRoutes(app: FastifyInstance) {
       .set({
         status: outcome === "success" ? "SUCCEEDED" : "FAILED",
         ended_at: new Date(),
+        failure_reason: outcome === "failure" ? (reason ?? null) : null,
       })
       .where("id", "=", id)
       .execute();
@@ -443,7 +681,7 @@ export async function internalRoutes(app: FastifyInstance) {
       .where("task_id", "=", task.id)
       .executeTakeFirstOrThrow();
 
-    const willRetry = Number(count) < MAX_EXECUTION_ATTEMPTS;
+    const willRetry = reason !== "USAGE_ENFORCEMENT_FAILED" && Number(count) < MAX_EXECUTION_ATTEMPTS;
     if (willRetry) {
       assertTransition("FAILED", "QUEUED");
     }

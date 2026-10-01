@@ -111,6 +111,42 @@ export function useAcceptTask(taskId: string) {
   });
 }
 
+// Phase 4D.2A — operational usage limits + pause/resume. A SOFT,
+// POST-RESPONSE token limit, never monetary — see
+// docs/adr/0012-operational-usage-limits.md. All three invalidate the same
+// ["task", taskId] query GET /v1/jobs/:id backs, which already carries the
+// usageLimit field these actions change.
+export function useCreateUsagePolicy(projectId: string, taskId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (limitQuantity: number) => dashboardApi.createUsagePolicy(projectId, taskId, limitQuantity),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["task", taskId] });
+    },
+  });
+}
+
+export function useExtendUsagePolicy(projectId: string, taskId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ limitQuantity, expectedVersion }: { limitQuantity: number; expectedVersion: number }) => dashboardApi.extendUsagePolicy(projectId, taskId, limitQuantity, expectedVersion),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["task", taskId] });
+    },
+  });
+}
+
+export function useResumeUsageLimit(projectId: string, taskId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () => dashboardApi.resumeUsageLimit(projectId, taskId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["task", taskId] });
+      queryClient.invalidateQueries({ queryKey: ["tasks"] });
+    },
+  });
+}
+
 export function useRejectTask(taskId: string) {
   const queryClient = useQueryClient();
   return useMutation({

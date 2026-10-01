@@ -10,6 +10,7 @@ import { PageHeader } from "@/components/page-header";
 import { IconBadge } from "@/components/icon-badge";
 import { StatusBadge } from "@/components/status-badge";
 import { BudgetMeter } from "@/components/workspace/budget-meter";
+import { UsageLimitMeter } from "@/components/workspace/usage-limit-meter";
 import { ExecutionList } from "@/components/tasks/execution-list";
 import { ReviewPanel } from "@/components/tasks/review-panel";
 import { TaskDetailSkeleton } from "@/components/tasks/task-detail-skeleton";
@@ -147,6 +148,32 @@ export default function TaskStatusPage() {
             />
           </CardContent>
         </Card>
+
+        {/* Phase 4D.2A — a separate card from Budget above: a SOFT,
+            POST-RESPONSE token-usage limit, never a monetary figure. Shown
+            once a build has actually started running, so "set a limit" isn't
+            offered before there's anything to limit. */}
+        {task.status !== "CREATED" &&
+          task.status !== "AWAITING_FUNDING" &&
+          task.status !== "FUNDED" &&
+          task.status !== "QUEUED" && (
+            <Card>
+              <CardHeader className="flex-row items-center gap-3 space-y-0">
+                <IconBadge>
+                  <Rocket />
+                </IconBadge>
+                <CardTitle className="text-base">Usage limit</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <UsageLimitMeter
+                  projectId={projectId}
+                  taskId={task.id}
+                  taskStatus={task.status}
+                  usageLimit={task.usageLimit}
+                />
+              </CardContent>
+            </Card>
+          )}
 
         {task.status === "AWAITING_FUNDING" && <ActivateBuildPanel taskId={task.id} />}
 

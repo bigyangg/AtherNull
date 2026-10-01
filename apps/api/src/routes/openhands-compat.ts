@@ -128,6 +128,12 @@ const TASK_STATUS_TO_EXECUTION_STATUS: Record<TaskStatus, z.infer<typeof OpenHan
   DISPUTED: "error",
   REFUNDING: "finished",
   REFUNDED: "finished",
+  // Phase 4D.2A — a genuinely paused (not finished, not errored) OpenHands
+  // conversation, honestly reflected rather than collapsed into "finished"
+  // (which this compat layer already uses for several genuinely-terminal
+  // AtherNull states above, but PAUSED_USAGE_LIMIT is not terminal — it is
+  // resumable, exactly like OpenHands' own native "paused" status).
+  PAUSED_USAGE_LIMIT: "paused",
 };
 
 function taskStatusToExecutionStatus(status: TaskStatus): z.infer<typeof OpenHandsExecutionStatusSchema> {
