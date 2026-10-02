@@ -8,6 +8,62 @@
   },
   "instructions": [
     {
+      "name": "deposit_project_funding",
+      "discriminator": [
+        143,
+        166,
+        57,
+        13,
+        1,
+        140,
+        188,
+        164
+      ],
+      "accounts": [
+        {
+          "name": "customer",
+          "docs": [
+            "Must be the customer bound at initialization (`has_one`)."
+          ],
+          "writable": true,
+          "signer": true,
+          "relations": [
+            "project_funding"
+          ]
+        },
+        {
+          "name": "project_funding",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  102
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "project_funding.binding_hash",
+                "account": "ProjectFunding"
+              }
+            ]
+          }
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "amount",
+          "type": "u64"
+        }
+      ]
+    },
+    {
       "name": "fund_escrow",
       "discriminator": [
         155,
@@ -138,6 +194,77 @@
         {
           "name": "deadline",
           "type": "i64"
+        }
+      ]
+    },
+    {
+      "name": "initialize_project_funding",
+      "discriminator": [
+        122,
+        234,
+        242,
+        69,
+        88,
+        198,
+        202,
+        45
+      ],
+      "accounts": [
+        {
+          "name": "authority",
+          "docs": [
+            "Platform authority — pays rent, never a worker/agent key. Because",
+            "only this signer can create the account, on-chain state (customer,",
+            "required amount, binding) is trustworthy by construction."
+          ],
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "project_funding",
+          "docs": [
+            "`init` fails if the PDA for this binding already exists — duplicate",
+            "initialization is impossible, not just checked."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  102
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "binding_hash"
+              }
+            ]
+          }
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "binding_hash",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
+        {
+          "name": "customer",
+          "type": "pubkey"
+        },
+        {
+          "name": "required_amount",
+          "type": "u64"
         }
       ]
     },
@@ -365,6 +492,19 @@
         218,
         155
       ]
+    },
+    {
+      "name": "ProjectFunding",
+      "discriminator": [
+        225,
+        4,
+        107,
+        91,
+        56,
+        182,
+        198,
+        240
+      ]
     }
   ],
   "errors": [
@@ -392,6 +532,26 @@
       "code": 6004,
       "name": "AmountExceedsBalance",
       "msg": "Amount exceeds the escrowed balance"
+    },
+    {
+      "code": 6005,
+      "name": "ZeroAmount",
+      "msg": "Amount must be greater than zero"
+    },
+    {
+      "code": 6006,
+      "name": "Overflow",
+      "msg": "Arithmetic overflow"
+    },
+    {
+      "code": 6007,
+      "name": "InvalidRequiredAmount",
+      "msg": "Required amount must be greater than zero"
+    },
+    {
+      "code": 6008,
+      "name": "InvalidCustomer",
+      "msg": "Customer must be a non-default pubkey"
     }
   ],
   "types": [
@@ -478,6 +638,64 @@
           }
         ]
       }
+    },
+    {
+      "name": "ProjectFunding",
+      "docs": [
+        "Phase 4E.1 project funding account. PDA seeds: `[\"pf\", binding_hash]`.",
+        "",
+        "`deposited_amount` is the authoritative funding state — it only ever",
+        "grows via `deposit_project_funding`, never from raw lamports sent to the",
+        "PDA by a plain system transfer (those are NOT deposits)."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "version",
+            "type": "u8"
+          },
+          {
+            "name": "binding_hash",
+            "docs": [
+              "SHA-256 provenance binding (see `compute_binding_hash`)."
+            ],
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "customer",
+            "type": "pubkey"
+          },
+          {
+            "name": "authority",
+            "docs": [
+              "Platform authority that initialized this account. Never a worker key."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "required_amount",
+            "type": "u64"
+          },
+          {
+            "name": "deposited_amount",
+            "type": "u64"
+          },
+          {
+            "name": "deposit_count",
+            "type": "u64"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
     }
   ],
   "constants": [
@@ -488,6 +706,15 @@
       ],
       "type": "bytes",
       "value": "[101, 115, 99, 114, 111, 119]"
+    },
+    {
+      "name": "PROJECT_FUNDING_SEED",
+      "docs": [
+        "PDA seed prefix for `ProjectFunding`: `[PROJECT_FUNDING_SEED, binding_hash]`",
+        "(ADR-0013). The 32-byte binding hash is exactly Solana's per-seed limit."
+      ],
+      "type": "bytes",
+      "value": "[112, 102]"
     }
   ]
 }

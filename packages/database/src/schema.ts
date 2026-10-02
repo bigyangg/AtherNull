@@ -290,6 +290,57 @@ export interface MemberTable {
   createdAt: Timestamp;
 }
 
+// Phase 4E.1 — Solana devnet project funding (0013_project_funding.sql,
+// ADR-0013). Integer lamports only (bigint -> string, like every other
+// bigint column here). network/rpc_provider/asset_type are CHECK-constrained
+// to devnet/helius/DEVNET_SOL by the database itself. Identity, provenance,
+// requirement, and a bound customer_wallet are immutable (DB trigger).
+export interface ProjectFundingAccountsTable {
+  id: Generated<string>;
+  organization_id: string;
+  project_id: string;
+  task_id: string;
+  budget_authorization_id: string;
+  network: string;
+  rpc_provider: string;
+  asset_type: string;
+  program_id: string;
+  onchain_account: string;
+  binding_hash: Uint8Array; // bytea, 32 bytes
+  customer_wallet: string | null;
+  customer_bound_at: NullableTimestamp;
+  requirement_source: string;
+  required_amount_base_units: string;
+  confirmed_amount_base_units: Generated<string>;
+  status: Generated<string>; // AWAITING_FUNDS | PARTIALLY_FUNDED | FUNDED
+  init_signature: string | null;
+  init_sent_at: NullableTimestamp;
+  initialized_at: NullableTimestamp;
+  created_by: string;
+  created_at: Generated<Date>;
+  funded_at: NullableTimestamp;
+  verified_at: NullableTimestamp;
+  last_verified_slot: string | null; // bigint
+  last_verified_commitment: string | null; // always "finalized" when set
+  version: Generated<number>;
+}
+
+// Append-only ledger of verified, finalized deposit_project_funding
+// instructions. UNIQUE(signature): exactly one deposit instruction per
+// transaction is accepted in Phase 4E.1.
+export interface ProjectFundingDepositsTable {
+  id: Generated<string>;
+  funding_account_id: string;
+  signature: string;
+  amount_base_units: string;
+  depositor_wallet: string;
+  slot: string; // bigint
+  block_time: NullableTimestamp;
+  commitment: string; // always "finalized"
+  verified_at: Generated<Date>;
+  created_at: Generated<Date>;
+}
+
 export interface Database {
   projects: ProjectsTable;
   agent_profiles: AgentProfilesTable;
@@ -304,4 +355,6 @@ export interface Database {
   project_budget_authorizations: ProjectBudgetAuthorizationsTable;
   task_usage_policies: TaskUsagePoliciesTable;
   task_usage_pauses: TaskUsagePausesTable;
+  project_funding_accounts: ProjectFundingAccountsTable;
+  project_funding_deposits: ProjectFundingDepositsTable;
 }

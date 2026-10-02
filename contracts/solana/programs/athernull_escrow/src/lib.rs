@@ -40,4 +40,23 @@ pub mod athernull_escrow {
     pub fn timeout_refund(ctx: Context<TimeoutRefund>) -> Result<()> {
         timeout_refund::timeout_refund_handler(ctx)
     }
+
+    // --- Phase 4E.1 ProjectFunding (additive; legacy escrow above untouched).
+    pub fn initialize_project_funding(
+        ctx: Context<InitializeProjectFunding>,
+        binding_hash: [u8; 32],
+        customer: Pubkey,
+        required_amount: u64,
+    ) -> Result<()> {
+        project_funding::initialize_project_funding_handler(
+            ctx,
+            binding_hash,
+            customer,
+            required_amount,
+        )
+    }
+
+    pub fn deposit_project_funding(ctx: Context<DepositProjectFunding>, amount: u64) -> Result<()> {
+        project_funding::deposit_project_funding_handler(ctx, amount)
+    }
 }

@@ -1,4 +1,10 @@
 import type {
+  PrepareFundingRequest,
+  PrepareFundingResponse,
+  ProjectFundingView,
+  VerifyFundingResponse,
+} from "@athernull/contracts";
+import type {
   AgentProfile,
   BudgetAuthorization,
   BudgetAuthorizationSource,
@@ -89,6 +95,12 @@ export interface TaskDashboardApi {
   listTasks(): Promise<Task[]>;
   createTask(input: CreateTaskInput): Promise<Task>;
   fundTask(taskId: string): Promise<Task>;
+  // Phase 4E.1 — Solana devnet project funding. getProjectFunding resolves
+  // null when no funding account exists for the task yet.
+  getProjectFunding(taskId: string): Promise<ProjectFundingView | null>;
+  createProjectFunding(taskId: string): Promise<ProjectFundingView>;
+  prepareProjectFunding(taskId: string, input: PrepareFundingRequest): Promise<PrepareFundingResponse>;
+  verifyProjectFunding(taskId: string, signature?: string): Promise<VerifyFundingResponse>;
   getTask(taskId: string): Promise<TaskDetail>;
   estimateTask(input: EstimateTaskInput): Promise<EstimateResult>;
   verifyTask(taskId: string, outcome: "PASS" | "FAIL"): Promise<Task>;

@@ -10,6 +10,7 @@ import { estimateRoutes } from "./routes/estimates.js";
 import { internalRoutes } from "./routes/internal.js";
 import { jobRoutes } from "./routes/jobs.js";
 import { openhandsCompatRoutes } from "./routes/openhands-compat.js";
+import { projectFundingRoutes } from "./routes/project-funding.js";
 import { projectRoutes } from "./routes/projects.js";
 import { realtimeGatewayRoutes } from "./routes/realtime-gateway.js";
 import { MAX_RELAY_MESSAGE_BYTES, relayRoutes } from "./routes/relay.js";
@@ -57,6 +58,9 @@ export async function buildApp(opts: { logger?: boolean } = {}): Promise<Fastify
   // deliberately its own route file: see routes/task-provenance.ts's header
   // comment and apps/api/test/task-provenance-no-execution-path.test.ts.
   await app.register(taskProvenanceRoutes);
+  // Phase 4E.1 — Solana devnet project funding. Its own route file; see
+  // routes/project-funding.ts and project-funding-no-execution-path.test.ts.
+  await app.register(projectFundingRoutes);
   await app.register(usageRoutes);
   // Phase 4D.2A — operational usage limits + pause/resume. A SOFT,
   // POST-RESPONSE token limit, never monetary — deliberately its own route

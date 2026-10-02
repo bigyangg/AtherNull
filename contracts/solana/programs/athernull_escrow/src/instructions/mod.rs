@@ -1,5 +1,6 @@
 pub mod fund;
 pub mod initialize;
+pub mod project_funding;
 pub mod refund;
 pub mod release;
 pub mod timeout_refund;
@@ -11,6 +12,7 @@ pub mod timeout_refund;
 // specifically so these globs don't collide as more instructions land.
 pub use fund::*;
 pub use initialize::*;
+pub use project_funding::*;
 pub use refund::*;
 pub use release::*;
 pub use timeout_refund::*;

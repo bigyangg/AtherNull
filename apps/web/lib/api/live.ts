@@ -1,4 +1,10 @@
 import type {
+  PrepareFundingRequest,
+  PrepareFundingResponse,
+  ProjectFundingView,
+  VerifyFundingResponse,
+} from "@athernull/contracts";
+import type {
   AgentProfile,
   BudgetAuthorization,
   EstimateResult,
@@ -25,6 +31,15 @@ import type {
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3001";
 
+export class ApiError extends Error {
+  constructor(
+    message: string,
+    public status: number,
+  ) {
+    super(message);
+  }
+}
+
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${API_URL}${path}`, {
     ...init,
@@ -44,9 +59,10 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
 
   if (!res.ok) {
     const body = await res.json().catch(() => null);
-    throw new Error(
+    throw new ApiError(
       (body && typeof body === "object" && "error" in body ? String(body.error) : null) ??
         `Request to ${path} failed with ${res.status}`,
+      res.status,
     );
   }
 
@@ -296,6 +312,33 @@ export const liveApi: TaskDashboardApi = {
   async fundTask(taskId: string) {
     const raw = await apiFetch<RawTask>(`/v1/jobs/${taskId}/fund`, { method: "POST" });
     return toTask(raw);
+  },
+
+  async getProjectFunding(taskId: string) {
+    try {
+      return await apiFetch<ProjectFundingView>(`/v1/jobs/${taskId}/funding`);
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 404) return null;
+      throw err;
+    }
+  },
+
+  createProjectFunding(taskId: string) {
+    return apiFetch<ProjectFundingView>(`/v1/jobs/${taskId}/funding`, { method: "POST" });
+  },
+
+  prepareProjectFunding(taskId: string, input: PrepareFundingRequest) {
+    return apiFetch<PrepareFundingResponse>(`/v1/jobs/${taskId}/funding/prepare`, {
+      method: "POST",
+      body: JSON.stringify(input),
+    });
+  },
+
+  verifyProjectFunding(taskId: string, signature?: string) {
+    return apiFetch<VerifyFundingResponse>(`/v1/jobs/${taskId}/funding/verify`, {
+      method: "POST",
+      body: JSON.stringify(signature ? { signature } : {}),
+    });
   },
 
   async getTask(taskId: string) {

@@ -47,6 +47,7 @@ import type { FastifyInstance, LightMyRequestResponse } from "fastify";
 import { sql } from "kysely";
 
 const { buildApp } = await import("../src/app.js");
+const { seedFundedFunding } = await import("./support/funding-fixtures.js");
 const { db } = await import("../src/db.js");
 
 let app: FastifyInstance;
@@ -400,7 +401,7 @@ describe("tenant authorization", () => {
     );
   });
 
-  test("concurrent funding yields one QUEUED task and one payment intent", async () => {
+  test("concurrent activation yields exactly one QUEUED transition", async () => {
     const suffix = randomUUID();
     const owner = await signUpVerifiedAndSignIn(`owner-${suffix}@example.com`, "correct horse battery", "Owner");
     const organizationId = await createOrgAsOwner(owner.jar, `Org ${suffix}`, `org-${suffix}`);
@@ -476,6 +477,7 @@ describe("tenant authorization", () => {
     // Two genuinely concurrent requests against the same app instance —
     // exercises the transaction + optimistic-lock guard in jobs.ts, not
     // just two sequential calls.
+    await seedFundedFunding(taskId);
     const cookie = owner.jar.header;
     const [first, second] = await Promise.all([
       app.inject({ method: "POST", url: `/v1/jobs/${taskId}/fund`, headers: { cookie } }),
@@ -498,13 +500,14 @@ describe("tenant authorization", () => {
     assert.equal(finalTask.status, "QUEUED");
     assert.equal(finalTask.version, 2, "version must have incremented exactly once");
 
+    // Phase 4E.1: /fund no longer writes the obsolete stub payment_intents
+    // row; the single transition is proven by the version bump above.
     const paymentIntents = await db
       .selectFrom("payment_intents")
       .selectAll()
       .where("job_id", "=", taskId)
       .execute();
-    assert.equal(paymentIntents.length, 1, "exactly one payment intent must exist for this job");
-    assert.equal(paymentIntents[0]?.status, "CONFIRMED");
+    assert.equal(paymentIntents.length, 0, "/fund must not write payment_intents any more");
 
     // taskId must stay QUEUED for the assertion above — this file never
     // claims it (this suite doesn't touch /internal/executions/claim at

@@ -12,6 +12,11 @@ import { z } from "zod";
 
 import { db } from "../db.js";
 import { resolveRouting } from "../routing.js";
+import { assertDevnetNetworkPolicy } from "../solana/config.js";
+import { FundingError, toHttpError } from "../solana/errors.js";
+import { loadFundingByTask, MAX_VERIFICATION_AGE_MS, refreshFundingForGate } from "../solana/funding-service.js";
+import { getFundingRuntime } from "../solana/runtime.js";
+import { assertTaskProvenanceChain } from "../task-provenance-check.js";
 import { getActivePolicy, latestOpenPause, toUsagePauseResponse, toUsagePolicyResponse } from "../usage-policies.js";
 import {
   HttpError,
@@ -166,25 +171,44 @@ export async function jobRoutes(app: FastifyInstance) {
     }
   });
 
-  // Phase 1 stand-in for Phase 5's real Solana escrow confirmation. Writes
-  // a payment_intents row and advances AWAITING_FUNDING -> FUNDED -> QUEUED
-  // in one call so tasks can reach QUEUED at all before real chain
-  // confirmation exists. Replace the body of this handler, not its route,
-  // when Phase 5 lands.
+  // "Activate Build" (Phase 4E.1 ADR-0013). The historical route name is kept
+  // for compatibility; it is now the activation gate behind REAL Solana
+  // devnet funding: AWAITING_FUNDING -> QUEUED only after (a) every Phase 4C
+  // provenance check, AND (b) a project_funding_accounts row that is
+  // devnet, FUNDED (finalized, program-decoded deposits), >= the DEMO_FIXED
+  // requirement, bound to exactly this task/org/project/budget
+  // authorization, and recently verified against the finalized chain.
+  // There is no env/flag bypass: a direct API call without verified devnet
+  // funding can never reach QUEUED. The obsolete stub payment_intents insert
+  // is gone (that table is historical legacy state, never used for Solana).
   //
-  // The read, the payment-intent insert, and the task update all happen
-  // inside one transaction: the closing update is guarded by both
-  // `status = 'AWAITING_FUNDING'` and `version = <the row we just read>`
-  // (optimistic locking), so a concurrent call or a crash between writes
-  // can't leave a CONFIRMED payment intent pointing at a task that never
-  // actually reached QUEUED. If the guarded update matches no row, the
-  // transition didn't happen — throwing rolls back the payment-intent
-  // insert too, rather than leaving it orphaned.
+  // The closing update is guarded by both `status = 'AWAITING_FUNDING'` and
+  // `version = <the row we just read>` (optimistic locking) and runs in the
+  // same transaction as the funding-row lock, so concurrent activations
+  // produce exactly one transition. If the guarded update matches no row,
+  // the transition didn't happen.
   app.post("/v1/jobs/:id/fund", async (request, reply) => {
     try {
       const { organizationId, role } = await requireOrgSession(request);
       requirePrivilegedRole(role);
       const { id } = z.object({ id: z.string() }).parse(request.params);
+
+      // Phase 4E.1 network policy: fail closed unless SOLANA_NETWORK is
+      // exactly "devnet" (mainnet/testnet/unknown/unset are all rejected).
+      assertDevnetNetworkPolicy();
+
+      // Freshness: if the funding row exists but its last finalized-chain
+      // verification is stale, re-verify against the chain BEFORE the
+      // transaction (RPC calls never run inside the DB transaction). An RPC
+      // fault here fails closed with 503 — the task is never queued.
+      const preFunding = await loadFundingByTask(id, organizationId);
+      if (
+        preFunding &&
+        preFunding.status === "FUNDED" &&
+        (!preFunding.verified_at || Date.now() - preFunding.verified_at.getTime() > MAX_VERIFICATION_AGE_MS)
+      ) {
+        await refreshFundingForGate(getFundingRuntime(), preFunding);
+      }
 
       const updated = await db.transaction().execute(async (trx) => {
         const task = await trx
@@ -197,86 +221,9 @@ export async function jobRoutes(app: FastifyInstance) {
           throw new HttpError(404, "Not found");
         }
 
-        // Phase 4C hardening: /fund now requires the task to carry valid,
-        // fully-chained provenance all the way back to an APPROVED estimate
-        // and a CONSUMED authorization that exists solely to fund this one
-        // task. This is always active, independent of
-        // ALLOW_LEGACY_JOB_CREATION's state — a provenance-less task (any
-        // task created via the legacy path, or a fabricated fixture) can be
-        // created but can never reach QUEUED. There are zero historical
-        // AWAITING_FUNDING tasks affected by this (confirmed by the Phase 4C
-        // preflight), so this has zero blast radius on existing data.
-        if (!task.source_estimate_id || !task.source_budget_authorization_id) {
-          throw new HttpError(
-            409,
-            "Task has no provenance (source_estimate_id/source_budget_authorization_id) — only a task created via POST /v1/projects/:projectId/tasks/from-budget-authorization can be funded",
-          );
-        }
-
-        const sourceEstimate = await trx
-          .selectFrom("project_estimates")
-          .selectAll()
-          .where("id", "=", task.source_estimate_id)
-          .executeTakeFirst();
-        if (
-          !sourceEstimate ||
-          sourceEstimate.project_id !== task.project_id ||
-          sourceEstimate.organization_id !== task.organization_id
-        ) {
-          throw new HttpError(
-            409,
-            "Task's source estimate is missing or does not match this task's project/organization",
-          );
-        }
-        if (sourceEstimate.status !== "APPROVED") {
-          throw new HttpError(
-            409,
-            `Task's source estimate ${sourceEstimate.id} is ${sourceEstimate.status}, not APPROVED`,
-          );
-        }
-
-        const sourceAuthorization = await trx
-          .selectFrom("project_budget_authorizations")
-          .selectAll()
-          .where("id", "=", task.source_budget_authorization_id)
-          .executeTakeFirst();
-        if (
-          !sourceAuthorization ||
-          sourceAuthorization.organization_id !== task.organization_id ||
-          sourceAuthorization.project_id !== task.project_id
-        ) {
-          throw new HttpError(
-            409,
-            "Task's source budget authorization is missing or does not match this task's project/organization",
-          );
-        }
-        if (sourceAuthorization.estimate_id !== task.source_estimate_id) {
-          throw new HttpError(
-            409,
-            "Task's source budget authorization does not reference the task's own source estimate",
-          );
-        }
-        if (sourceAuthorization.status !== "CONSUMED") {
-          throw new HttpError(
-            409,
-            `Task's source budget authorization ${sourceAuthorization.id} is ${sourceAuthorization.status}, not CONSUMED`,
-          );
-        }
-
-        // Defensive: should be structurally guaranteed by
-        // tasks_one_per_source_budget_authorization already — confirmed
-        // here rather than assumed.
-        const linkedTaskCount = await trx
-          .selectFrom("tasks")
-          .select(({ fn }) => [fn.count<string>("id").as("n")])
-          .where("source_budget_authorization_id", "=", sourceAuthorization.id)
-          .executeTakeFirstOrThrow();
-        if (Number(linkedTaskCount.n) !== 1) {
-          throw new HttpError(
-            500,
-            `Integrity anomaly: budget authorization ${sourceAuthorization.id} is referenced by ${linkedTaskCount.n} tasks, expected exactly 1`,
-          );
-        }
+        // Phase 4C hardening (extracted to task-provenance-check.ts so Phase 4E.1
+        // funding-account creation enforces the identical chain).
+        await assertTaskProvenanceChain(trx, task);
 
         const current = task.status as TaskStatus;
         try {
@@ -292,19 +239,36 @@ export async function jobRoutes(app: FastifyInstance) {
           throw new HttpError(409, "Task is no longer awaiting funding");
         }
 
-        await trx
-          .insertInto("payment_intents")
-          .values({
-            job_id: id,
-            chain: "stub",
-            asset: task.currency,
-            amount_minor: task.max_budget_minor,
-            actor: "customer",
-            idempotency_key: `fund:${id}`,
-            status: "CONFIRMED",
-          })
-          .onConflict((oc) => oc.column("idempotency_key").doNothing())
-          .execute();
+        // Phase 4E.1 funding gate. Lock the exact funding row; every
+        // condition is re-checked here, inside the transaction that performs
+        // the AWAITING_FUNDING -> QUEUED transition.
+        const funding = await trx
+          .selectFrom("project_funding_accounts")
+          .selectAll()
+          .where("task_id", "=", task.id)
+          .forUpdate()
+          .executeTakeFirst();
+        if (!funding) {
+          throw new FundingError("NO_FUNDING_ACCOUNT", "Task has no devnet project funding account; create and fund one first");
+        }
+        if (
+          funding.network !== "devnet" ||
+          funding.organization_id !== task.organization_id ||
+          funding.project_id !== task.project_id ||
+          funding.task_id !== task.id ||
+          funding.budget_authorization_id !== task.source_budget_authorization_id
+        ) {
+          throw new FundingError("INCONSISTENT_STATE", "Funding account does not match this task's network/org/project/budget authorization");
+        }
+        if (funding.status !== "FUNDED" || BigInt(funding.confirmed_amount_base_units) < BigInt(funding.required_amount_base_units)) {
+          throw new FundingError(
+            "NOT_FUNDED",
+            `Funding is ${funding.status}: ${funding.confirmed_amount_base_units} of ${funding.required_amount_base_units} lamports confirmed (finalized) on Solana devnet`,
+          );
+        }
+        if (!funding.verified_at || Date.now() - funding.verified_at.getTime() > MAX_VERIFICATION_AGE_MS) {
+          throw new FundingError("FUNDING_STALE", "Funding verification is stale; verify funding again, then activate");
+        }
 
         const result = await trx
           .updateTable("tasks")
@@ -325,7 +289,7 @@ export async function jobRoutes(app: FastifyInstance) {
 
       reply.send(updated);
     } catch (err) {
-      if (sendHttpError(reply, err)) return;
+      if (sendHttpError(reply, toHttpError(err))) return;
       if (err instanceof z.ZodError) {
         reply.status(400).send({ error: err.message });
         return;

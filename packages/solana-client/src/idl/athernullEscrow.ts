@@ -18,6 +18,62 @@ export type AthernullEscrow = {
   },
   "instructions": [
     {
+      "name": "depositProjectFunding",
+      "discriminator": [
+        143,
+        166,
+        57,
+        13,
+        1,
+        140,
+        188,
+        164
+      ],
+      "accounts": [
+        {
+          "name": "customer",
+          "docs": [
+            "Must be the customer bound at initialization (`has_one`)."
+          ],
+          "writable": true,
+          "signer": true,
+          "relations": [
+            "projectFunding"
+          ]
+        },
+        {
+          "name": "projectFunding",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  102
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "project_funding.binding_hash",
+                "account": "projectFunding"
+              }
+            ]
+          }
+        },
+        {
+          "name": "systemProgram",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "amount",
+          "type": "u64"
+        }
+      ]
+    },
+    {
       "name": "fundEscrow",
       "discriminator": [
         155,
@@ -148,6 +204,77 @@ export type AthernullEscrow = {
         {
           "name": "deadline",
           "type": "i64"
+        }
+      ]
+    },
+    {
+      "name": "initializeProjectFunding",
+      "discriminator": [
+        122,
+        234,
+        242,
+        69,
+        88,
+        198,
+        202,
+        45
+      ],
+      "accounts": [
+        {
+          "name": "authority",
+          "docs": [
+            "Platform authority — pays rent, never a worker/agent key. Because",
+            "only this signer can create the account, on-chain state (customer,",
+            "required amount, binding) is trustworthy by construction."
+          ],
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "projectFunding",
+          "docs": [
+            "`init` fails if the PDA for this binding already exists — duplicate",
+            "initialization is impossible, not just checked."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  102
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "bindingHash"
+              }
+            ]
+          }
+        },
+        {
+          "name": "systemProgram",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "bindingHash",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
+        {
+          "name": "customer",
+          "type": "pubkey"
+        },
+        {
+          "name": "requiredAmount",
+          "type": "u64"
         }
       ]
     },
@@ -375,6 +502,19 @@ export type AthernullEscrow = {
         218,
         155
       ]
+    },
+    {
+      "name": "projectFunding",
+      "discriminator": [
+        225,
+        4,
+        107,
+        91,
+        56,
+        182,
+        198,
+        240
+      ]
     }
   ],
   "errors": [
@@ -402,6 +542,26 @@ export type AthernullEscrow = {
       "code": 6004,
       "name": "amountExceedsBalance",
       "msg": "Amount exceeds the escrowed balance"
+    },
+    {
+      "code": 6005,
+      "name": "zeroAmount",
+      "msg": "Amount must be greater than zero"
+    },
+    {
+      "code": 6006,
+      "name": "overflow",
+      "msg": "Arithmetic overflow"
+    },
+    {
+      "code": 6007,
+      "name": "invalidRequiredAmount",
+      "msg": "Required amount must be greater than zero"
+    },
+    {
+      "code": 6008,
+      "name": "invalidCustomer",
+      "msg": "Customer must be a non-default pubkey"
     }
   ],
   "types": [
@@ -488,6 +648,64 @@ export type AthernullEscrow = {
           }
         ]
       }
+    },
+    {
+      "name": "projectFunding",
+      "docs": [
+        "Phase 4E.1 project funding account. PDA seeds: `[\"pf\", binding_hash]`.",
+        "",
+        "`deposited_amount` is the authoritative funding state — it only ever",
+        "grows via `deposit_project_funding`, never from raw lamports sent to the",
+        "PDA by a plain system transfer (those are NOT deposits)."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "version",
+            "type": "u8"
+          },
+          {
+            "name": "bindingHash",
+            "docs": [
+              "SHA-256 provenance binding (see `compute_binding_hash`)."
+            ],
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "customer",
+            "type": "pubkey"
+          },
+          {
+            "name": "authority",
+            "docs": [
+              "Platform authority that initialized this account. Never a worker key."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "requiredAmount",
+            "type": "u64"
+          },
+          {
+            "name": "depositedAmount",
+            "type": "u64"
+          },
+          {
+            "name": "depositCount",
+            "type": "u64"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
     }
   ],
   "constants": [
@@ -498,6 +716,15 @@ export type AthernullEscrow = {
       ],
       "type": "bytes",
       "value": "[101, 115, 99, 114, 111, 119]"
+    },
+    {
+      "name": "projectFundingSeed",
+      "docs": [
+        "PDA seed prefix for `ProjectFunding`: `[PROJECT_FUNDING_SEED, binding_hash]`",
+        "(ADR-0013). The 32-byte binding hash is exactly Solana's per-seed limit."
+      ],
+      "type": "bytes",
+      "value": "[112, 102]"
     }
   ]
 };

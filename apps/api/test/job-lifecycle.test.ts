@@ -86,6 +86,7 @@ import type { FastifyInstance, LightMyRequestResponse } from "fastify";
 import { sql } from "kysely";
 
 const { buildApp } = await import("../src/app.js");
+const { seedFundedFunding } = await import("./support/funding-fixtures.js");
 const { db } = await import("../src/db.js");
 
 let app: FastifyInstance;
@@ -287,6 +288,7 @@ async function createFundedTask(
   assert.equal(created.statusCode, 201, `canonical task creation failed: ${created.body}`);
   const taskId = (JSON.parse(created.body) as { id: string }).id;
 
+  await seedFundedFunding(taskId);
   const funded = await app.inject({
     method: "POST",
     url: `/v1/jobs/${taskId}/fund`,

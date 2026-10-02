@@ -33,6 +33,7 @@ import type { FastifyInstance, LightMyRequestResponse } from "fastify";
 import { sql } from "kysely";
 
 const { buildApp } = await import("../src/app.js");
+const { seedFundedFunding } = await import("./support/funding-fixtures.js");
 const { db } = await import("../src/db.js");
 const { setPlannerClientForTests } = await import("../src/planner.js");
 
@@ -1125,6 +1126,7 @@ describe("/fund hardening", () => {
     assert.equal(created.statusCode, 201, `prepareBuild failed: ${created.body}`);
     const task = JSON.parse(created.body) as { id: string };
 
+    await seedFundedFunding(task.id);
     const res = await fundTask(owner.jar, task.id);
     assert.equal(res.statusCode, 200, `fund failed: ${res.body}`);
     const body = JSON.parse(res.body) as { status: string };

@@ -12,54 +12,13 @@ import { StatusBadge } from "@/components/status-badge";
 import { BudgetMeter } from "@/components/workspace/budget-meter";
 import { UsageLimitMeter } from "@/components/workspace/usage-limit-meter";
 import { ExecutionList } from "@/components/tasks/execution-list";
+import { ProjectFundingPanel } from "@/components/projects/project-funding-panel";
 import { ReviewPanel } from "@/components/tasks/review-panel";
 import { TaskDetailSkeleton } from "@/components/tasks/task-detail-skeleton";
 import { useTask } from "@/lib/hooks/use-task";
 import { useRepoProjects } from "@/lib/hooks/use-repo-projects";
 import { useFundTask } from "@/lib/hooks/use-tasks";
 import { githubRevisionUrl } from "@/lib/utils";
-
-// Phase 4C — "Activate Build": the only UI entry point left for moving a
-// task from AWAITING_FUNDING to QUEUED (apps/api's still-real /fund
-// endpoint underneath). Deliberately never labeled "Fund"/"Pay"/"Deposit"/
-// "Escrow" — no real payment rail exists anywhere in this codebase yet (see
-// docs/adr/0010-provenance-bound-task-creation.md).
-function ActivateBuildPanel({ taskId }: { taskId: string }) {
-  const fundTask = useFundTask();
-  const [error, setError] = useState<string | null>(null);
-
-  async function handleActivate() {
-    setError(null);
-    try {
-      await fundTask.mutateAsync(taskId);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Something went wrong.");
-    }
-  }
-
-  return (
-    <Card>
-      <CardHeader className="flex-row items-center gap-3 space-y-0">
-        <IconBadge>
-          <Rocket />
-        </IconBadge>
-        <CardTitle className="text-base">Awaiting funding</CardTitle>
-      </CardHeader>
-      <CardContent className="flex flex-col gap-3">
-        <p className="text-sm text-muted-foreground">
-          This build is prepared but not yet active. Activating it queues the build for
-          execution.
-        </p>
-        <div className="flex items-center justify-between">
-          {error ? <p className="text-sm text-destructive">{error}</p> : <span />}
-          <Button disabled={fundTask.isPending} onClick={handleActivate}>
-            {fundTask.isPending ? "Activating…" : "Activate Build"}
-          </Button>
-        </div>
-      </CardContent>
-    </Card>
-  );
-}
 
 export default function TaskStatusPage() {
   const { projectId, taskId } = useParams<{ projectId: string; taskId: string }>();
@@ -175,7 +134,7 @@ export default function TaskStatusPage() {
             </Card>
           )}
 
-        {task.status === "AWAITING_FUNDING" && <ActivateBuildPanel taskId={task.id} />}
+        {task.status === "AWAITING_FUNDING" && <ProjectFundingPanel taskId={task.id} />}
 
         <ReviewPanel task={task} />
 
