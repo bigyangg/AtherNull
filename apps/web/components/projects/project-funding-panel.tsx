@@ -74,6 +74,7 @@ function FundingBody({ taskId }: { taskId: string }) {
   const [busy, setBusy] = useState<null | "preparing" | "signing" | "confirming">(null);
   const connection = useMemo(() => new Connection(WALLET_DEVNET_ENDPOINT, "confirmed"), []);
   const cancelled = useRef(false);
+  const [wantConnect, setWantConnect] = useState<Parameters<typeof select>[0] | null>(null);
 
   useEffect(() => {
     cancelled.current = false;
@@ -81,6 +82,13 @@ function FundingBody({ taskId }: { taskId: string }) {
       cancelled.current = true;
     };
   }, []);
+
+  useEffect(() => {
+    if (wantConnect && wallet?.adapter.name === wantConnect && !connected && !connecting) {
+      setWantConnect(null);
+      connect().catch((err: unknown) => setError(err instanceof Error ? err.message : "Could not connect the wallet."));
+    }
+  }, [wantConnect, wallet, connected, connecting, connect]);
 
   const message = (err: unknown) => (err instanceof Error ? err.message : "Something went wrong.");
 
@@ -282,14 +290,13 @@ function FundingBody({ taskId }: { taskId: string }) {
                             key={w.adapter.name}
                             variant="outline"
                             disabled={connecting}
-                            onClick={async () => {
+                            onClick={() => {
                               setError(null);
-                              try {
-                                select(w.adapter.name);
-                                await w.adapter.connect();
-                              } catch (err) {
-                                setError(message(err));
-                              }
+                              // select() updates context state asynchronously; the effect
+                              // below calls the CONTEXT connect() once that wallet is
+                              // selected, so the adapter's connect event is not missed.
+                              setWantConnect(w.adapter.name);
+                              select(w.adapter.name);
                             }}
                           >
                             Connect Wallet · {w.adapter.name}
