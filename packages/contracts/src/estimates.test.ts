@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { PlannerOutputSchema } from "./estimates.js";
+import { PlannerOutputSchema } from "./estimates";
 
 function validPlannerOutput() {
   return {

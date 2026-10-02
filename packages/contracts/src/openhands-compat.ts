@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import { TaskStatusSchema, type TaskStatus } from "./tasks.js";
+import { TaskStatusSchema, type TaskStatus } from "./tasks";
 
 // Production typed contract for the OpenHands-compatible read surface
 // (apps/api/src/routes/openhands-compat.ts), per

@@ -7,7 +7,7 @@ import {
   formatDevnetSol,
   PrepareFundingRequestSchema,
   VerifyFundingRequestSchema,
-} from "./project-funding.js";
+} from "./project-funding";
 
 test("explorer links are devnet-scoped only", () => {
   assert.equal(

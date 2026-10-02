@@ -3,10 +3,12 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   reactStrictMode: true,
-  // @athernull/contracts ships untranspiled TypeScript (main: src/index.ts,
-  // internal exports written with .js specifiers per its own moduleResolution
-  // config) — without this, Next treats it as an opaque external package and
-  // fails to resolve those .js specifiers against the actual .ts files.
+  // @athernull/contracts is a SOURCE workspace package (main/types -> src/
+  // index.ts, no dist). Listing it is an explicit opt-in to compiling its
+  // TypeScript. This does NOT make Next resolve a relative `./x.js` import to
+  // `x.ts` — neither Turbopack nor webpack does that — so the package's
+  // internal relative imports must stay extensionless
+  // (enforced by packages/contracts/src/packaging.test.ts).
   transpilePackages: ["@athernull/contracts"],
   // Self-contained server bundle (.next/standalone) for the Docker image —
   // pulls in only the node_modules this app's build actually traced, instead
