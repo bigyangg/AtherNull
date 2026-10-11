@@ -151,7 +151,9 @@ describe("agent gateway HTTP", () => {
       initial_message: { content: [{ type: "text", text: "I want a /version endpoint" }] },
     });
     assert.equal(res.statusCode, 200, res.body);
-    const sent = JSON.parse(sandboxA.requests.at(-1)!.body) as {
+    const start = sandboxA.requests.findLast((r) => r.method === "POST" && r.url === "/api/conversations")!;
+    const sent = JSON.parse(start.body) as {
+      autotitle: boolean;
       conversation_id: string;
       agent: { tools: unknown[]; mcp_config: object; llm: { model: string; api_key: string } };
       workspace: { working_dir: string };
@@ -167,6 +169,12 @@ describe("agent gateway HTTP", () => {
     assert.equal(sent.workspace.working_dir, `/workspace/discussions/${sent.conversation_id}`);
     assert.equal(sent.tags.athernullmode, "discussion");
     assert.equal(sent.initial_message.content[0]!.text, "I want a /version endpoint");
+    // Titled by the gateway from the user's words, not by the sandbox model.
+    assert.equal(sent.autotitle, false);
+    const titled = sandboxA.requests.at(-1)!;
+    assert.equal(titled.method, "PATCH");
+    assert.equal(titled.url, `/api/conversations/${sent.conversation_id}`);
+    assert.equal(JSON.parse(titled.body).title, "I want a /version endpoint");
     const row = await db.selectFrom("discussion_conversations").selectAll().where("conversation_id", "=", sent.conversation_id).executeTakeFirst();
     assert.equal(row?.organization_id, orgA.organizationId);
     discussionId = sent.conversation_id;

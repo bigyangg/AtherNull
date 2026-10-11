@@ -1,5 +1,5 @@
 {
-  "_comment": "English overrides for product-surface strings in the pinned Agent Canvas (apps/canvas/brand.mjs). References that are accurate as 'OpenHands' (the OpenHands agent, its skills registry, OpenHands Cloud) are deliberately left alone.",
+  "_comment": "English overrides for product-surface strings in the pinned Agent Canvas (apps/canvas/brand.mjs). After these, every remaining \"OpenHands\" in every locale becomes \"AtherNull\"; the brand check fails the build on anything left.",
   "BRANDING$OPENHANDS": "AtherNull",
   "BRANDING$OPENHANDS_LOGO": "AtherNull logo",
   "AUTH$LOGGING_BACK_IN": "Logging back into AtherNull...",
@@ -20,5 +20,18 @@
   "BROWSER$SERVER_MESSAGE": "No web app running. Ask the agent to start your project's dev server (for example: npm run dev).",
   "DIFF_VIEWER$ASK_OH": "Ask the agent to initialize a git repo to activate this UI.",
   "DIFF_VIEWER$NO_CHANGES": "The agent hasn't made any changes yet",
-  "SETTINGS$GIT_SETTINGS_DESCRIPTION": "Configure the username and email the agent uses to commit changes."
+  "SETTINGS$GIT_SETTINGS_DESCRIPTION": "Configure the username and email the agent uses to commit changes.",
+  "SCHEMA$AGENT_CONTEXT$LOAD_MEMORY$DESCRIPTION": "The agent keeps notes in your workspace and loads them at the start of each new conversation, learning your codebase and preferences over time.",
+  "AUTH$RECAPTCHA_BLOCKED": "Access blocked due to suspicious activity. If you believe this is an error, contact AtherNull support.",
+  "COMMAND_MENU$AGENT_SETTINGS_KEYWORDS": "agent profile sub agents delegation",
+  "SETTINGS$AGENT_TYPE_OPENHANDS": "AtherNull Agent",
+  "SETTINGS$AGENT_PAGE_DESCRIPTION": "Configure the AtherNull Agent that drives your conversations.",
+  "SETTINGS$PAGE_AGENT_SUBLINE": "Configure the AtherNull Agent.",
+  "SETTINGS$AGENT_PROFILE_NO_LLM": "Your workspace LLM is still being set up. Try again in a moment.",
+  "COMMAND_MENU$NEW_CHAT_DESCRIPTION": "Start a new conversation with the agent.",
+  "BACKEND$MANAGE": "Workspace",
+  "ONBOARDING$AGENT_OPENHANDS_DESCRIPTION": "The AtherNull Agent. Plans, builds and tests changes in your workspace.",
+  "SETTINGS$SKILLS_ADD_MODAL_INTRO": "Extend what your agent can do by installing skills from community repositories or your own GitHub repos.",
+  "SETTINGS$SKILLS_ADD_MODAL_URL_FORMATS": "Full GitHub tree links, repository paths, and short forms such as owner/repo/skills/name all work.",
+  "SETTINGS$BACKEND_SYNCED_BADGE": "These settings are saved in your AtherNull workspace."
 }

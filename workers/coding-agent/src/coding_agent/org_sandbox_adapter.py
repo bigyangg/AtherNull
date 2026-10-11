@@ -17,6 +17,7 @@ reason) like run_dispatch_via_agent_server and never raises.
 from __future__ import annotations
 
 import os
+import re
 import shlex
 import subprocess
 import tempfile
@@ -41,6 +42,94 @@ POLL_SECONDS = float(os.getenv("ORG_SANDBOX_POLL_SECONDS", "2"))
 MAX_RUN_SECONDS = int(os.getenv("ORG_SANDBOX_MAX_RUN_SECONDS", "1800"))
 MAX_ITERATIONS = int(os.getenv("ORG_SANDBOX_MAX_ITERATIONS", "100"))
 BUILDS_ROOT = "/workspace/builds"
+
+AGENT_IDENTITY = (
+    "IDENTITY: You are the AtherNull Agent, made by AtherNull. If asked your name or who made you, "
+    "say you are the AtherNull Agent. Never call yourself OpenHands or any other product name, "
+    "even if earlier instructions say so."
+)
+
+
+_PLATFORM_SKILL = re.compile(
+    r"openhands[\s-]*(software agent )?(sdk|cloud|enterprise|api|automation|agent sdk)|all-hands|agent canvas|\bOHE\b", re.I
+)
+
+
+def _is_platform_skill(skill: dict) -> bool:
+    """Skills about the OpenHands platform itself — hidden from the AtherNull
+    catalog (apps/canvas utils/athernull-catalog.ts), so never given to a build."""
+    name = str(skill.get("name", "")).lower()
+    return "openhands" in name or "agent-canvas" in name or bool(_PLATFORM_SKILL.search(str(skill.get("description") or "")))
+
+
+def workspace_agent_setup(http: httpx.Client) -> tuple[dict, dict, list[dict]]:
+    """What the workspace owner configured in the canvas, for a build to use:
+    MCP servers (connectors), skills and installed plugins. Each part is
+    best-effort; a build still runs without it."""
+    mcp_config: dict = {}
+    enabled: list[str] = []
+    disabled: list[str] = []
+    try:
+        settings = http.get("/api/settings").json()
+        stored = (settings.get("agent_settings") or {}).get("mcp_config") or {}
+        # Servers the owner switched off in the canvas stay off.
+        mcp_config = {
+            name: server for name, server in stored.items()
+            if not (isinstance(server, dict) and server.get("enabled") is False)
+        }
+        prefs = (settings.get("misc_settings") or {}).get("app_preferences") or {}
+        enabled = list(prefs.get("enabled_skills") or [])
+        disabled = list(prefs.get("disabled_skills") or [])
+    except Exception as exc:  # noqa: BLE001
+        log(f"workspace settings unavailable for this build: {exc}")
+
+    # Catalog skills are opt-in (the canvas's allow-list); user and project
+    # skills load by default unless disabled.
+    skills: list[dict] = []
+    if enabled:
+        try:
+            res = http.post(
+                "/api/skills",
+                json={"load_public": True, "load_user": False, "load_project": False, "load_org": False, "marketplace_path": None},
+            )
+            for skill in res.json().get("skills") or []:
+                if skill.get("name") in enabled and skill.get("content") and not _is_platform_skill(skill):
+                    skills.append({
+                        key: skill[key]
+                        for key in ("name", "content", "source", "description", "is_agentskills_format", "disable_model_invocation")
+                        if skill.get(key) is not None
+                    })
+        except Exception as exc:  # noqa: BLE001
+            log(f"catalog skills unavailable for this build: {exc}")
+    agent_context = {
+        "system_message_suffix": AGENT_IDENTITY,
+        "skills": skills,
+        "load_public_skills": False,
+        "load_user_skills": True,
+        "load_project_skills": True,
+        "disabled_skills": disabled,
+    }
+
+    plugins: list[dict] = []
+    try:
+        for plugin in http.get("/api/plugins/installed").json().get("plugins") or []:
+            if plugin.get("enabled", True) and plugin.get("source"):
+                source = {"source": plugin["source"]}
+                if plugin.get("resolved_ref"):
+                    source["ref"] = plugin["resolved_ref"]
+                plugins.append(source)
+    except Exception as exc:  # noqa: BLE001
+        log(f"installed plugins unavailable for this build: {exc}")
+    return mcp_config, agent_context, plugins
+
+
+def build_title(objective: str) -> str:
+    """A build conversation's title: the first line of its objective, shortened."""
+    line = next((" ".join(l.split()) for l in objective.splitlines() if l.strip()), "")
+    if not line:
+        return "Build"
+    return line if len(line) <= 60 else line[:59].rstrip() + "…"
+
 
 TERMINAL_SUCCESS = {"finished"}
 TERMINAL_FAILURE = {"error", "stuck"}
@@ -214,6 +303,7 @@ def run_dispatch_via_org_sandbox(client: httpx.Client, dispatch: dict) -> tuple[
         model = dispatch["resolvedModel"]
         api_key = require_api_key(model)
         message = build_task_message(dispatch["objective"], dispatch["acceptanceCriteria"])
+        mcp_config, agent_context, plugins = workspace_agent_setup(sandbox.http)
         res = sandbox.http.post(
             "/api/conversations",
             json={
@@ -222,16 +312,26 @@ def run_dispatch_via_org_sandbox(client: httpx.Client, dispatch: dict) -> tuple[
                     "kind": "Agent",
                     "llm": {"model": model, "api_key": api_key, "usage_id": "athernull-build"},
                     "tools": [{"name": "terminal"}, {"name": "file_editor"}, {"name": "task_tracker"}],
+                    # The workspace's connectors, skills and plugins, as configured in the canvas.
+                    **({"mcp_config": mcp_config} if mcp_config else {}),
+                    "agent_context": agent_context,
                 },
+                **({"plugins": plugins} if plugins else {}),
                 "initial_message": {"role": "user", "content": [{"type": "text", "text": message}], "run": True},
                 "max_iterations": MAX_ITERATIONS,
                 "tags": {"athernulltask": task_id.replace("-", "")},
-                "autotitle": True,
+                # Titled from the objective: a small model asked for a title
+                # tends to answer with its own instructions.
+                "autotitle": False,
             },
         )
         if res.status_code >= 400:
             return "failure", f"starting the conversation failed ({res.status_code}): {res.text[:300]}"
         conversation_id = res.json()["id"]
+        try:
+            sandbox.http.patch(f"/api/conversations/{conversation_id}", json={"title": build_title(dispatch["objective"])})
+        except Exception:  # best-effort: an untitled build still runs
+            pass
         log(f"build {task_id} running as conversation {conversation_id} in the org sandbox")
         report = client.post(
             f"{API_URL}/internal/executions/{execution_id}/conversation",

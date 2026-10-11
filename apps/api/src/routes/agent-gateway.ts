@@ -140,7 +140,7 @@ async function startDiscussionUpstream(reply: FastifyReply, server: OrgServer, o
   } catch {
     throw new HttpError(400, "Invalid JSON");
   }
-  const { conversationId, request } = await startDiscussion(organizationId, userId, body);
+  const { conversationId, title, request } = await startDiscussion(organizationId, userId, body);
   let upstream: Response;
   try {
     upstream = await fetch(`${server.baseUrl}/api/conversations`, {
@@ -153,6 +153,14 @@ async function startDiscussionUpstream(reply: FastifyReply, server: OrgServer, o
     throw new HttpError(502, "The organization's agent sandbox is unreachable");
   }
   if (!upstream.ok) await forgetDiscussion(conversationId);
+  else {
+    // Best-effort: an untitled discussion still works.
+    await fetch(`${server.baseUrl}/api/conversations/${conversationId}`, {
+      method: "PATCH",
+      headers: { "X-Session-API-Key": server.key, "content-type": "application/json" },
+      body: JSON.stringify({ title }),
+    }).catch(() => undefined);
+  }
   reply.status(upstream.status).header("content-type", upstream.headers.get("content-type") ?? "application/json");
   return reply.send(Buffer.from(await upstream.arrayBuffer()));
 }

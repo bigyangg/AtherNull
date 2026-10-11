@@ -1,0 +1,668 @@
+diff --git a/src/api/option-service/option-service.api.ts b/src/api/option-service/option-service.api.ts
+index 62ca8f1..d1e3834 100644
+--- a/src/api/option-service/option-service.api.ts
++++ b/src/api/option-service/option-service.api.ts
+@@ -32,7 +32,8 @@ class OptionService {
+ 
+     return {
+       feature_flags: {
+-        hide_llm_settings: false,
++        // AtherNull manages the workspace LLM (and meters it per build).
++        hide_llm_settings: Boolean(import.meta.env.VITE_ATHERNULL),
+         hide_users_page: true,
+       },
+       providers_configured: [],
+diff --git a/src/api/plugins-service.ts b/src/api/plugins-service.ts
+index 38e9511..aa1cf6f 100644
+--- a/src/api/plugins-service.ts
++++ b/src/api/plugins-service.ts
+@@ -4,6 +4,7 @@ import {
+ } from "@openhands/typescript-client/clients";
+ import { getActiveBackend } from "./backend-registry/active-store";
+ import { getAgentServerClientOptions } from "./agent-server-client-options";
++import { brandCatalog } from "#/utils/athernull-catalog";
+ 
+ /** Summary of a skill bundled in a plugin (agent-server `PluginSkillSummary`). */
+ export interface PluginBundledSkill {
+@@ -82,7 +83,7 @@ class PluginsService {
+       const response = await new PluginsClient(
+         getAgentServerClientOptions(),
+       ).getPluginsMarketplace();
+-      return (response.plugins ?? []) as MarketplacePlugin[];
++      return brandCatalog((response.plugins ?? []) as MarketplacePlugin[]);
+     } catch {
+       // Agent-server may not support the plugins endpoint or be unreachable;
+       // surface an empty catalog rather than throwing.
+diff --git a/src/api/skills-service.ts b/src/api/skills-service.ts
+index 496ac4d..ddf5478 100644
+--- a/src/api/skills-service.ts
++++ b/src/api/skills-service.ts
+@@ -11,6 +11,7 @@ import {
+   fetchCloudSkills,
+ } from "./cloud/skills-service.api";
+ import { getAgentServerClientOptions } from "./agent-server-client-options";
++import { brandCatalog } from "#/utils/athernull-catalog";
+ 
+ function catalogEntryToSkillInfo(entry: SkillCatalogEntry): SkillInfo {
+   return {
+@@ -63,7 +64,7 @@ class SkillsService {
+       // unreachable; fall back to the bundled public catalog alone.
+     }
+ 
+-    return [...localSkills, ...PUBLIC_SKILLS];
++    return brandCatalog([...localSkills, ...PUBLIC_SKILLS]);
+   }
+ 
+   /**
+diff --git a/src/components/conversation-events/chat/event-content-helpers/get-event-content.tsx b/src/components/conversation-events/chat/event-content-helpers/get-event-content.tsx
+index d0ae422..f41709f 100644
+--- a/src/components/conversation-events/chat/event-content-helpers/get-event-content.tsx
++++ b/src/components/conversation-events/chat/event-content-helpers/get-event-content.tsx
+@@ -295,7 +295,7 @@ const getCanvasUIClientObservationContent = (
+     return null;
+   }
+ 
+-  return `UI command '${correspondingAction.action.command}' dispatched to the Agent Canvas frontend.`;
++  return `UI command '${correspondingAction.action.command}' dispatched to the canvas.`;
+ };
+ 
+ export const getEventContent = (
+diff --git a/src/components/features/backends/manage-backends-modal.tsx b/src/components/features/backends/manage-backends-modal.tsx
+index 56e6404..5bb301a 100644
+--- a/src/components/features/backends/manage-backends-modal.tsx
++++ b/src/components/features/backends/manage-backends-modal.tsx
+@@ -60,7 +60,35 @@ function resolveBackendOrgLabel(
+     .join(", ");
+ }
+ 
+-export function ManageBackendsModal({
++// AtherNull: the only backend is the organization's own workspace behind
++// AtherNull's gateway, so there is nothing to manage — when it is
++// unreachable, say so and offer a retry instead of the backend manager.
++export function ManageBackendsModal(props: ManageBackendsModalProps) {
++  if (import.meta.env.VITE_ATHERNULL) return <WorkspaceUnavailable />;
++  return <UpstreamManageBackendsModal {...props} />;
++}
++
++function WorkspaceUnavailable() {
++  return (
++    <div className="fixed inset-0 z-50 flex items-center justify-center bg-base p-4">
++      <div className="w-full max-w-sm text-center">
++        <h2 className="text-lg font-semibold text-content">Your workspace isn't responding</h2>
++        <p className="mt-2 text-sm text-muted">
++          Your agent workspace may still be starting or restarting. Try again in a moment.
++        </p>
++        <button
++          type="button"
++          onClick={() => window.location.reload()}
++          className="mt-5 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-on-primary"
++        >
++          Try again
++        </button>
++      </div>
++    </div>
++  );
++}
++
++function UpstreamManageBackendsModal({
+   onClose,
+   recoveryMode = false,
+ }: ManageBackendsModalProps) {
+diff --git a/src/components/features/chat/components/chat-input-actions.tsx b/src/components/features/chat/components/chat-input-actions.tsx
+index de1c363..a7bc401 100644
+--- a/src/components/features/chat/components/chat-input-actions.tsx
++++ b/src/components/features/chat/components/chat-input-actions.tsx
+@@ -446,7 +446,8 @@ export function ChatInputActions({
+           <div ref={modelRef} className={cn(!showModelInline && "hidden")}>
+             {/* Picker depends on backend + ACP context; see the `pickerKind`
+                 cases above. */}
+-            {pickerKind === "model" ? (
++            {/* AtherNull: one managed LLM, nothing to pick. */}
++            {import.meta.env.VITE_ATHERNULL ? null : pickerKind === "model" ? (
+               <ChatInputModel />
+             ) : (
+               <ChatInputLlmProfilePicker />
+diff --git a/src/components/features/onboarding/steps/choose-agent-step.tsx b/src/components/features/onboarding/steps/choose-agent-step.tsx
+index 00dc80a..af7f4ca 100644
+--- a/src/components/features/onboarding/steps/choose-agent-step.tsx
++++ b/src/components/features/onboarding/steps/choose-agent-step.tsx
+@@ -77,7 +77,7 @@ function getAgentOptions(): AgentOption[] {
+   return [
+     {
+       id: "openhands",
+-      label: "OpenHands",
++      label: "AtherNull Agent",
+       descriptionKey: I18nKey.ONBOARDING$AGENT_OPENHANDS_DESCRIPTION,
+     },
+     ...ACP_PROVIDERS.map<AgentOption>((provider) => ({
+diff --git a/src/components/features/plugins/plugin-card.tsx b/src/components/features/plugins/plugin-card.tsx
+index 1152eca..9b9d53e 100644
+--- a/src/components/features/plugins/plugin-card.tsx
++++ b/src/components/features/plugins/plugin-card.tsx
+@@ -10,6 +10,7 @@ import {
+   extensionModuleCardSurfaceClassName,
+ } from "#/utils/extension-module-card-classes";
+ import type { PluginViewModel } from "./build-plugins-view-model";
++import { catalogSource } from "#/utils/athernull-catalog";
+ 
+ interface PluginCardProps {
+   plugin: PluginViewModel;
+@@ -69,9 +70,9 @@ export function PluginCard({
+             <p
+               data-testid={`plugin-source-${plugin.name}`}
+               className="mt-0.5 min-w-0 truncate text-xs text-tertiary-alt"
+-              title={plugin.source}
++              title={catalogSource(plugin.source) ?? undefined}
+             >
+-              {plugin.source}
++              {catalogSource(plugin.source)}
+             </p>
+           ) : null}
+         </div>
+diff --git a/src/components/features/plugins/plugin-picker-card.tsx b/src/components/features/plugins/plugin-picker-card.tsx
+index 981b6e2..a59d8ba 100644
+--- a/src/components/features/plugins/plugin-picker-card.tsx
++++ b/src/components/features/plugins/plugin-picker-card.tsx
+@@ -3,6 +3,7 @@ import { CirclePlusCheckToggle } from "#/components/shared/buttons/circle-plus-c
+ import { I18nKey } from "#/i18n/declaration";
+ import { cn } from "#/utils/utils";
+ import { extensionModuleCardPillClassName } from "#/utils/extension-module-card-classes";
++import { catalogSource } from "#/utils/athernull-catalog";
+ 
+ interface PluginPickerCardProps {
+   plugin: MarketplacePlugin;
+@@ -34,9 +35,9 @@ export function PluginPickerCard({
+         </h3>
+         <p
+           className="mt-0.5 min-w-0 truncate text-xs text-tertiary-alt"
+-          title={plugin.source}
++          title={catalogSource(plugin.source) ?? undefined}
+         >
+-          {plugin.source}
++          {catalogSource(plugin.source)}
+         </p>
+         {plugin.description ? (
+           <p className="mt-1 line-clamp-2 text-xs text-tertiary-light">
+diff --git a/src/components/features/settings/sdk-settings/field-help.tsx b/src/components/features/settings/sdk-settings/field-help.tsx
+index 63c4c66..76898c0 100644
+--- a/src/components/features/settings/sdk-settings/field-help.tsx
++++ b/src/components/features/settings/sdk-settings/field-help.tsx
+@@ -39,7 +39,8 @@ export const FIELD_HELP_LINKS: Record<
+ 
+ export function FieldHelp({ field }: { field: SettingsFieldSchema }) {
+   const { t } = useTranslation("openhands");
+-  const helpLink = FIELD_HELP_LINKS[field.key];
++  // AtherNull: these links point at OpenHands docs and Cloud keys.
++  const helpLink = import.meta.env.VITE_ATHERNULL ? undefined : FIELD_HELP_LINKS[field.key];
+   const description = resolveSchemaFieldDescription(
+     t,
+     field.key,
+diff --git a/src/components/features/settings/settings-desktop-sidebar.tsx b/src/components/features/settings/settings-desktop-sidebar.tsx
+index aafe253..485bf74 100644
+--- a/src/components/features/settings/settings-desktop-sidebar.tsx
++++ b/src/components/features/settings/settings-desktop-sidebar.tsx
+@@ -52,9 +52,12 @@ export function SettingsDesktopSidebar({
+         <IntegrationsSettingsLink />
+         <CloudSettingsLink />
+       </div>
+-      <div className="flex flex-col gap-2 px-2 pt-3">
+-        <AgentCanvasUpdateCard />
+-      </div>
++      {/* AtherNull: the canvas version is AtherNull's to manage, not the user's. */}
++      {import.meta.env.VITE_ATHERNULL ? null : (
++        <div className="flex flex-col gap-2 px-2 pt-3">
++          <AgentCanvasUpdateCard />
++        </div>
++      )}
+       <div className="px-2 pt-3">
+         <BackendSyncedSettingsBadge />
+       </div>
+diff --git a/src/components/features/sidebar/athernull-checklist.tsx b/src/components/features/sidebar/athernull-checklist.tsx
+new file mode 100644
+index 0000000..a5e639f
+--- /dev/null
++++ b/src/components/features/sidebar/athernull-checklist.tsx
+@@ -0,0 +1,123 @@
++import { useQuery } from "@tanstack/react-query";
++import { Check, ChevronDown } from "lucide-react";
++import { useState } from "react";
++import { NavigationLink } from "#/components/shared/navigation-link";
++import { usePaginatedConversations } from "#/hooks/query/use-paginated-conversations";
++import { cn } from "#/utils/utils";
++
++// AtherNull: the getting-started steps are AtherNull's own flow — talk to the
++// agent, turn it into a build, fund it, review the result — instead of the
++// upstream LLM / MCP / Slack checklist.
++
++const BUILDS_PAGE = "/extensions/athernull/builds";
++const MINIMIZED_KEY = "athernull-checklist-minimized";
++const FUNDED = new Set([
++  "FUNDED", "QUEUED", "RUNNING", "VERIFYING", "AWAITING_ACCEPTANCE", "ACCEPTED",
++  "SETTLING", "SETTLED", "REJECTED", "DISPUTED", "REFUNDING", "REFUNDED", "PAUSED_USAGE_LIMIT",
++]);
++const REVIEWED = new Set(["ACCEPTED", "SETTLING", "SETTLED", "REJECTED", "REFUNDING", "REFUNDED"]);
++
++interface BuildItem {
++  kind: "draft" | "build";
++  status: string;
++}
++
++function readMinimized(): boolean {
++  try {
++    return window.localStorage.getItem(MINIMIZED_KEY) === "1";
++  } catch {
++    return false;
++  }
++}
++
++export function AtherNullChecklist({ collapsed }: { collapsed: boolean }) {
++  const [minimized, setMinimized] = useState(readMinimized);
++  const { data: conversationPage } = usePaginatedConversations(1);
++  const { data: builds } = useQuery({
++    queryKey: ["athernull", "builds"],
++    queryFn: async (): Promise<BuildItem[]> => {
++      const res = await fetch("/v1/builds", { credentials: "same-origin" });
++      if (!res.ok) throw new Error(`builds ${res.status}`);
++      const body = await res.json();
++      return Array.isArray(body) ? body : (body.builds ?? []);
++    },
++    refetchInterval: 30_000,
++    meta: { disableToast: true },
++  });
++
++  const list = builds ?? [];
++  const steps = [
++    { label: "Talk to the agent", to: "/", done: (conversationPage?.pages[0]?.items.length ?? 0) > 0 },
++    { label: "Turn it into a build", to: BUILDS_PAGE, done: list.length > 0 },
++    { label: "Fund the build", to: BUILDS_PAGE, done: list.some((b) => b.kind === "build" && FUNDED.has(b.status)) },
++    { label: "Review and accept", to: BUILDS_PAGE, done: list.some((b) => b.kind === "build" && REVIEWED.has(b.status)) },
++  ];
++  const completed = steps.filter((s) => s.done).length;
++
++  if (collapsed || builds === undefined || completed === steps.length) return null;
++
++  const toggle = () => {
++    setMinimized((current) => {
++      try {
++        window.localStorage.setItem(MINIMIZED_KEY, current ? "0" : "1");
++      } catch {
++        // best-effort
++      }
++      return !current;
++    });
++  };
++
++  return (
++    <div
++      data-testid="athernull-checklist"
++      className="w-full shrink-0 overflow-hidden rounded-xl border border-border bg-surface-raised shadow-sm"
++    >
++      <div className={cn("px-1", minimized ? "py-1" : "pt-2 pb-1")}>
++        <button
++          type="button"
++          aria-expanded={!minimized}
++          onClick={toggle}
++          className={cn(
++            "flex w-full cursor-pointer items-center gap-2 rounded-md px-2 text-left transition-colors hover:bg-surface",
++            minimized ? "py-1" : "py-1.5",
++          )}
++        >
++          <span className="text-sm font-semibold text-content">Getting started</span>
++          <span className="text-xs text-muted">
++            {completed} of {steps.length}
++          </span>
++          <ChevronDown
++            aria-hidden
++            className={cn("ml-auto size-4 text-muted transition-transform", minimized && "-rotate-90")}
++          />
++        </button>
++      </div>
++      {!minimized ? (
++        <ol className="flex flex-col gap-0.5 px-2.5 pb-2">
++          {steps.map((step) => (
++            <li key={step.label}>
++              <NavigationLink
++                to={step.to}
++                className={cn(
++                  "flex min-w-0 w-full items-center gap-2.5 rounded-md px-2.5 py-1.5 text-sm transition-colors hover:bg-surface",
++                  step.done ? "text-muted" : "text-content",
++                )}
++              >
++                <span
++                  aria-hidden
++                  className={cn(
++                    "inline-flex size-4 shrink-0 items-center justify-center rounded-full border",
++                    step.done ? "border-primary bg-primary text-on-primary" : "border-border bg-transparent",
++                  )}
++                >
++                  {step.done ? <Check className="size-2.5" strokeWidth={3} /> : null}
++                </span>
++                <span className={cn("min-w-0 flex-1 truncate", step.done && "line-through")}>{step.label}</span>
++              </NavigationLink>
++            </li>
++          ))}
++        </ol>
++      ) : null}
++    </div>
++  );
++}
+diff --git a/src/components/features/sidebar/athernull-workspace-tile.tsx b/src/components/features/sidebar/athernull-workspace-tile.tsx
+new file mode 100644
+index 0000000..e45c963
+--- /dev/null
++++ b/src/components/features/sidebar/athernull-workspace-tile.tsx
+@@ -0,0 +1,31 @@
++import { useQuery } from "@tanstack/react-query";
++import { BackendStatusDot } from "#/components/features/backends/backend-status-dot";
++
++// AtherNull: the canvas always talks to the organization's own workspace
++// through AtherNull's gateway, so there is no backend to pick or add — the
++// footer just names the workspace and shows whether it is reachable.
++export function AtherNullWorkspaceTile({ isConnected }: { isConnected: boolean | null }) {
++  const { data: name } = useQuery({
++    queryKey: ["athernull", "workspace-name"],
++    queryFn: async () => {
++      const res = await fetch("/api/auth/organization/get-full-organization", { credentials: "same-origin" });
++      const org = res.ok ? await res.json() : null;
++      return (org?.name as string | undefined) ?? "Your workspace";
++    },
++    staleTime: Infinity,
++    meta: { disableToast: true },
++  });
++
++  return (
++    <div
++      data-testid="athernull-workspace-tile"
++      title={isConnected === false ? "Workspace unreachable" : "Workspace ready"}
++      className="flex min-w-0 items-center gap-2.5 rounded-md px-2.5 py-2 text-sm text-content"
++    >
++      <span className="relative inline-flex size-2 shrink-0">
++        <BackendStatusDot isConnected={isConnected} className="static" />
++      </span>
++      <span className="min-w-0 flex-1 truncate">{name ?? "Your workspace"}</span>
++    </div>
++  );
++}
+diff --git a/src/components/features/skills/add-skill-modal.tsx b/src/components/features/skills/add-skill-modal.tsx
+index 7d5011a..e7073b9 100644
+--- a/src/components/features/skills/add-skill-modal.tsx
++++ b/src/components/features/skills/add-skill-modal.tsx
+@@ -184,6 +184,8 @@ export function AddSkillModal({ onClose }: AddSkillModalProps) {
+             i18nKey={I18nKey.SETTINGS$SKILLS_ADD_MODAL_PRIVATE_REPOS}
+           />
+ 
++          {/* AtherNull: no external OpenHands docs. */}
++          {import.meta.env.VITE_ATHERNULL ? null : (
+           <a
+             href={ADD_SKILL_DOCS_URL}
+             target="_blank"
+@@ -193,6 +195,7 @@ export function AddSkillModal({ onClose }: AddSkillModalProps) {
+           >
+             {t(I18nKey.SETTINGS$SKILLS_ADD_MODAL_VIEW_DOCS)}
+           </a>
++          )}
+         </div>
+ 
+         <footer className="flex flex-shrink-0 justify-end gap-2 px-6 pb-6 pt-4">
+diff --git a/src/components/features/skills/skill-card.tsx b/src/components/features/skills/skill-card.tsx
+index 45282ae..1c4b199 100644
+--- a/src/components/features/skills/skill-card.tsx
++++ b/src/components/features/skills/skill-card.tsx
+@@ -15,6 +15,7 @@ import {
+   extensionModuleCardInteractiveClassName,
+   extensionModuleCardSurfaceClassName,
+ } from "#/utils/extension-module-card-classes";
++import { catalogSource } from "#/utils/athernull-catalog";
+ 
+ interface SkillCardProps {
+   skill: SkillInfo;
+@@ -91,9 +92,9 @@ export function SkillCard({
+                   <p
+                     data-testid={`skill-source-${skill.name}`}
+                     className="min-w-0 flex-1 truncate text-xs text-tertiary-alt"
+-                    title={skill.source}
++                    title={catalogSource(skill.source) ?? undefined}
+                   >
+-                    {skill.source}
++                    {catalogSource(skill.source)}
+                   </p>
+                   {showCopySource ? (
+                     <button
+diff --git a/src/components/features/skills/skill-detail-modal.tsx b/src/components/features/skills/skill-detail-modal.tsx
+index ee46099..f1103bf 100644
+--- a/src/components/features/skills/skill-detail-modal.tsx
++++ b/src/components/features/skills/skill-detail-modal.tsx
+@@ -18,6 +18,7 @@ import { isCopyableSkillSource } from "./is-copyable-skill-source";
+ import { SkillCardPillRow } from "./skill-card-pill-row";
+ import { getSkillChatLaunchMessage } from "./get-skill-chat-launch-message";
+ import { useLaunchSkillInChat } from "#/hooks/use-launch-skill-in-chat";
++import { catalogSource } from "#/utils/athernull-catalog";
+ 
+ interface SkillDetailModalProps {
+   skill: SkillInfo;
+@@ -117,9 +118,9 @@ export function SkillDetailModal({
+                 <p
+                   data-testid={`skill-modal-source-${skill.name}`}
+                   className="min-w-0 flex-1 truncate text-xs text-tertiary-alt"
+-                  title={skill.source}
++                  title={catalogSource(skill.source) ?? undefined}
+                 >
+-                  {skill.source}
++                  {catalogSource(skill.source)}
+                 </p>
+                 {showCopySource ? (
+                   <button
+diff --git a/src/constants/skills-docs.ts b/src/constants/skills-docs.ts
+index 9a9e99d..b216821 100644
+--- a/src/constants/skills-docs.ts
++++ b/src/constants/skills-docs.ts
+@@ -4,4 +4,4 @@ export const ADD_SKILL_DOCS_URL =
+ export const ADD_SKILL_SKILL_NAME = "add-skill";
+ 
+ export const ADD_SKILL_EXAMPLE_COMMAND =
+-  "/add-skill https://github.com/OpenHands/extensions/tree/main/skills/codereview";
++  "/add-skill https://github.com/<owner>/<repo>/tree/main/skills/<skill>";
+diff --git a/src/hooks/use-app-title.ts b/src/hooks/use-app-title.ts
+index 187721c..3f92353 100644
+--- a/src/hooks/use-app-title.ts
++++ b/src/hooks/use-app-title.ts
+@@ -3,7 +3,7 @@ import { useUserConversation } from "#/hooks/query/use-user-conversation";
+ import { useConversationStateStore } from "#/stores/conversation-state-store";
+ import { getAgentStateEmoji } from "#/utils/agent-state-emoji";
+ 
+-const APP_TITLE = "OpenHands";
++const APP_TITLE = "AtherNull";
+ 
+ export const useAppTitle = () => {
+   const { conversationId } = useParams<{ conversationId: string }>();
+diff --git a/src/routes/agent-settings.tsx b/src/routes/agent-settings.tsx
+index b94b1f1..bfc3033 100644
+--- a/src/routes/agent-settings.tsx
++++ b/src/routes/agent-settings.tsx
+@@ -910,7 +910,11 @@ export function AgentSettingsScreen({
+             key: "openhands",
+             label: t(I18nKey.SETTINGS$AGENT_TYPE_OPENHANDS),
+           },
+-          { key: "acp", label: t(I18nKey.SETTINGS$AGENT_TYPE_ACP) },
++          // AtherNull: only its own agent — external ACP agents would run
++          // outside funded builds and verification.
++          ...(import.meta.env.VITE_ATHERNULL
++            ? []
++            : [{ key: "acp", label: t(I18nKey.SETTINGS$AGENT_TYPE_ACP) }]),
+         ]}
+         selectedKey={agentType}
+         onSelectionChange={(key) => {
+diff --git a/src/routes/app-settings.tsx b/src/routes/app-settings.tsx
+index f88618a..5c882f8 100644
+--- a/src/routes/app-settings.tsx
++++ b/src/routes/app-settings.tsx
+@@ -250,12 +250,14 @@ export function AppSettingsScreen() {
+                 );
+               }}
+             />
+-            <NavigationLink
+-              to="/settings/llm"
+-              className="mt-3 inline-block text-sm text-primary hover:underline"
+-            >
+-              {t(I18nKey.SETTINGS$MANAGE_LLM_PROFILES)}
+-            </NavigationLink>
++            {import.meta.env.VITE_ATHERNULL ? null : (
++              <NavigationLink
++                to="/settings/llm"
++                className="mt-3 inline-block text-sm text-primary hover:underline"
++              >
++                {t(I18nKey.SETTINGS$MANAGE_LLM_PROFILES)}
++              </NavigationLink>
++            )}
+           </div>
+ 
+           <div className="border-t border-border pt-6 mt-2">
+diff --git a/src/routes/canvas-extensions.tsx b/src/routes/canvas-extensions.tsx
+index c9e0747..60f03c1 100644
+--- a/src/routes/canvas-extensions.tsx
++++ b/src/routes/canvas-extensions.tsx
+@@ -94,15 +94,18 @@ export default function CanvasExtensionsScreen() {
+               <p className="max-w-2xl text-sm text-tertiary-light">
+                 {t(I18nKey.SETTINGS$APPS_PAGE_DESCRIPTION)}
+               </p>
+-              <a
+-                href={CANVAS_EXTENSIONS_DOCS_URL}
+-                target="_blank"
+-                rel="noopener noreferrer"
+-                className="inline-flex items-center gap-1 text-sm text-primary hover:underline"
+-              >
+-                {t(I18nKey.SETTINGS$APPS_BUILD_LINK)}
+-                <ExternalLink className="size-3.5" aria-hidden />
+-              </a>
++              {/* AtherNull: no external OpenHands docs. */}
++              {import.meta.env.VITE_ATHERNULL ? null : (
++                <a
++                  href={CANVAS_EXTENSIONS_DOCS_URL}
++                  target="_blank"
++                  rel="noopener noreferrer"
++                  className="inline-flex items-center gap-1 text-sm text-primary hover:underline"
++                >
++                  {t(I18nKey.SETTINGS$APPS_BUILD_LINK)}
++                  <ExternalLink className="size-3.5" aria-hidden />
++                </a>
++              )}
+             </div>
+             <BrandButton
+               type="button"
+diff --git a/src/services/settings.ts b/src/services/settings.ts
+index f1a5533..cb2704c 100644
+--- a/src/services/settings.ts
++++ b/src/services/settings.ts
+@@ -28,8 +28,8 @@ export const DEFAULT_SETTINGS: Settings = {
+   max_budget_per_task: null,
+   email: "",
+   email_verified: true,
+-  git_user_name: "openhands",
+-  git_user_email: "openhands@all-hands.dev",
++  git_user_name: "AtherNull Agent",
++  git_user_email: "agent@athernull.io",
+   title_llm_profile: null,
+   agent_settings_schema: null,
+   agent_settings: {
+diff --git a/src/themes/color-themes.ts b/src/themes/color-themes.ts
+index fb9e470..f9722a5 100644
+--- a/src/themes/color-themes.ts
++++ b/src/themes/color-themes.ts
+@@ -107,7 +107,7 @@ const NEO_WHITE_BUTTON_TOKENS: Record<
+ 
+ export const COLOR_THEMES: Record<ColorThemeKey, ColorThemeDefinition> = {
+   "openhands-deepsea": {
+-    label: "OpenHands-DeepSea",
++    label: "DeepSea",
+     // Matches the values already set by index.css; included so switching back
+     // from another theme restores the original palette explicitly.
+     scale: {
+@@ -165,7 +165,7 @@ export const COLOR_THEMES: Record<ColorThemeKey, ColorThemeDefinition> = {
+   },
+ 
+   "openhands-neutral": {
+-    label: "OpenHands-Neutral",
++    label: "Neutral",
+     scale: NEUTRAL_SCALE,
+     // Each stop follows the same positional mapping as hero.ts:
+     //   heroui-default-100 ← cool-grey-950 position ← neutral-950 (#181818)
+@@ -175,7 +175,7 @@ export const COLOR_THEMES: Record<ColorThemeKey, ColorThemeDefinition> = {
+   },
+ 
+   "openhands-neo": {
+-    label: "OpenHands-Neo",
++    label: "Neo",
+     scale: NEUTRAL_SCALE,
+     heroui: NEUTRAL_HEROUI,
+     tokens: NEO_WHITE_BUTTON_TOKENS,
+diff --git a/src/utils/athernull-catalog.ts b/src/utils/athernull-catalog.ts
+new file mode 100644
+index 0000000..dd9c3c8
+--- /dev/null
++++ b/src/utils/athernull-catalog.ts
+@@ -0,0 +1,39 @@
++// AtherNull: the skills and plugins catalogs come from the public OpenHands
++// extensions registry. Entries about the OpenHands platform itself (its SDK,
++// Cloud, Enterprise, REST API) mean nothing to an AtherNull user and are
++// hidden; generic entries stay, with their copy and sandbox paths shown in
++// AtherNull terms. Only display text changes — names and sources used to
++// install or enable an entry are left as they are.
++
++const ATHERNULL = Boolean(import.meta.env.VITE_ATHERNULL);
++
++const PLATFORM_ENTRY =
++  /openhands[\s-]*(software agent )?(sdk|cloud|enterprise|api|automation|agent sdk)|all-hands|agent canvas|\bOHE\b/i;
++
++export function isHiddenCatalogEntry(name: string, description?: string | null): boolean {
++  if (!ATHERNULL) return false;
++  return /openhands|agent-canvas/i.test(name) || PLATFORM_ENTRY.test(description ?? "");
++}
++
++/** Catalog copy in AtherNull terms. */
++export function catalogText<T extends string | null | undefined>(text: T): T {
++  if (!ATHERNULL || !text) return text;
++  return text.replace(/\bOpen ?Hands\b/gi, "AtherNull") as T;
++}
++
++/** The catalog an AtherNull user sees: platform entries hidden, copy rebranded. */
++export function brandCatalog<T extends { name: string; description?: string | null }>(entries: T[]): T[] {
++  if (!ATHERNULL) return entries;
++  return entries
++    .filter((entry) => !isHiddenCatalogEntry(entry.name, entry.description))
++    .map((entry) => ({ ...entry, description: catalogText(entry.description) }));
++}
++
++/** Where an entry lives, without the sandbox's internal cache path. */
++export function catalogSource<T extends string | null | undefined>(source: T): T {
++  if (!ATHERNULL || !source) return source;
++  return source
++    .replace(/^\/home\/[^/]+\/\.openhands\/cache\/skills\/public-skills\//, "registry/")
++    .replace(/^\/home\/[^/]+\/\.openhands\//, "~/")
++    .replace(/OpenHands\/extensions/g, "extensions") as T;
++}
+diff --git a/src/utils/format-model-name.ts b/src/utils/format-model-name.ts
+index b2789a7..92a0035 100644
+--- a/src/utils/format-model-name.ts
++++ b/src/utils/format-model-name.ts
+@@ -8,7 +8,7 @@ export const FREE_MODEL_SUFFIX = " (free)";
+  * status still comes only from the backend-provided `freeModels` set.
+  */
+ export const FREE_OPENHANDS_MODELS = {
+-  "openhands/deepseek-v4-flash": "OpenHands DeepSeek V4 Flash",
++  "openhands/deepseek-v4-flash": "DeepSeek V4 Flash",
+ } as const;
+ 
+ export const FREE_OPENHANDS_MODEL_IDS = Object.keys(FREE_OPENHANDS_MODELS);
+diff --git a/src/utils/map-provider.ts b/src/utils/map-provider.ts
+index d68a8e7..537b40b 100644
+--- a/src/utils/map-provider.ts
++++ b/src/utils/map-provider.ts
+@@ -23,7 +23,7 @@ export const MAP_PROVIDER = {
+   replicate: "Replicate",
+   voyage: "Voyage AI",
+   openrouter: "OpenRouter",
+-  openhands: "OpenHands",
++  openhands: "AtherNull",
+   lemonade: "Lemonade",
+   clarifai: "Clarifai",
+   moonshot: "Moonshot",

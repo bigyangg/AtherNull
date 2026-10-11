@@ -21,7 +21,7 @@ index c5e75dc..1ead402 100644
    // Recommended automations are a local-backend-only feature; cloud
    // automations are managed elsewhere.
 diff --git a/src/components/features/command-menu/command-menu-items.tsx b/src/components/features/command-menu/command-menu-items.tsx
-index 3328a6f..d8621ee 100644
+index 3328a6f..733979f 100644
 --- a/src/components/features/command-menu/command-menu-items.tsx
 +++ b/src/components/features/command-menu/command-menu-items.tsx
 @@ -17,7 +17,7 @@ import { I18nKey } from "#/i18n/declaration";
@@ -42,6 +42,20 @@ index 3328a6f..d8621ee 100644
        ? [
            {
              id: "automations" as const,
+@@ -222,9 +222,11 @@ export const createCommandMenuItems = ({
+ 
+   return items.filter(
+     (item) =>
+-      !isLockedToCloud ||
++      // AtherNull manages the LLM: no LLM settings page to jump to.
++      !(import.meta.env.VITE_ATHERNULL && item.to === COMMAND_MENU_ROUTE.llmSettings) &&
++      (!isLockedToCloud ||
+       item.group !== "settings" ||
+       item.to === COMMAND_MENU_ROUTE.settings ||
+-      item.to === LOCKED_CLOUD_SETTINGS_NAV_PATH,
++      item.to === LOCKED_CLOUD_SETTINGS_NAV_PATH),
+   );
+ };
 diff --git a/src/components/features/home/home-chat-launcher.tsx b/src/components/features/home/home-chat-launcher.tsx
 index 3be6692..2581a3c 100644
 --- a/src/components/features/home/home-chat-launcher.tsx
@@ -87,7 +101,7 @@ index 3853e18..86336b1 100644
      return (
        window.localStorage.getItem(ONBOARDING_COMPLETED_STORAGE_KEY) !== null
 diff --git a/src/components/features/sidebar/sidebar-rail-body.tsx b/src/components/features/sidebar/sidebar-rail-body.tsx
-index d30796e..eef7fe6 100644
+index d30796e..8d66775 100644
 --- a/src/components/features/sidebar/sidebar-rail-body.tsx
 +++ b/src/components/features/sidebar/sidebar-rail-body.tsx
 @@ -14,7 +14,7 @@ import { getLockedCloudHost } from "#/api/agent-server-config";
@@ -99,7 +113,16 @@ index d30796e..eef7fe6 100644
  } from "#/manifests/automation-interface";
  import {
    CUSTOMIZE_PATH,
-@@ -251,7 +251,7 @@ export function SidebarRailBody({
+@@ -31,6 +31,8 @@ import { CommandMenuTrigger } from "#/components/features/command-menu/command-m
+ import { AgentCanvasVersionTile } from "#/components/features/settings/agent-canvas-version-tile";
+ import { SidebarConversationList } from "./sidebar-conversation-list";
+ import { SidebarOnboardingChecklist } from "./sidebar-onboarding-checklist";
++import { AtherNullChecklist } from "./athernull-checklist";
++import { AtherNullWorkspaceTile } from "./athernull-workspace-tile";
+ import AutomationsIcon from "#/icons/automations.svg?react";
+ import {
+   SIDEBAR_COLLAPSE_TOGGLE_OVERLAY_CLASS,
+@@ -251,7 +253,7 @@ export function SidebarRailBody({
          />
          {/* The interface manifest owns this entry's label, so an absent
              manifest leaves the rail without it rather than with host copy. */}
@@ -108,6 +131,65 @@ index d30796e..eef7fe6 100644
            <SidebarNavLink
              to={automationListPath()}
              label={getInterfaceCopy().sidebarLabel}
+@@ -373,15 +375,21 @@ export function SidebarRailBody({
+                 className="absolute bottom-[-4px] left-full pl-2.5 z-40 w-68"
+                 onClick={(event) => event.stopPropagation()}
+               >
+-                <BackendSelector
+-                  sidebarCollapsed={collapsed}
+-                  hideTrigger
+-                  defaultOpen
+-                  openUpward
+-                  onSelectOption={() => setCollapsedBackendPopoverOpen(false)}
+-                  onOpenAddBackend={onOpenAddBackend}
+-                  onOpenManageBackends={onOpenManageBackends}
+-                />
++                {import.meta.env.VITE_ATHERNULL ? (
++                  <div className="rounded-xl border border-border bg-surface-raised shadow-xl">
++                    <AtherNullWorkspaceTile isConnected={activeBackendHealth?.isConnected ?? null} />
++                  </div>
++                ) : (
++                  <BackendSelector
++                    sidebarCollapsed={collapsed}
++                    hideTrigger
++                    defaultOpen
++                    openUpward
++                    onSelectOption={() => setCollapsedBackendPopoverOpen(false)}
++                    onOpenAddBackend={onOpenAddBackend}
++                    onOpenManageBackends={onOpenManageBackends}
++                  />
++                )}
+               </div>
+             ) : null}
+           </div>
+@@ -391,7 +399,11 @@ export function SidebarRailBody({
+       {!collapsed ? (
+         <>
+           <div className="mb-2 shrink-0 pr-2.5">
+-            <SidebarOnboardingChecklist collapsed={collapsed} />
++            {import.meta.env.VITE_ATHERNULL ? (
++              <AtherNullChecklist collapsed={collapsed} />
++            ) : (
++              <SidebarOnboardingChecklist collapsed={collapsed} />
++            )}
+           </div>
+           <div
+             className={cn(
+@@ -399,8 +411,12 @@ export function SidebarRailBody({
+               "-ml-2.5 w-[calc(100%+0.625rem)] border-t border-border pt-2 px-2.5",
+             )}
+           >
+-            <AgentCanvasVersionTile hideWhenUpToDate />
+-            <BackendSelector sidebarCollapsed={collapsed} openUpward />
++            {import.meta.env.VITE_ATHERNULL ? null : <AgentCanvasVersionTile hideWhenUpToDate />}
++            {import.meta.env.VITE_ATHERNULL ? (
++              <AtherNullWorkspaceTile isConnected={activeBackendHealth?.isConnected ?? null} />
++            ) : (
++              <BackendSelector sidebarCollapsed={collapsed} openUpward />
++            )}
+           </div>
+         </>
+       ) : null}
 diff --git a/src/components/features/sidebar/use-sidebar-onboarding-checklist.ts b/src/components/features/sidebar/use-sidebar-onboarding-checklist.ts
 index 410192d..8bdc963 100644
 --- a/src/components/features/sidebar/use-sidebar-onboarding-checklist.ts

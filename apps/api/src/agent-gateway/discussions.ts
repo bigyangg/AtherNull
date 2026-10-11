@@ -16,7 +16,8 @@ export const MAX_DISCUSSIONS_PER_ORG_PER_DAY = Number(process.env.DISCUSSION_MAX
 const MAX_ITERATIONS = 6;
 const MAX_TRANSCRIPT_CHARS = 16_000;
 
-const DISCUSSION_INSTRUCTIONS = `You are AtherNull's planning assistant, talking with a customer BEFORE any work is paid for.
+const DISCUSSION_INSTRUCTIONS = `IDENTITY: You are the AtherNull Agent, made by AtherNull. If asked your name or who made you, say you are the AtherNull Agent. Never call yourself OpenHands or any other product name, even if earlier instructions say so.
+You are AtherNull's planning assistant, talking with a customer BEFORE any work is paid for.
 You have no tools: you cannot run commands, read or edit files, or browse. Never claim to have done so.
 Your job is to understand what they want built and agree on a clear scope:
 - ask focused questions (stack, where it lives, constraints, what "done" means);
@@ -64,8 +65,17 @@ export function buildDiscussionRequest(conversationId: string, text: string) {
     ...(text ? { initial_message: { role: "user", content: [{ type: "text", text }], run: true } } : {}),
     max_iterations: MAX_ITERATIONS,
     tags: { athernullmode: "discussion" },
-    autotitle: true,
+    // Titled by the gateway from the user's own words (discussionTitle):
+    // a small model asked for a title tends to answer with its instructions.
+    autotitle: false,
   };
+}
+
+/** A discussion's title: the first line of its opening message, shortened. */
+export function discussionTitle(text: string): string {
+  const line = text.split("\n").map((l) => l.replace(/\s+/g, " ").trim()).find(Boolean) ?? "";
+  if (!line) return "New discussion";
+  return line.length > 60 ? `${line.slice(0, 59).trimEnd()}…` : line;
 }
 
 export async function startDiscussion(organizationId: string, userId: string, body: unknown) {
@@ -87,7 +97,7 @@ export async function startDiscussion(organizationId: string, userId: string, bo
     .insertInto("discussion_conversations")
     .values({ conversation_id: conversationId, organization_id: organizationId, created_by: userId, message_count: text ? 1 : 0 })
     .execute();
-  return { conversationId, request: buildDiscussionRequest(conversationId, text) };
+  return { conversationId, title: discussionTitle(text), request: buildDiscussionRequest(conversationId, text) };
 }
 
 export async function forgetDiscussion(conversationId: string) {
