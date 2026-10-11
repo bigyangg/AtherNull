@@ -1,12 +1,56 @@
+diff --git a/src/components/features/automations/recommended-automations-launcher.tsx b/src/components/features/automations/recommended-automations-launcher.tsx
+index c5e75dc..1ead402 100644
+--- a/src/components/features/automations/recommended-automations-launcher.tsx
++++ b/src/components/features/automations/recommended-automations-launcher.tsx
+@@ -26,7 +26,7 @@ import { InstallServerModal } from "#/components/features/mcp-page/install-serve
+ import { useTracking } from "#/hooks/use-tracking";
+ import {
+   automationSetupPath,
+-  hasAutomationInterface,
++  showAutomationSurfaces,
+ } from "#/manifests/automation-interface";
+ import { SETUP_REGISTRY } from "#/manifests/manifest-sources";
+ import {
+@@ -271,7 +271,7 @@ export function RecommendedAutomationsLauncher({
+ 
+   // Like every automation surface, the launcher renders only behind the
+   // interface-manifest gate; New Chat mounts it outside the gated routes.
+-  if (!hasAutomationInterface()) return null;
++  if (!showAutomationSurfaces()) return null;
+ 
+   // Recommended automations are a local-backend-only feature; cloud
+   // automations are managed elsewhere.
+diff --git a/src/components/features/command-menu/command-menu-items.tsx b/src/components/features/command-menu/command-menu-items.tsx
+index 3328a6f..d8621ee 100644
+--- a/src/components/features/command-menu/command-menu-items.tsx
++++ b/src/components/features/command-menu/command-menu-items.tsx
+@@ -17,7 +17,7 @@ import { I18nKey } from "#/i18n/declaration";
+ import {
+   automationListPath,
+   getInterfaceCopy,
+-  hasAutomationInterface,
++  showAutomationSurfaces,
+ } from "#/manifests/automation-interface";
+ import { getLockedCloudHost } from "#/api/agent-server-config";
+ import { LOCKED_CLOUD_SETTINGS_NAV_PATH } from "#/constants/settings-nav";
+@@ -120,7 +120,7 @@ export const createCommandMenuItems = ({
+     },
+     // The automation interface owns this entry's copy, so an absent manifest
+     // leaves the command menu without it rather than with host copy.
+-    ...(hasAutomationInterface()
++    ...(showAutomationSurfaces()
+       ? [
+           {
+             id: "automations" as const,
 diff --git a/src/components/features/home/home-chat-launcher.tsx b/src/components/features/home/home-chat-launcher.tsx
-index 3be6692..078314a 100644
+index 3be6692..2581a3c 100644
 --- a/src/components/features/home/home-chat-launcher.tsx
 +++ b/src/components/features/home/home-chat-launcher.tsx
 @@ -33,6 +33,7 @@ import type { PluginSpec } from "#/api/conversation-service/agent-server-convers
  import { PluginPickerModal } from "#/components/features/plugins/plugin-picker-modal";
  import { PluginPickerTrigger } from "#/components/features/plugins/plugin-picker-trigger";
  import { RecommendedAutomationsLauncher } from "#/components/features/automations/recommended-automations-launcher";
-+import { hasAutomationInterface } from "#/manifests/automation-interface";
++import { showAutomationSurfaces } from "#/manifests/automation-interface";
  import { PinnedAutomationsDashboard } from "./featured-automations/pinned-automations-dashboard";
  import { RunningAutomationsList } from "./featured-automations/running-automations-list";
  import { HomeHeaderTitle } from "./home-header/home-header-title";
@@ -19,7 +63,7 @@ index 3be6692..078314a 100644
 -          <PinnedAutomationsDashboard />
 -          <RunningAutomationsList />
 -        </div>
-+        {hasAutomationInterface() && (
++        {showAutomationSurfaces() && (
 +          <div className="mt-8 flex w-full flex-col gap-8">
 +            <RecommendedAutomationsLauncher variant="rail" />
 +            <PinnedAutomationsDashboard />
@@ -29,6 +73,41 @@ index 3be6692..078314a 100644
        </div>
  
        {isLocal ? (
+diff --git a/src/components/features/onboarding/use-onboarding-completion.ts b/src/components/features/onboarding/use-onboarding-completion.ts
+index 3853e18..86336b1 100644
+--- a/src/components/features/onboarding/use-onboarding-completion.ts
++++ b/src/components/features/onboarding/use-onboarding-completion.ts
+@@ -9,6 +9,8 @@ export const ONBOARDING_COMPLETED_STORAGE_KEY = "openhands-onboarded";
+ 
+ function readCompletedFromStorage(): boolean {
+   if (typeof window === "undefined") return true;
++  // AtherNull: the workspace provisioner already chose the agent and LLM.
++  if (import.meta.env.VITE_ATHERNULL) return true;
+   try {
+     return (
+       window.localStorage.getItem(ONBOARDING_COMPLETED_STORAGE_KEY) !== null
+diff --git a/src/components/features/sidebar/sidebar-rail-body.tsx b/src/components/features/sidebar/sidebar-rail-body.tsx
+index d30796e..eef7fe6 100644
+--- a/src/components/features/sidebar/sidebar-rail-body.tsx
++++ b/src/components/features/sidebar/sidebar-rail-body.tsx
+@@ -14,7 +14,7 @@ import { getLockedCloudHost } from "#/api/agent-server-config";
+ import {
+   automationListPath,
+   getInterfaceCopy,
+-  hasAutomationInterface,
++  showAutomationSurfaces,
+ } from "#/manifests/automation-interface";
+ import {
+   CUSTOMIZE_PATH,
+@@ -251,7 +251,7 @@ export function SidebarRailBody({
+         />
+         {/* The interface manifest owns this entry's label, so an absent
+             manifest leaves the rail without it rather than with host copy. */}
+-        {hasAutomationInterface() && (
++        {showAutomationSurfaces() && (
+           <SidebarNavLink
+             to={automationListPath()}
+             label={getInterfaceCopy().sidebarLabel}
 diff --git a/src/components/features/sidebar/use-sidebar-onboarding-checklist.ts b/src/components/features/sidebar/use-sidebar-onboarding-checklist.ts
 index 410192d..8bdc963 100644
 --- a/src/components/features/sidebar/use-sidebar-onboarding-checklist.ts
@@ -68,20 +147,23 @@ index 762b036..baedd93 100644
      // rather than sitting through exponential backoff.
      retry: false,
 diff --git a/src/manifests/automation-interface.ts b/src/manifests/automation-interface.ts
-index 18b04ab..5742e19 100644
+index 18b04ab..924cb3a 100644
 --- a/src/manifests/automation-interface.ts
 +++ b/src/manifests/automation-interface.ts
-@@ -81,7 +81,12 @@ function admitInterfaceManifest(candidate: unknown): InterfaceManifest | null {
-   return candidate as InterfaceManifest;
+@@ -91,6 +91,16 @@ export function hasAutomationInterface(): boolean {
+   return ADMITTED !== null;
  }
  
--const ADMITTED = admitInterfaceManifest(AUTOMATION_INTERFACE_CANDIDATE);
-+// AtherNull: automations start agent runs outside a funded build (they call
-+// the sandbox directly on a schedule or webhook), which AtherNull does not
-+// allow, so the deployment has no automation interface.
-+const ADMITTED = import.meta.env.VITE_ATHERNULL
-+  ? null
-+  : admitInterfaceManifest(AUTOMATION_INTERFACE_CANDIDATE);
- 
++/**
++ * AtherNull: automations start agent runs outside a funded build (they call
++ * the sandbox directly on a schedule or webhook), which AtherNull does not
++ * allow — so their entry points are hidden. The manifest stays admitted so
++ * code that merely builds paths/endpoints keeps working.
++ */
++export function showAutomationSurfaces(): boolean {
++  return hasAutomationInterface() && !import.meta.env.VITE_ATHERNULL;
++}
++
  /**
-  * Whether this deployment has an automation interface at all. The nav entries
+  * The admitted manifest, for the accessors that cannot answer without one.
+  * Reaching one of those without a manifest means a surface rendered past its

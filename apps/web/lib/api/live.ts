@@ -7,6 +7,7 @@ import type {
 } from "@athernull/contracts";
 import type {
   AgentProfile,
+  BuildListItem,
   BuildPatch,
   Discussion,
   BudgetAuthorization,
@@ -448,6 +449,10 @@ export const liveApi: TaskDashboardApi = {
 
   listDiscussions() {
     return apiFetch<Discussion[]>("/v1/discussions");
+  },
+
+  listBuilds() {
+    return apiFetch<BuildListItem[]>("/v1/builds");
   },
 
   async getBuildPatch(taskId: string) {

@@ -1,8 +1,8 @@
 diff --git a/src/entry.client.tsx b/src/entry.client.tsx
-index 8e72274..d109117 100644
+index 8e72274..4421d67 100644
 --- a/src/entry.client.tsx
 +++ b/src/entry.client.tsx
-@@ -14,7 +14,39 @@ import {
+@@ -14,7 +14,117 @@ import {
  import { waitForI18n } from "./i18n";
  import { shouldStartMockWorker } from "./mocks/should-start-mock-worker";
  
@@ -25,16 +25,94 @@ index 8e72274..d109117 100644
 +    window.location.assign(`/sign-in?callbackURL=${encodeURIComponent(back)}`);
 +    await new Promise(() => {});
 +  }
-+  // Signed in, but the organization has no agent sandbox yet: AtherNull
-+  // explains that, instead of the canvas showing a disconnected backend.
-+  const probeUrl = import.meta.env.VITE_ATHERNULL_SANDBOX_PROBE_URL;
-+  if (probeUrl) {
-+    const probe = await fetch(probeUrl, { credentials: "same-origin" }).catch(() => null);
-+    if (probe?.status === 503) {
-+      window.location.assign("/dashboard?sandbox=missing");
++  if (import.meta.env.VITE_ATHERNULL_SANDBOX_URL) {
++    await ensureActiveOrganization();
++    await ensureAgentWorkspace(import.meta.env.VITE_ATHERNULL_SANDBOX_URL);
++  }
++}
++
++// JSON content-type only with a body: Fastify rejects an empty JSON body.
++const sameOrigin = (url: string, init: RequestInit = {}) =>
++  fetch(url, {
++    credentials: "same-origin",
++    ...init,
++    headers: { ...(init.body ? { "content-type": "application/json" } : {}), ...(init.headers ?? {}) },
++  });
++
++// A new account has no organization yet: use one the user already belongs
++// to, or create their personal workspace.
++async function ensureActiveOrganization() {
++  const session = await (await sameOrigin("/api/auth/get-session")).json().catch(() => null);
++  if (session?.session?.activeOrganizationId) return;
++  const orgs: { id: string }[] = await (await sameOrigin("/api/auth/organization/list")).json().catch(() => []);
++  if (orgs.length > 0) {
++    await sameOrigin("/api/auth/organization/set-active", { method: "POST", body: JSON.stringify({ organizationId: orgs[0]!.id }) });
++    return;
++  }
++  const name = session?.user?.name ? `${session.user.name}'s workspace` : "My workspace";
++  const slug = `ws-${crypto.randomUUID().slice(0, 8)}`;
++  await sameOrigin("/api/auth/organization/create", { method: "POST", body: JSON.stringify({ name, slug }) });
++}
++
++// The organization's agent workspace (sandbox) is created on demand by
++// AtherNull's provisioner; show a setup screen until it is ready.
++async function ensureAgentWorkspace(stateUrl: string) {
++  const read = async () => (await sameOrigin(stateUrl)).json() as Promise<{ status: string; error: string | null }>;
++  let state = await read().catch(() => ({ status: "NONE", error: null }));
++  if (state.status === "READY") return;
++  const screen = setupScreen();
++  for (;;) {
++    if (state.status === "NONE" || state.status === "FAILED") {
++      if (state.status === "FAILED") {
++        await screen.failed(state.error ?? "Workspace setup failed.");
++      }
++      const res = await sameOrigin(stateUrl, { method: "POST" }).catch(() => null);
++      const body = res ? await res.json().catch(() => null) : null;
++      state = res?.ok && body?.status ? body : { status: "FAILED", error: body?.error ?? "Could not request a workspace." };
++      if (state.status === "FAILED") continue;
++    }
++    if (state.status === "READY") {
++      window.location.reload();
 +      await new Promise(() => {});
 +    }
++    screen.progress(state.status);
++    await new Promise((resolve) => setTimeout(resolve, 2000));
++    state = await read().catch(() => state);
 +  }
++}
++
++function setupScreen() {
++  const root = document.createElement("div");
++  root.style.cssText =
++    "position:fixed;inset:0;z-index:2147483647;display:flex;align-items:center;justify-content:center;background:#0d0d0f;color:#f2f2f0;font:14px/1.5 ui-sans-serif,system-ui,-apple-system,'Segoe UI',sans-serif";
++  root.innerHTML = `
++    <div style="width:min(420px,calc(100vw - 32px));text-align:center">
++      <img src="${import.meta.env.BASE_URL}favicon.svg" alt="" width="40" height="40" style="margin:0 auto 20px;display:block" />
++      <div style="font-size:18px;font-weight:600">Setting up your workspace</div>
++      <div data-detail style="margin-top:8px;color:#8b8b8f">Starting your private agent sandbox. This takes about a minute the first time.</div>
++      <div style="margin:24px auto 0;height:3px;width:160px;overflow:hidden;border-radius:3px;background:#232326">
++        <div style="height:100%;width:40%;background:#f2f2f0;border-radius:3px;animation:athernull-slide 1.2s ease-in-out infinite"></div>
++      </div>
++      <button data-retry style="display:none;margin:20px auto 0;padding:8px 14px;border-radius:8px;border:0;background:#f2f2f0;color:#141414;font-weight:600;cursor:pointer">Try again</button>
++    </div>
++    <style>@keyframes athernull-slide{0%{transform:translateX(-100%)}100%{transform:translateX(250%)}}</style>`;
++  document.body.append(root);
++  const detail = root.querySelector<HTMLElement>("[data-detail]")!;
++  const retry = root.querySelector<HTMLButtonElement>("[data-retry]")!;
++  return {
++    progress(status: string) {
++      retry.style.display = "none";
++      detail.textContent =
++        status === "PROVISIONING"
++          ? "Starting your private agent sandbox and installing AtherNull Builds…"
++          : "Starting your private agent sandbox. This takes about a minute the first time.";
++    },
++    failed(message: string) {
++      detail.textContent = `Setup failed: ${message}`;
++      retry.style.display = "block";
++      return new Promise<void>((resolve) => retry.addEventListener("click", () => resolve(), { once: true }));
++    },
++  };
 +}
 +
  async function prepareApp() {

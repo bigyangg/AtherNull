@@ -11,7 +11,7 @@ import type { FastifyInstance } from "fastify";
 import type { Selectable } from "kysely";
 import { z } from "zod";
 
-import { discussionPlannerPrompt } from "../agent-gateway/discussions.js";
+import { discussionPlannerPrompt, markDiscussionPlanned } from "../agent-gateway/discussions.js";
 import { db } from "../db.js";
 import { PlannerError, generatePlannerOutput } from "../planner.js";
 import { priceEstimate } from "../pricing/engine.js";
@@ -196,6 +196,7 @@ export async function estimateRoutes(app: FastifyInstance) {
         .returningAll()
         .executeTakeFirstOrThrow();
 
+      if (body.discussionId) await markDiscussionPlanned(body.discussionId, organizationId, inserted.lineage_id);
       reply.status(201).send(toEstimateResponse(inserted));
     } catch (err) {
       if (sendHttpError(reply, err)) return;

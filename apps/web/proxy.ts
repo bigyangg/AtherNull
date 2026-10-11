@@ -50,6 +50,11 @@ export function proxy(request: NextRequest) {
     return NextResponse.redirect(new URL(APP_HOME, request.url));
   }
 
+  // The card dashboard predates the canvas; Builds replaced it.
+  if (pathname === "/dashboard") {
+    return NextResponse.redirect(new URL("/builds", request.url));
+  }
+
   return NextResponse.next();
 }
 

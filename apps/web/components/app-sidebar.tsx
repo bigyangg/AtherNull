@@ -5,6 +5,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
   Gauge,
+  Hammer,
   LayoutDashboard,
   Menu,
   FolderGit2,
@@ -22,7 +23,8 @@ import { useNeedsReviewCount } from "@/lib/hooks/use-needs-review-count";
 import { useEmbeddedInCanvas } from "@/lib/use-embedded";
 
 const NAV_ITEMS = [
-  { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
+  { href: "/canvas", label: "Canvas", icon: LayoutDashboard },
+  { href: "/builds", label: "Builds", icon: Hammer },
   { href: "/projects", label: "Projects", icon: FolderGit2, showReviewBadge: true },
   { href: "/skill-sets", label: "Skill sets", icon: Wrench },
   { href: "/usage", label: "Usage", icon: Gauge },
@@ -30,19 +32,25 @@ const NAV_ITEMS = [
 ] as const;
 
 function isActive(pathname: string, href: string): boolean {
-  return href === "/dashboard" ? pathname === href : pathname.startsWith(href);
+  return pathname === href || pathname.startsWith(`${href}/`);
+}
+
+// /canvas is the Agent Canvas, a separate app on this origin: a plain
+// anchor (full page load), never a client-side Next.js transition.
+function NavAnchor(props: React.ComponentProps<typeof Link>) {
+  return String(props.href).startsWith("/canvas") ? <a {...(props as React.ComponentProps<"a">)} /> : <Link {...props} />;
 }
 
 function BrandMark() {
   return (
-    <Link
-      href="/dashboard"
+    <NavAnchor
+      href="/canvas"
       className="flex items-center gap-2 px-4 py-4 text-sm font-semibold"
       aria-label="AtherNull home"
     >
       <Image src="/brand/athernull-icon.png" alt="" width={20} height={20} />
       AtherNull
-    </Link>
+    </NavAnchor>
   );
 }
 
@@ -55,7 +63,7 @@ function NavList({ pathname, onNavigate }: { pathname: string; onNavigate?: () =
         const active = isActive(pathname, href);
         const showBadge = "showReviewBadge" in rest && rest.showReviewBadge && needsReviewCount > 0;
         return (
-          <Link
+          <NavAnchor
             key={href}
             href={href}
             onClick={onNavigate}
@@ -71,7 +79,7 @@ function NavList({ pathname, onNavigate }: { pathname: string; onNavigate?: () =
                 {needsReviewCount}
               </Badge>
             )}
-          </Link>
+          </NavAnchor>
         );
       })}
     </nav>
@@ -126,7 +134,7 @@ export function AppSidebar() {
           </SheetContent>
         </Sheet>
         <Link
-          href="/dashboard"
+          href="/canvas"
           className="flex items-center gap-2 text-sm font-semibold"
           aria-label="AtherNull home"
         >

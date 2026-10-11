@@ -386,6 +386,7 @@ export function formatMinor(minor: number, currency: string): string {
 // ADR-0016 — a tool-less, pre-funding discussion started in the canvas.
 export interface Discussion {
   id: string;
+  plannedLineageId: string | null;
   title: string | null;
   messageCount: number;
   createdAt: string;
@@ -406,4 +407,15 @@ export interface BuildPatch {
   insertions: number;
   deletions: number;
   capturedAt: string;
+}
+
+// GET /v1/builds — drafts (a plan with no build yet) and builds (tasks).
+export interface BuildListItem {
+  kind: "draft" | "build";
+  id: string; // lineage id for drafts, task id for builds
+  projectId: string;
+  repository: string;
+  title: string;
+  status: string;
+  updatedAt: string;
 }

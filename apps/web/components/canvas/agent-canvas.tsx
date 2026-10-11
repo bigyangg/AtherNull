@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { CheckCircle2, Coins, ExternalLink, Loader2, RotateCcw, XCircle } from "lucide-react";
 
@@ -57,6 +57,12 @@ import type {
 // --- Layout ----------------------------------------------------------------
 
 const DESKTOP_QUERY = "(min-width: 1024px)";
+
+// Compact = rendered inside a side panel (the Builds page): always the
+// single-column layout with tabs, sized to its container.
+const CompactContext = createContext(false);
+const useCompact = () => useContext(CompactContext);
+const fullHeight = (compact: boolean) => (compact ? "h-full" : "h-screen");
 
 function useIsDesktop(): boolean {
   return useSyncExternalStore(
@@ -120,7 +126,8 @@ function CanvasShell({
   onTab: (tab: CanvasTab) => void;
   panel: ReactNode;
 }) {
-  const isDesktop = useIsDesktop();
+  const isDesktop = useIsDesktop() && !useCompact();
+  const compact = useCompact();
   const [mobileView, setMobileView] = useState<"agent" | CanvasTab>("agent");
 
   const chat = (
@@ -133,7 +140,7 @@ function CanvasShell({
   if (!isDesktop) {
     const active = mobileView === "agent" ? null : mobileView;
     return (
-      <div className="flex h-[calc(100dvh-53px)] flex-col">
+      <div className={compact ? "flex h-full flex-col" : "flex h-[calc(100dvh-53px)] flex-col"}>
         {header}
         <CanvasTabBar
           tabs={[{ value: "agent" as CanvasTab, label: "Agent" }, ...tabs]}
@@ -377,6 +384,7 @@ function TaskCanvas({
   onLineage: (lineageId: string) => void;
 }) {
   const { data: task, isLoading, isError } = useTask(taskId);
+  const compact = useCompact();
   const generate = useGenerateEstimate(project.id);
   const execution = task?.executions.at(-1);
   const running = execution?.status === "RUNNING";
@@ -405,7 +413,7 @@ function TaskCanvas({
 
   if (isLoading || isError || !task) {
     return (
-      <div className="flex h-screen flex-col">
+      <div className={`flex ${fullHeight(compact)} flex-col`}>
         {header("queued", null)}
         <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
           {isLoading ? <Loader2 className="size-4 animate-spin" /> : "Build not found."}
@@ -565,7 +573,16 @@ function TaskCanvas({
 
 // --- Entry -----------------------------------------------------------------------
 
-export function AgentCanvas({ projectId }: { projectId: string }) {
+export function AgentCanvas({
+  projectId,
+  compact = false,
+  onClose,
+}: {
+  projectId: string;
+  // Inside a side panel: single column, slim header with a close button.
+  compact?: boolean;
+  onClose?: () => void;
+}) {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -612,7 +629,12 @@ export function AgentCanvas({ projectId }: { projectId: string }) {
         : (builds[0]?.key ?? null);
 
   function navigate(params: Record<string, string>) {
-    router.replace(`${pathname}?${new URLSearchParams(params).toString()}`);
+    // Replace only the focus; keep the host page's own params (e.g. the
+    // Builds page's ?project= for its side panel).
+    const next = new URLSearchParams(searchParams.toString());
+    for (const key of ["taskId", "lineage", "new", "prompt"]) next.delete(key);
+    for (const [key, value] of Object.entries(params)) next.set(key, value);
+    router.replace(`${pathname}?${next.toString()}`);
   }
   const focusTask = (id: string) => navigate({ taskId: id });
   const focusLineage = (id: string) => navigate({ lineage: id });
@@ -629,19 +651,21 @@ export function AgentCanvas({ projectId }: { projectId: string }) {
 
   if (projectsLoading || !listsReady) {
     return (
-      <div className="flex h-screen items-center justify-center">
+      <div className={`flex ${fullHeight(compact)} items-center justify-center`}>
         <Loader2 className="size-5 animate-spin text-muted-foreground" />
       </div>
     );
   }
   if (!project) {
     return (
-      <div className="flex h-screen items-center justify-center text-sm text-muted-foreground">Project not found.</div>
+      <div className={`flex ${fullHeight(compact)} items-center justify-center text-sm text-muted-foreground`}>Project not found.</div>
     );
   }
 
   const header = (stage: CanvasStage, task: TaskDetail | null = null) => (
     <CanvasHeader
+      compact={compact}
+      onClose={onClose}
       project={project}
       stage={stage}
       task={task}
@@ -652,31 +676,31 @@ export function AgentCanvas({ projectId }: { projectId: string }) {
     />
   );
 
-  if (selectedKey?.startsWith("task:")) {
-    return (
-      <TaskCanvas
-        key={selectedKey}
-        project={project}
-        header={header}
-        taskId={selectedKey.slice("task:".length)}
-        estimates={estimates}
-        authorizations={authorizations}
-        onLineage={focusLineage}
-      />
-    );
-  }
-
   return (
-    <LineageCanvas
-      key={selectedKey ?? "new"}
-      project={project}
-      header={(stage) => header(stage)}
-      lineageId={selectedKey ? selectedKey.slice("lineage:".length) : null}
-      estimates={estimates}
-      authorizations={authorizations}
-      initialPrompt={prompt}
-      onLineage={focusLineage}
-      onTask={focusTask}
-    />
+    <CompactContext.Provider value={compact}>
+      {selectedKey?.startsWith("task:") ? (
+        <TaskCanvas
+          key={selectedKey}
+          project={project}
+          header={header}
+          taskId={selectedKey.slice("task:".length)}
+          estimates={estimates}
+          authorizations={authorizations}
+          onLineage={focusLineage}
+        />
+      ) : (
+        <LineageCanvas
+          key={selectedKey ?? "new"}
+          project={project}
+          header={(stage) => header(stage)}
+          lineageId={selectedKey ? selectedKey.slice("lineage:".length) : null}
+          estimates={estimates}
+          authorizations={authorizations}
+          initialPrompt={prompt}
+          onLineage={focusLineage}
+          onTask={focusTask}
+        />
+      )}
+    </CompactContext.Provider>
   );
 }

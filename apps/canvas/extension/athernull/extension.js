@@ -6,14 +6,14 @@
 // stays the place to watch and steer the agent; this page is where the
 // money and the decisions live.
 //
-//   /extensions/athernull/builds            -> AtherNull dashboard
+//   /extensions/athernull/builds            -> AtherNull Builds
 //   /extensions/athernull/builds/<app path> -> that AtherNull page
 //   ?prompt=...                             -> carried over from the canvas
 //                                              home composer
 
 export function activate(host) {
   return host.registerPage("builds", ({ container, path }) => {
-    const appPath = path ? `/${String(path).replace(/^\/+/, "")}` : "/dashboard";
+    const appPath = path ? `/${String(path).replace(/^\/+/, "")}` : "/builds";
     const src = new URL(appPath, window.location.origin);
     const prompt = new URLSearchParams(window.location.search).get("prompt");
     if (prompt) src.searchParams.set("prompt", prompt);

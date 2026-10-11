@@ -176,6 +176,7 @@ export async function discussionPlannerPrompt(discussionId: string, organization
 
 export interface DiscussionSummary {
   id: string;
+  plannedLineageId: string | null;
   title: string | null;
   messageCount: number;
   createdAt: string;
@@ -212,6 +213,7 @@ export async function listDiscussions(organizationId: string): Promise<Discussio
       }
       return {
         id: row.conversation_id,
+        plannedLineageId: row.planned_lineage_id,
         title,
         messageCount: row.message_count,
         createdAt: row.created_at.toISOString(),
@@ -219,4 +221,14 @@ export async function listDiscussions(organizationId: string): Promise<Discussio
       };
     }),
   );
+}
+
+/** Records the plan a discussion was turned into (Builds page bookkeeping). */
+export async function markDiscussionPlanned(discussionId: string, organizationId: string, lineageId: string) {
+  await db
+    .updateTable("discussion_conversations")
+    .set({ planned_lineage_id: lineageId })
+    .where("conversation_id", "=", discussionId)
+    .where("organization_id", "=", organizationId)
+    .execute();
 }

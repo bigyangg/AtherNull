@@ -1,12 +1,12 @@
 "use client";
 
 import Link from "next/link";
-import { Check, ChevronDown, ExternalLink, FolderGit2, Plus } from "lucide-react";
+import { Check, ChevronDown, ExternalLink, FolderGit2, Plus, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { StatusBadge } from "@/components/status-badge";
 import { CANVAS_STEPS, stageStepIndex, type CanvasStage } from "@/lib/canvas";
-import { cn } from "@/lib/utils";
+import { cn, repoLabel } from "@/lib/utils";
 import type { RepoProject, Task } from "@/lib/types";
 
 export interface BuildOption {
@@ -16,19 +16,12 @@ export interface BuildOption {
   createdAt: string;
 }
 
-// "github.com/acme/web" -> "acme/web"; a local path -> its last segment.
-function repoLabel(repository: string): string {
-  const parts = repository.split(/[\\/]/).filter(Boolean);
-  if (parts[0]?.includes(".") && parts.length >= 3) return parts.slice(1).join("/");
-  return parts.at(-1) ?? repository;
-}
-
-function Stepper({ stage }: { stage: CanvasStage }) {
+function Stepper({ stage, always = false }: { stage: CanvasStage; always?: boolean }) {
   const current = stageStepIndex(stage);
   const failed = stage === "failed" || stage === "refunded";
   const done = stage === "settled";
   return (
-    <ol className="hidden items-center gap-1 xl:flex">
+    <ol className={cn("items-center gap-1", always ? "flex" : "hidden xl:flex")}>
       {CANVAS_STEPS.map((step, i) => {
         const complete = i < current || (done && i === current);
         const active = i === current && !done;
@@ -62,7 +55,11 @@ export function CanvasHeader({
   selectedKey,
   onSelect,
   onNew,
+  compact = false,
+  onClose,
 }: {
+  compact?: boolean;
+  onClose?: () => void;
   project: RepoProject;
   stage: CanvasStage;
   task: Task | null;
@@ -71,6 +68,29 @@ export function CanvasHeader({
   onSelect: (key: string) => void;
   onNew: () => void;
 }) {
+  if (compact) {
+    // Side-panel header: where this build is, nothing to navigate away to.
+    return (
+      <header className="flex shrink-0 flex-col gap-2 border-b border-border px-4 py-3">
+        <div className="flex items-center gap-2">
+          <FolderGit2 className="size-4 shrink-0 text-muted-foreground" />
+          <span className="truncate text-sm font-medium" title={project.permittedRepository}>
+            {repoLabel(project.permittedRepository)}
+          </span>
+          <div className="ml-auto flex items-center gap-2">
+            {task && <StatusBadge status={task.status} />}
+            {onClose && (
+              <Button variant="ghost" size="icon" className="size-8" onClick={onClose} aria-label="Close">
+                <X />
+              </Button>
+            )}
+          </div>
+        </div>
+        <Stepper stage={stage} always />
+      </header>
+    );
+  }
+
   return (
     <header className="flex shrink-0 items-center gap-3 border-b border-border px-4 py-2.5">
       <Link

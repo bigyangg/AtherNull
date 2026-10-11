@@ -17,3 +17,16 @@ export function githubRevisionUrl(permittedRepository: string, revision: string)
     .replace(/\/+$/, "");
   return `https://github.com/${path}/tree/${encodeURIComponent(revision)}`;
 }
+
+// "github.com/acme/web" or "https://github.com/acme/web.git" -> "acme/web";
+// a local path -> its last segment.
+export function repoLabel(repository: string): string {
+  const parts = repository
+    .trim()
+    .replace(/^[a-z]+:\/\//i, "")
+    .replace(/\.git$/, "")
+    .split(/[\\/]/)
+    .filter(Boolean);
+  if (parts[0]?.includes(".") && parts.length >= 3) return parts.slice(1).join("/");
+  return parts.at(-1) ?? repository;
+}

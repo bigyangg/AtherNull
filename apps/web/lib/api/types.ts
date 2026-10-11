@@ -7,6 +7,7 @@ import type {
 } from "@athernull/contracts";
 import type {
   AgentProfile,
+  BuildListItem,
   BuildPatch,
   Discussion,
   BudgetAuthorization,
@@ -128,6 +129,7 @@ export interface TaskDashboardApi {
   listDiscussions(): Promise<Discussion[]>;
   // ADR-0017 — the build's captured change; null until one exists.
   getBuildPatch(taskId: string): Promise<BuildPatch | null>;
+  listBuilds(): Promise<BuildListItem[]>;
   listEstimates(projectId: string): Promise<ProjectEstimate[]>;
   getEstimate(projectId: string, estimateId: string): Promise<ProjectEstimate>;
   reviseEstimate(projectId: string, estimateId: string, prompt: string): Promise<ProjectEstimate>;

@@ -248,6 +248,9 @@ if (existsSync(python)) {
   log("worker venv not found (workers/coding-agent/.venv); builds will stay queued");
 }
 
+// Sandbox provisioner (ADR-0018): creates org workspaces on demand.
+start("provisioner", "36", "pnpm", ["--filter", "@athernull/api", "sandbox:provisioner"]);
+
 // Independent verifier (ADR-0017): stdlib-only Python, its own token.
 const apiEnv = parseEnv(join(root, "apps/api/.env"));
 start("verifier", "31", existsSync(python) ? python : "python", ["-u", "-m", "verifier.service"], {

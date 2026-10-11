@@ -13,6 +13,8 @@ import { openhandsCompatRoutes } from "./routes/openhands-compat.js";
 import { projectFundingRoutes } from "./routes/project-funding.js";
 import { projectRoutes } from "./routes/projects.js";
 import { agentGatewayRoutes } from "./routes/agent-gateway.js";
+import { agentSandboxRoutes } from "./routes/agent-sandbox.js";
+import { buildRoutes } from "./routes/builds.js";
 import { discussionRoutes } from "./routes/discussions.js";
 import { verificationRoutes } from "./routes/verification.js";
 import { realtimeGatewayRoutes } from "./routes/realtime-gateway.js";
@@ -92,6 +94,8 @@ export async function buildApp(opts: { logger?: boolean } = {}): Promise<Fastify
   // AtherNull auth and the funded-build gate.
   await app.register(agentGatewayRoutes);
   await app.register(discussionRoutes);
+  await app.register(agentSandboxRoutes);
+  await app.register(buildRoutes);
   // Phase 2 — OpenHands compatibility layer (ADR-0006). Registers its own
   // literal `/api/conversations/*`, `/api/settings`, `/server_info` paths
   // directly; it doesn't collide with Better Auth's `/api/auth/*` catch-all

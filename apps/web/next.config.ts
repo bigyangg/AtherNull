@@ -3,6 +3,8 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   reactStrictMode: true,
+  // The floating dev badge sits on top of the sidebar's account row.
+  devIndicators: false,
   // @athernull/contracts is a SOURCE workspace package (main/types -> src/
   // index.ts, no dist). Listing it is an explicit opt-in to compiling its
   // TypeScript. This does NOT make Next resolve a relative `./x.js` import to

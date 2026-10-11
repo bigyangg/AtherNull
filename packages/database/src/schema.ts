@@ -380,6 +380,7 @@ export interface DiscussionConversationsTable {
   message_count: Generated<number>;
   created_at: Generated<Date>;
   last_message_at: Generated<Date>;
+  planned_lineage_id: string | null;
 }
 
 // ADR-0017 — the agent's change for one execution, as verified.
@@ -396,6 +397,18 @@ export interface ExecutionPatchesTable {
   created_at: Generated<Date>;
   verify_lease_owner: string | null;
   verify_lease_expires_at: NullableTimestamp;
+}
+
+// ADR-0018 — on-demand agent workspace provisioning.
+export interface AgentSandboxRequestsTable {
+  organization_id: string;
+  requested_by: string;
+  status: Generated<string>; // PENDING | PROVISIONING | READY | FAILED
+  attempts: Generated<number>;
+  error: string | null;
+  claimed_at: NullableTimestamp;
+  requested_at: Generated<Date>;
+  updated_at: Generated<Date>;
 }
 
 export interface Database {
@@ -418,4 +431,5 @@ export interface Database {
   org_agent_servers: OrgAgentServersTable;
   discussion_conversations: DiscussionConversationsTable;
   execution_patches: ExecutionPatchesTable;
+  agent_sandbox_requests: AgentSandboxRequestsTable;
 }
