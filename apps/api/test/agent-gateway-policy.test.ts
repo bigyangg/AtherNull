@@ -11,9 +11,9 @@ test("every read is open to org members", () => {
   }
 });
 
-test("starting a conversation and the raw LLM proxy are never reachable from a browser", () => {
-  assert.equal(c("POST", "/api/conversations").kind, "blocked");
-  assert.equal(c("POST", "/api/conversations/").kind, "blocked");
+test("starting a conversation becomes a gateway-built discussion; the raw LLM proxy is closed", () => {
+  assert.equal(c("POST", "/api/conversations").kind, "discuss");
+  assert.equal(c("POST", "/api/conversations/").kind, "discuss");
   assert.equal(c("POST", "/v1/chat/completions").kind, "blocked");
   assert.equal(c("GET", "/v1/models").kind, "blocked");
   assert.equal(c("POST", "/v1/responses").kind, "blocked");
@@ -23,7 +23,7 @@ test("starting a conversation and the raw LLM proxy are never reachable from a b
 
 test("anything that makes the agent work is gated on the conversation's funded build", () => {
   for (const rest of ["events", "run", "ask_agent", "fork", "goal", "goal/resume", "switch_llm", "condense", "events/respond_to_confirmation"]) {
-    assert.deepEqual(c("POST", `/api/conversations/conv-1/${rest}`), { kind: "agent", conversationId: "conv-1" }, rest);
+    assert.deepEqual(c("POST", `/api/conversations/conv-1/${rest}`), { kind: "agent", conversationId: "conv-1", action: `/${rest}` }, rest);
   }
 });
 
@@ -57,7 +57,7 @@ test("unknown mutations fail closed", () => {
 
 test("query strings and trailing slashes do not change the class", () => {
   assert.equal(c("POST", "/api/conversations/conv-1/run/?x=1").kind, "agent");
-  assert.equal(c("POST", "/api/conversations?x=1").kind, "blocked");
+  assert.equal(c("POST", "/api/conversations?x=1").kind, "discuss");
 });
 
 test("reads that can expose secrets are owner/admin only", () => {

@@ -4,6 +4,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useState } from "react";
 
 import { AuthCard } from "@/components/auth/auth-card";
+import { APP_HOME, navigateTo } from "@/lib/app-home";
 import { Button } from "@/components/ui/button";
 import {
   CardContent,
@@ -29,7 +30,7 @@ function VerifyEmailContent() {
   // (autoSignInAfterVerification) and no error — that's the success case.
   useEffect(() => {
     if (!isPending && session && !urlError) {
-      const timeout = setTimeout(() => router.push("/dashboard"), 1200);
+      const timeout = setTimeout(() => navigateTo(APP_HOME, router.push), 1200);
       return () => clearTimeout(timeout);
     }
   }, [isPending, session, urlError, router]);

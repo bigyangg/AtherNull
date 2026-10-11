@@ -20,6 +20,8 @@ import { PageHeader } from "@/components/page-header";
 import { StatusBadge } from "@/components/status-badge";
 import { EmptyState } from "@/components/empty-state";
 import { AgentPromptHero } from "@/components/canvas/agent-prompt-hero";
+import { DiscussionsPanel } from "@/components/canvas/discussions-panel";
+import { SandboxMissingNotice } from "@/components/canvas/sandbox-missing-notice";
 import { useCurrentOrg } from "@/lib/auth/current-org-provider";
 import { useLiveTasks } from "@/lib/hooks/use-tasks";
 import { useRepoProjects } from "@/lib/hooks/use-repo-projects";
@@ -70,6 +72,12 @@ export default function DashboardPage() {
           </Button>
         }
       />
+
+      <Suspense>
+        <SandboxMissingNotice />
+      </Suspense>
+
+      <DiscussionsPanel />
 
       <Suspense>
         <AgentPromptHero />

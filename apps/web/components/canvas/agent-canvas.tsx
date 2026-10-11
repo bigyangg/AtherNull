@@ -45,6 +45,7 @@ import { useRepoProjects } from "@/lib/hooks/use-repo-projects";
 import { useTask } from "@/lib/hooks/use-task";
 import { useTasks } from "@/lib/hooks/use-tasks";
 import { useEmbeddedInCanvas } from "@/lib/use-embedded";
+import { DISCUSSION_PROMPT_MARKER } from "@/lib/types";
 import type {
   BudgetAuthorization,
   ExecutionEvent,
@@ -163,6 +164,20 @@ function CanvasShell({
 
 // --- Planning thread (shared by both focuses) --------------------------------
 
+// A plan drafted from a canvas discussion: the transcript is the input, shown
+// collapsed rather than as one giant chat bubble.
+function DiscussionSource({ prompt }: { prompt: string }) {
+  const transcript = prompt.slice(prompt.indexOf("\n\n") + 2);
+  return (
+    <div className="flex justify-end">
+      <details className="group max-w-[85%] rounded-2xl rounded-br-md bg-primary px-3.5 py-2 text-sm text-primary-foreground">
+        <summary className="cursor-pointer list-none select-none">Plan what we agreed in our discussion</summary>
+        <p className="mt-2 max-h-72 overflow-auto whitespace-pre-wrap text-xs opacity-80">{transcript}</p>
+      </details>
+    </div>
+  );
+}
+
 function PlanningThread({
   projectId,
   versions,
@@ -179,7 +194,11 @@ function PlanningThread({
     <>
       {versions.map((estimate) => (
         <div key={estimate.id} className="flex flex-col gap-4">
-          <UserTurn text={estimate.sourcePrompt} />
+          {estimate.sourcePrompt.startsWith(DISCUSSION_PROMPT_MARKER) ? (
+            <DiscussionSource prompt={estimate.sourcePrompt} />
+          ) : (
+            <UserTurn text={estimate.sourcePrompt} />
+          )}
           <PlanTurn projectId={projectId} estimate={estimate} isHead={estimate === head} onOpenPlan={onOpenPlan} />
         </div>
       ))}
@@ -572,7 +591,7 @@ export function AgentCanvas({ projectId }: { projectId: string }) {
       const first = versions.reduce((a, b) => (a.version < b.version ? a : b));
       options.push({
         key: `lineage:${lineageId}`,
-        label: `Draft · ${first.sourcePrompt}`,
+        label: `Draft · ${first.sourcePrompt.startsWith(DISCUSSION_PROMPT_MARKER) ? first.plannerOutput.goal : first.sourcePrompt}`,
         task: null,
         createdAt: first.createdAt,
       });

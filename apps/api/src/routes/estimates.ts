@@ -11,6 +11,7 @@ import type { FastifyInstance } from "fastify";
 import type { Selectable } from "kysely";
 import { z } from "zod";
 
+import { discussionPlannerPrompt } from "../agent-gateway/discussions.js";
 import { db } from "../db.js";
 import { PlannerError, generatePlannerOutput } from "../planner.js";
 import { priceEstimate } from "../pricing/engine.js";
@@ -149,10 +150,16 @@ export async function estimateRoutes(app: FastifyInstance) {
         return;
       }
 
+      // ADR-0016: a discussion's transcript is read server-side from the
+      // org's own sandbox; only this org's discussions resolve.
+      const sourcePrompt = body.discussionId
+        ? await discussionPlannerPrompt(body.discussionId, organizationId)
+        : body.prompt!;
+
       let plannerOutput;
       let plannerModel: string;
       try {
-        ({ plannerOutput, plannerModel } = await generatePlannerOutput(body.prompt));
+        ({ plannerOutput, plannerModel } = await generatePlannerOutput(sourcePrompt));
       } catch (err) {
         if (err instanceof PlannerError) {
           reply.status(502).send({ error: err.message });
@@ -180,7 +187,7 @@ export async function estimateRoutes(app: FastifyInstance) {
           status: "READY_FOR_REVIEW",
           organization_id: organizationId,
           project_id: projectId,
-          source_prompt: body.prompt,
+          source_prompt: sourcePrompt,
           planner_output: JSON.stringify(plannerOutput),
           planner_model: plannerModel,
           created_by: userId,

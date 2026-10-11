@@ -7,6 +7,7 @@ import type {
 } from "@athernull/contracts";
 import type {
   AgentProfile,
+  Discussion,
   BudgetAuthorization,
   BudgetAuthorizationSource,
   EstimateResult,
@@ -120,6 +121,10 @@ export interface TaskDashboardApi {
   // planning/pricing surface: none of these ever create or touch a task or
   // execution (see apps/api/src/routes/estimates.ts's header comment).
   generateEstimate(projectId: string, prompt: string): Promise<ProjectEstimate>;
+  // ADR-0016 — pre-funding canvas discussions, and planning from one (the
+  // server reads the transcript from the org's sandbox itself).
+  generateEstimateFromDiscussion(projectId: string, discussionId: string): Promise<ProjectEstimate>;
+  listDiscussions(): Promise<Discussion[]>;
   listEstimates(projectId: string): Promise<ProjectEstimate[]>;
   getEstimate(projectId: string, estimateId: string): Promise<ProjectEstimate>;
   reviseEstimate(projectId: string, estimateId: string, prompt: string): Promise<ProjectEstimate>;

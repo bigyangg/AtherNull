@@ -1,7 +1,9 @@
 import { getSessionCookie } from "better-auth/cookies";
 import { NextResponse, type NextRequest } from "next/server";
 
-// Unauthenticated-only routes — a logged-in visitor is bounced to /projects.
+import { APP_HOME } from "./lib/app-home";
+
+// Unauthenticated-only routes — a logged-in visitor is bounced to APP_HOME.
 const AUTH_PATHS = [
   "/sign-in",
   "/sign-up",
@@ -41,11 +43,11 @@ export function proxy(request: NextRequest) {
   }
 
   if (sessionCookie && pathname === "/" && !landingOnly) {
-    return NextResponse.redirect(new URL("/dashboard", request.url));
+    return NextResponse.redirect(new URL(APP_HOME, request.url));
   }
 
   if (sessionCookie && isAuthPath && pathname !== "/verify-email") {
-    return NextResponse.redirect(new URL("/dashboard", request.url));
+    return NextResponse.redirect(new URL(APP_HOME, request.url));
   }
 
   return NextResponse.next();

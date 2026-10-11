@@ -7,6 +7,7 @@ import type {
 } from "@athernull/contracts";
 import type {
   AgentProfile,
+  Discussion,
   BudgetAuthorization,
   EstimateResult,
   Execution,
@@ -435,6 +436,17 @@ export const liveApi: TaskDashboardApi = {
       method: "POST",
       body: JSON.stringify({ prompt }),
     });
+  },
+
+  async generateEstimateFromDiscussion(projectId: string, discussionId: string) {
+    return apiFetch<ProjectEstimate>(`/v1/projects/${projectId}/estimates`, {
+      method: "POST",
+      body: JSON.stringify({ discussionId }),
+    });
+  },
+
+  listDiscussions() {
+    return apiFetch<Discussion[]>("/v1/discussions");
   },
 
   async listEstimates(projectId: string) {

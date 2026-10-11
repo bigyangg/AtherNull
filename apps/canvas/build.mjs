@@ -26,9 +26,9 @@ execFileSync("npm", ["run", "build"], {
     VITE_BACKEND_BASE_URL: `${origin}/oh`,
     // Placeholder only: the gateway drops it and authenticates the session.
     VITE_SESSION_API_KEY: "athernull-gateway",
-    VITE_ATHERNULL_BUILDS_URL: "/canvas/extensions/athernull/builds",
     // No AtherNull session -> AtherNull sign-in, then back to the canvas.
     VITE_ATHERNULL_SESSION_URL: "/api/auth/get-session",
+    VITE_ATHERNULL_SANDBOX_PROBE_URL: "/oh/server_info",
     VITE_MOCK_API: "false",
     // AtherNull mode: pinned version (no npm update nag), no community Slack.
     VITE_ATHERNULL: "1",

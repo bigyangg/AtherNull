@@ -372,6 +372,16 @@ export interface OrgAgentServersTable {
   updated_at: Generated<Date>;
 }
 
+// ADR-0016 — a pre-funding, tool-less discussion started from the canvas.
+export interface DiscussionConversationsTable {
+  conversation_id: string;
+  organization_id: string;
+  created_by: string;
+  message_count: Generated<number>;
+  created_at: Generated<Date>;
+  last_message_at: Generated<Date>;
+}
+
 export interface Database {
   projects: ProjectsTable;
   agent_profiles: AgentProfilesTable;
@@ -390,4 +400,5 @@ export interface Database {
   project_funding_deposits: ProjectFundingDepositsTable;
   project_funding_settlements: ProjectFundingSettlementsTable;
   org_agent_servers: OrgAgentServersTable;
+  discussion_conversations: DiscussionConversationsTable;
 }

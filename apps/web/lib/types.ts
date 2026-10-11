@@ -382,3 +382,16 @@ export function formatMinor(minor: number, currency: string): string {
     minimumFractionDigits: 2,
   });
 }
+
+// ADR-0016 — a tool-less, pre-funding discussion started in the canvas.
+export interface Discussion {
+  id: string;
+  title: string | null;
+  messageCount: number;
+  createdAt: string;
+  lastMessageAt: string;
+}
+
+// Planner input produced from a discussion starts with this marker (apps/api
+// agent-gateway/discussions.ts); the UI shows it collapsed.
+export const DISCUSSION_PROMPT_MARKER = "[Planned from a canvas discussion]";

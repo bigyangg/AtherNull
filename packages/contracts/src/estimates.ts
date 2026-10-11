@@ -65,9 +65,16 @@ export type PricingStatus = z.infer<typeof PricingStatusSchema>;
 // build. Nothing here is persisted directly; it only seeds the planner LLM
 // call (apps/api/src/planner.ts), whose validated output is what actually
 // gets written.
-export const GenerateEstimateRequestSchema = z.object({
-  prompt: z.string().min(1),
-});
+// A plan comes from a typed prompt, or (ADR-0016) from a pre-funding canvas
+// discussion, whose transcript apps/api reads itself — never from the client.
+export const GenerateEstimateRequestSchema = z
+  .object({
+    prompt: z.string().min(1).optional(),
+    discussionId: z.string().min(1).optional(),
+  })
+  .refine((b) => (b.prompt === undefined) !== (b.discussionId === undefined), {
+    message: "Provide exactly one of prompt or discussionId",
+  });
 export type GenerateEstimateRequest = z.infer<typeof GenerateEstimateRequestSchema>;
 
 export const ReviseEstimateRequestSchema = z.object({

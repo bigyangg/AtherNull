@@ -11,6 +11,8 @@ process.env.WEB_APP_URL ??= "http://localhost:3000";
 delete process.env.RESEND_API_KEY;
 process.env.AUTH_TEST_RATE_LIMIT_MAX ??= "50";
 process.env.INTERNAL_API_TOKEN ??= "test-internal-token-not-for-real-use";
+process.env.NVIDIA_NIM_API_KEY = "test-nim-key-not-real";
+process.env.DISCUSSION_MAX_MESSAGES = "3";
 
 import assert from "node:assert/strict";
 import { randomBytes, randomUUID } from "node:crypto";
@@ -23,6 +25,7 @@ import { sql } from "kysely";
 import { WebSocket, WebSocketServer } from "ws";
 
 const { buildApp } = await import("../src/app.js");
+const { setPlannerClientForTests } = await import("../src/planner.js");
 const { db } = await import("../src/db.js");
 const { AUTH_ORIGIN, createAwaitingFundingTask, signUpVerifiedAndSignIn } = await import("./support/app-fixtures.js");
 
@@ -43,6 +46,18 @@ async function fakeSandbox() {
     req.on("end", () => {
       requests.push({ method: req.method!, url: req.url!, headers: req.headers, body });
       res.writeHead(200, { "content-type": "application/json", "set-cookie": "sandbox=1" });
+      if (req.url!.includes("/events/search")) {
+        const message = (source: string, text: string) => ({ kind: "MessageEvent", source, llm_message: { content: [{ type: "text", text }] } });
+        res.end(JSON.stringify({
+          items: [
+            message("user", "I want a /version endpoint"),
+            message("agent", "Agreed scope: GET /version returns {version} with a supertest test."),
+            { kind: "ActionEvent", tool_name: "finish" },
+          ],
+          next_page_id: null,
+        }));
+        return;
+      }
       res.end(JSON.stringify({ ok: true, path: req.url }));
     });
   });
@@ -67,6 +82,7 @@ let orgB: T;
 const keyA = randomBytes(32).toString("hex");
 const keyB = randomBytes(32).toString("hex");
 const CONVERSATION = randomUUID();
+let discussionId = "";
 
 const req = (t: T, method: string, url: string, payload?: unknown, extra: Record<string, string> = {}) =>
   app.inject({
@@ -120,11 +136,53 @@ describe("agent gateway HTTP", () => {
     assert.equal(sandboxB.requests.at(-1)!.headers["x-session-api-key"], keyB);
   });
 
-  test("conversations cannot be started from the browser, and the LLM proxy is closed", async () => {
+  test("the LLM proxy is closed", async () => {
     const before = sandboxA.requests.length;
-    assert.equal((await req(orgA, "POST", "/oh/api/conversations", { workspace: {} })).statusCode, 403);
     assert.equal((await req(orgA, "POST", "/oh/v1/chat/completions", { model: "x" })).statusCode, 403);
     assert.equal(sandboxA.requests.length, before);
+  });
+
+  test("starting a conversation starts a tool-less discussion the gateway builds itself", async () => {
+    const res = await req(orgA, "POST", "/oh/api/conversations", {
+      // Everything here but the message text must be ignored.
+      agent: { kind: "Agent", llm: { model: "attacker/model", api_key: "x" }, tools: [{ name: "terminal" }] },
+      agent_profile_id: randomUUID(),
+      workspace: { kind: "LocalWorkspace", working_dir: "/" },
+      initial_message: { content: [{ type: "text", text: "I want a /version endpoint" }] },
+    });
+    assert.equal(res.statusCode, 200, res.body);
+    const sent = JSON.parse(sandboxA.requests.at(-1)!.body) as {
+      conversation_id: string;
+      agent: { tools: unknown[]; mcp_config: object; llm: { model: string; api_key: string } };
+      workspace: { working_dir: string };
+      tags: Record<string, string>;
+      agent_profile_id?: string;
+      initial_message: { content: { text: string }[] };
+    };
+    assert.deepEqual(sent.agent.tools, []);
+    assert.deepEqual(sent.agent.mcp_config, {});
+    assert.equal(sent.agent.llm.api_key, "test-nim-key-not-real");
+    assert.notEqual(sent.agent.llm.model, "attacker/model");
+    assert.equal(sent.agent_profile_id, undefined);
+    assert.equal(sent.workspace.working_dir, `/workspace/discussions/${sent.conversation_id}`);
+    assert.equal(sent.tags.athernullmode, "discussion");
+    assert.equal(sent.initial_message.content[0]!.text, "I want a /version endpoint");
+    const row = await db.selectFrom("discussion_conversations").selectAll().where("conversation_id", "=", sent.conversation_id).executeTakeFirst();
+    assert.equal(row?.organization_id, orgA.organizationId);
+    discussionId = sent.conversation_id;
+  });
+
+  test("a discussion accepts chat (within its cap) but nothing that changes the agent", async () => {
+    const url = `/oh/api/conversations/${discussionId}`;
+    assert.equal((await req(orgA, "POST", `${url}/events`, { content: [{ type: "text", text: "Node/Express" }] })).statusCode, 200);
+    assert.equal((await req(orgA, "POST", `${url}/run`, {})).statusCode, 200);
+    // Cap is 3 in this file: the opening message + two more.
+    assert.equal((await req(orgA, "POST", `${url}/events`, { content: [] })).statusCode, 429);
+    // Switching the model or forking a discussion is funded-build only.
+    assert.equal((await req(orgA, "POST", `${url}/switch_llm`, {})).statusCode, 402);
+    assert.equal((await req(orgA, "POST", `${url}/fork`, {})).statusCode, 402);
+    // Another org cannot chat in org A's discussion.
+    assert.equal((await req(orgB, "POST", `${url}/events`, { content: [] })).statusCode, 402);
   });
 
   test("agent work needs the conversation to be this org's funded, running build", async () => {
@@ -148,6 +206,44 @@ describe("agent gateway HTTP", () => {
       await db.updateTable("tasks").set({ status: "FAILED" }).where("id", "=", orgA.taskId).execute();
     }
     assert.equal((await req(orgA, "POST", url, { content: [] })).statusCode, 402, "only while RUNNING");
+  });
+
+  test("a discussion becomes a plan from its transcript, read server-side; other orgs cannot use it", async () => {
+    let plannerInput = "";
+    setPlannerClientForTests(async (prompt) => {
+      plannerInput = prompt;
+      return {
+        goal: "Add GET /version",
+        scope: { included: ["route"], excluded: [] },
+        deliverables: ["route", "test"],
+        implementationPlan: ["edit app"],
+        assumptions: [],
+        acceptanceCriteria: ["returns version"],
+        infrastructureRequirements: [],
+        risks: [],
+        resourceEstimate: { complexity: 0.2, estimatedDurationHours: { min: 1, max: 2 }, inferenceRequirements: { estimatedTier: "fast" } },
+      };
+    });
+    try {
+      const res = await req(orgA, "POST", `/v1/projects/${orgA.projectId}/estimates`, { discussionId });
+      assert.equal(res.statusCode, 201, res.body);
+      assert.match(plannerInput, /^\[Planned from a canvas discussion\]/);
+      assert.match(plannerInput, /Customer: I want a \/version endpoint/);
+      assert.match(plannerInput, /Agent: Agreed scope/);
+      assert.doesNotMatch(plannerInput, /finish/);
+
+      const foreign = await req(orgB, "POST", `/v1/projects/${orgB.projectId}/estimates`, { discussionId });
+      assert.equal(foreign.statusCode, 404, foreign.body);
+      const both = await req(orgA, "POST", `/v1/projects/${orgA.projectId}/estimates`, { discussionId, prompt: "x" });
+      assert.equal(both.statusCode, 400);
+
+      const list = JSON.parse((await req(orgA, "GET", "/v1/discussions")).body) as { id: string }[];
+      assert.ok(list.some((d) => d.id === discussionId));
+      const otherList = JSON.parse((await req(orgB, "GET", "/v1/discussions")).body) as { id: string }[];
+      assert.ok(!otherList.some((d) => d.id === discussionId));
+    } finally {
+      setPlannerClientForTests(null);
+    }
   });
 
   test("members can read; only owners/admins can configure the sandbox", async () => {

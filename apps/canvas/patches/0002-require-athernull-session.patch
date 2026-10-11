@@ -1,8 +1,8 @@
 diff --git a/src/entry.client.tsx b/src/entry.client.tsx
-index 8e72274..8f763f2 100644
+index 8e72274..d109117 100644
 --- a/src/entry.client.tsx
 +++ b/src/entry.client.tsx
-@@ -14,7 +14,28 @@ import {
+@@ -14,7 +14,39 @@ import {
  import { waitForI18n } from "./i18n";
  import { shouldStartMockWorker } from "./mocks/should-start-mock-worker";
  
@@ -20,10 +20,21 @@ index 8e72274..8f763f2 100644
 +  } catch {
 +    signedIn = false;
 +  }
-+  if (signedIn) return;
-+  const back = `${window.location.pathname}${window.location.search}`;
-+  window.location.assign(`/sign-in?callbackURL=${encodeURIComponent(back)}`);
-+  await new Promise(() => {});
++  if (!signedIn) {
++    const back = `${window.location.pathname}${window.location.search}`;
++    window.location.assign(`/sign-in?callbackURL=${encodeURIComponent(back)}`);
++    await new Promise(() => {});
++  }
++  // Signed in, but the organization has no agent sandbox yet: AtherNull
++  // explains that, instead of the canvas showing a disconnected backend.
++  const probeUrl = import.meta.env.VITE_ATHERNULL_SANDBOX_PROBE_URL;
++  if (probeUrl) {
++    const probe = await fetch(probeUrl, { credentials: "same-origin" }).catch(() => null);
++    if (probe?.status === 503) {
++      window.location.assign("/dashboard?sandbox=missing");
++      await new Promise(() => {});
++    }
++  }
 +}
 +
  async function prepareApp() {

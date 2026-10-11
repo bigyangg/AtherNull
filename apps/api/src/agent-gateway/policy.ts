@@ -6,12 +6,16 @@
 //             skills, plugins, profiles, secrets, Apps, files, bash) and
 //             stopping work (pause/interrupt). None of this spends LLM
 //             budget on the platform's behalf.
-//   agent   — owner/admin AND the conversation belongs to a funded AtherNull
-//             build that is currently RUNNING. This is the funding gate:
-//             no agent work happens outside a funded build.
-//   blocked — never from a browser: conversations are only ever created by
-//             AtherNull itself after funding, and the server's raw LLM
-//             proxy would bypass every gate.
+//   agent   — work on one conversation. Allowed for owner/admin when it is
+//             a funded AtherNull build that is currently RUNNING (the
+//             funding gate), or for any member when it is a discussion and
+//             the action is chat (DISCUSSION_ACTIONS) — see the gateway.
+//   discuss — starting a conversation from the canvas. The gateway never
+//             forwards the browser's request: it starts a tool-less
+//             *discussion* agent (talk and plan only: no terminal, files or
+//             MCP) so people can scope the work before anything is funded.
+//   blocked — never from a browser: the server's raw LLM proxy would bypass
+//             every gate.
 //
 // Anything not recognized is blocked (fail closed), so a new upstream
 // endpoint is unreachable until it is classified here.
@@ -19,7 +23,8 @@
 export type GatewayAccess =
   | { kind: "read" }
   | { kind: "control" }
-  | { kind: "agent"; conversationId: string }
+  | { kind: "discuss" }
+  | { kind: "agent"; conversationId: string; action: string }
   | { kind: "blocked"; reason: string };
 
 const CONVERSATION = /^\/api\/conversations\/([^/]+)(\/.*)?$/;
@@ -41,6 +46,10 @@ const AGENT_WORK = new Set([
   "/runtime/reprovision",
   "/events/respond_to_confirmation",
 ]);
+
+// What a (tool-less, unfunded) discussion may do: chat. Switching models or
+// profiles, loading plugins, forking etc. stay funded-build only.
+export const DISCUSSION_ACTIONS = new Set(["/events", "/run", "/ask_agent", "/condense"]);
 
 // Per-conversation mutations that never start agent work.
 const CONVERSATION_CONTROL = [
@@ -87,16 +96,14 @@ export function classifyGatewayRequest(method: string, path: string): GatewayAcc
   if (p.startsWith("/v1/")) return { kind: "blocked", reason: "The agent server's LLM proxy is not available" };
   if (m === "GET" || m === "HEAD") return SENSITIVE_READS.some((re) => re.test(p)) ? { kind: "control" } : { kind: "read" };
 
-  if (p === "/api/conversations" && m === "POST") {
-    return { kind: "blocked", reason: "Agent conversations start from a funded AtherNull build" };
-  }
+  if (p === "/api/conversations" && m === "POST") return { kind: "discuss" };
 
   const conv = CONVERSATION.exec(p);
   if (conv) {
     const [, conversationId, rest = ""] = conv;
     if (conversationId === "search" || conversationId === "count") return { kind: "blocked", reason: "Unsupported" };
     if (rest === "" && (m === "PATCH" || m === "DELETE")) return { kind: "control" };
-    if (m === "POST" && AGENT_WORK.has(rest)) return { kind: "agent", conversationId: conversationId! };
+    if (m === "POST" && AGENT_WORK.has(rest)) return { kind: "agent", conversationId: conversationId!, action: rest };
     if (CONVERSATION_CONTROL.some((re) => re.test(rest))) return { kind: "control" };
     return { kind: "blocked", reason: "Unsupported conversation operation" };
   }

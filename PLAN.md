@@ -37,7 +37,7 @@ Open from spec §11 still needing validation: backend runtime choice (TypeScript
 
 ## 2. Build phases (from spec §10, adjusted)
 
-Refreshed 2026-10-11 against the code and ADRs 0001–0015; per-phase detail
+Refreshed 2026-10-11 against the code and ADRs 0001–0016; per-phase detail
 lives in the ADRs, not here.
 
 - [x] **Phase 0 — Repo and decisions** — layout, CI, ADR-0001 (SDK pinned
@@ -67,6 +67,9 @@ lives in the ADRs, not here.
   Canvas (integrations, MCP, skills, terminal, files) behind AtherNull's
   agent gateway, one sandboxed Agent Server per org, funded builds run as
   canvas conversations, AtherNull Builds as a canvas extension (ADR-0015).
+- [x] **Phase 6c — Discuss before funding** — sign in lands in the canvas;
+  conversations are tool-less, capped discussions; "Turn into a build"
+  plans from the transcript, then approve → fund → build (ADR-0016).
 - [x] **Phase 6 — Customer experience** — agent-first canvas
   (`/projects/[id]`): one conversation from prompt -> plan -> budget -> devnet
   funding -> live agent -> verification -> review -> on-chain settlement, with

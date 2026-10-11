@@ -16,7 +16,13 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { WebSocket, type RawData } from "ws";
 
-import { classifyGatewayRequest } from "../agent-gateway/policy.js";
+import {
+  admitDiscussionMessage,
+  forgetDiscussion,
+  startDiscussion,
+} from "../agent-gateway/discussions.js";
+import { loadOrgServer, type OrgServer } from "../agent-gateway/org-server.js";
+import { classifyGatewayRequest, DISCUSSION_ACTIONS } from "../agent-gateway/policy.js";
 import { db } from "../db.js";
 import { attachHeartbeat } from "../realtime/heartbeat.js";
 import { HttpError, hasPrivilegedRole, requireOrgSession, sendHttpError } from "../session.js";
@@ -41,21 +47,6 @@ const DROP_RESPONSE_HEADERS = new Set([
   "access-control-allow-credentials",
 ]);
 
-interface OrgServer {
-  baseUrl: string;
-  key: string;
-}
-
-async function loadOrgServer(organizationId: string): Promise<OrgServer> {
-  const row = await db
-    .selectFrom("org_agent_servers")
-    .select(["base_url", "session_api_key"])
-    .where("organization_id", "=", organizationId)
-    .executeTakeFirst();
-  if (!row) throw new HttpError(503, "No agent sandbox is provisioned for this organization yet");
-  return { baseUrl: row.base_url.replace(/\/+$/, ""), key: row.session_api_key };
-}
-
 const normalizeId = (id: string) => id.replace(/-/g, "").toLowerCase();
 
 // The funding gate: agent work is only allowed on a conversation that is
@@ -75,18 +66,31 @@ async function assertFundedRunningConversation(conversationId: string, organizat
   }
 }
 
+// Agent work on one conversation: a discussion accepts chat from any
+// member (within its caps); anything else needs owner/admin AND a funded,
+// running build.
+async function authorizeConversationWork(conversationId: string, action: string, organizationId: string, role: string) {
+  if (DISCUSSION_ACTIONS.has(action)) {
+    const admitted = await admitDiscussionMessage(conversationId, organizationId);
+    if (admitted) return;
+  }
+  if (!hasPrivilegedRole(role)) throw new HttpError(403, "Only organization owners and admins can direct a build");
+  await assertFundedRunningConversation(conversationId, organizationId);
+}
+
 async function authorize(request: FastifyRequest, method: string, path: string) {
-  const { organizationId, role } = await requireOrgSession(request);
+  const { organizationId, role, userId } = await requireOrgSession(request);
   if (method !== "GET" && method !== "HEAD" && !isTrustedOrigin(request.headers.origin)) {
     throw new HttpError(403, "Untrusted origin");
   }
   const access = classifyGatewayRequest(method, path);
   if (access.kind === "blocked") throw new HttpError(403, access.reason);
-  if (access.kind !== "read" && !hasPrivilegedRole(role)) {
+  if (access.kind === "agent") {
+    await authorizeConversationWork(access.conversationId, access.action, organizationId, role);
+  } else if (access.kind === "control" && !hasPrivilegedRole(role)) {
     throw new HttpError(403, "Only organization owners and admins can change the agent sandbox");
   }
-  if (access.kind === "agent") await assertFundedRunningConversation(access.conversationId, organizationId);
-  return { organizationId, role };
+  return { organizationId, role, userId, access };
 }
 
 function upstreamPath(request: FastifyRequest): string {
@@ -97,8 +101,9 @@ function upstreamPath(request: FastifyRequest): string {
 async function proxyHttp(request: FastifyRequest, reply: FastifyReply) {
   const method = request.method.toUpperCase();
   const path = upstreamPath(request);
-  const { organizationId } = await authorize(request, method, path);
+  const { organizationId, userId, access } = await authorize(request, method, path);
   const server = await loadOrgServer(organizationId);
+  if (access.kind === "discuss") return startDiscussionUpstream(reply, server, organizationId, userId, request.body);
 
   const headers: Record<string, string> = { "X-Session-API-Key": server.key };
   for (const name of FORWARD_REQUEST_HEADERS) {
@@ -123,6 +128,32 @@ async function proxyHttp(request: FastifyRequest, reply: FastifyReply) {
   upstream.headers.forEach((value, key) => {
     if (!DROP_RESPONSE_HEADERS.has(key.toLowerCase())) reply.header(key, value);
   });
+  return reply.send(Buffer.from(await upstream.arrayBuffer()));
+}
+
+// The browser's request body is never forwarded: only its opening message
+// text is used, inside a discussion agent the gateway builds.
+async function startDiscussionUpstream(reply: FastifyReply, server: OrgServer, organizationId: string, userId: string, rawBody: unknown) {
+  let body: unknown = null;
+  try {
+    body = rawBody && (rawBody as Buffer).length ? JSON.parse((rawBody as Buffer).toString("utf8")) : null;
+  } catch {
+    throw new HttpError(400, "Invalid JSON");
+  }
+  const { conversationId, request } = await startDiscussion(organizationId, userId, body);
+  let upstream: Response;
+  try {
+    upstream = await fetch(`${server.baseUrl}/api/conversations`, {
+      method: "POST",
+      headers: { "X-Session-API-Key": server.key, "content-type": "application/json" },
+      body: JSON.stringify(request),
+    });
+  } catch {
+    await forgetDiscussion(conversationId);
+    throw new HttpError(502, "The organization's agent sandbox is unreachable");
+  }
+  if (!upstream.ok) await forgetDiscussion(conversationId);
+  reply.status(upstream.status).header("content-type", upstream.headers.get("content-type") ?? "application/json");
   return reply.send(Buffer.from(await upstream.arrayBuffer()));
 }
 
@@ -251,8 +282,7 @@ export async function agentGatewayRoutes(app: FastifyInstance) {
         if (isAuthFrame(text)) return "drop";
         // Anything else the browser sends on this socket is a chat message
         // to the agent: same gate as POST /api/conversations/:id/events.
-        if (!hasPrivilegedRole(auth.role)) return { refuse: "Only organization owners and admins can message the agent" };
-        await assertFundedRunningConversation(conversationId, auth.organizationId);
+        await authorizeConversationWork(conversationId, "/events", auth.organizationId, auth.role);
         return "forward";
       });
     },
