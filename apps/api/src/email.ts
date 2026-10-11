@@ -71,6 +71,13 @@ async function send(to: string, subject: string, html: string): Promise<void> {
     console.warn(
       `[email] RESEND_API_KEY not set — skipping "${subject}" to ${to}`,
     );
+    // Local development without email: print the action link (verify,
+    // reset, magic link) so sign-up still works. Never in production — the
+    // link is a credential.
+    if (process.env.NODE_ENV !== "production") {
+      const link = /href="([^"]+)"/.exec(html)?.[1];
+      if (link) console.warn(`[email] (dev) open this link to continue: ${link.replace(/&amp;/g, "&")}`);
+    }
     return;
   }
 
