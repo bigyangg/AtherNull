@@ -4,6 +4,8 @@ import bs58 from "bs58";
 import {
   DEPOSIT_PROJECT_FUNDING_DISCRIMINATOR,
   INITIALIZE_PROJECT_FUNDING_DISCRIMINATOR,
+  REFUND_PROJECT_FUNDING_DISCRIMINATOR,
+  SETTLE_PROJECT_FUNDING_DISCRIMINATOR,
   U64_MAX,
 } from "./constants.js";
 
@@ -55,6 +57,49 @@ export function buildDepositProjectFundingIx(args: {
       { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
     ],
     data: Buffer.concat([Buffer.from(DEPOSIT_PROJECT_FUNDING_DISCRIMINATOR), u64le(args.amount)]),
+  });
+}
+
+/**
+ * settle_project_funding(release_amount). Signer: platform authority. Pays
+ * release_amount of the deposit to `recipient`, the rest to `customer`, and
+ * closes the account (rent back to the authority).
+ */
+export function buildSettleProjectFundingIx(args: {
+  programId: PublicKey;
+  authority: PublicKey;
+  projectFunding: PublicKey;
+  recipient: PublicKey;
+  customer: PublicKey;
+  releaseAmount: bigint;
+}): TransactionInstruction {
+  return new TransactionInstruction({
+    programId: args.programId,
+    keys: [
+      { pubkey: args.authority, isSigner: true, isWritable: true },
+      { pubkey: args.projectFunding, isSigner: false, isWritable: true },
+      { pubkey: args.recipient, isSigner: false, isWritable: true },
+      { pubkey: args.customer, isSigner: false, isWritable: true },
+    ],
+    data: Buffer.concat([Buffer.from(SETTLE_PROJECT_FUNDING_DISCRIMINATOR), u64le(args.releaseAmount)]),
+  });
+}
+
+/** refund_project_funding(). Signer: platform authority. Returns the whole deposit to `customer` and closes the account. */
+export function buildRefundProjectFundingIx(args: {
+  programId: PublicKey;
+  authority: PublicKey;
+  projectFunding: PublicKey;
+  customer: PublicKey;
+}): TransactionInstruction {
+  return new TransactionInstruction({
+    programId: args.programId,
+    keys: [
+      { pubkey: args.authority, isSigner: true, isWritable: true },
+      { pubkey: args.projectFunding, isSigner: false, isWritable: true },
+      { pubkey: args.customer, isSigner: false, isWritable: true },
+    ],
+    data: Buffer.from(REFUND_PROJECT_FUNDING_DISCRIMINATOR),
   });
 }
 

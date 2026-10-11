@@ -178,6 +178,15 @@ export async function internalRoutes(app: FastifyInstance) {
     // Postgres usage_events remains the durable source of truth throughout.
     const activePolicy = await getActivePolicy(task.id);
     const usageBaseline = await cumulativeTaskUsage(task.id);
+    // ADR-0015: when the org has its own sandboxed Agent Server, the build
+    // runs there as a conversation (visible live in the Agent Canvas). The
+    // worker is trusted infrastructure, so it receives the sandbox key; the
+    // browser never does.
+    const orgAgentServer = await db
+      .selectFrom("org_agent_servers")
+      .select(["base_url", "session_api_key"])
+      .where("organization_id", "=", task.organization_id)
+      .executeTakeFirst();
 
     // repositorySnapshot pairs the project's repo with the revision
     // snapshotted on the task at creation time (task.repository_revision,
@@ -208,6 +217,7 @@ export async function internalRoutes(app: FastifyInstance) {
           }
         : null,
       usageBaseline,
+      orgAgentServer: orgAgentServer ? { url: orgAgentServer.base_url, sessionApiKey: orgAgentServer.session_api_key } : null,
     });
   });
 

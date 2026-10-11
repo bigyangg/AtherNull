@@ -18,6 +18,14 @@ export const INITIALIZE_PROJECT_FUNDING_DISCRIMINATOR = Uint8Array.from([
 export const DEPOSIT_PROJECT_FUNDING_DISCRIMINATOR = Uint8Array.from([
   143, 166, 57, 13, 1, 140, 188, 164,
 ]);
+/** sha256("global:settle_project_funding")[0..8] — Phase 4E.2 */
+export const SETTLE_PROJECT_FUNDING_DISCRIMINATOR = Uint8Array.from([
+  157, 153, 88, 203, 92, 99, 43, 108,
+]);
+/** sha256("global:refund_project_funding")[0..8] — Phase 4E.2 */
+export const REFUND_PROJECT_FUNDING_DISCRIMINATOR = Uint8Array.from([
+  194, 125, 232, 76, 45, 111, 62, 234,
+]);
 /** sha256("account:ProjectFunding")[0..8] */
 export const PROJECT_FUNDING_ACCOUNT_DISCRIMINATOR = Uint8Array.from([
   225, 4, 107, 91, 56, 182, 198, 240,

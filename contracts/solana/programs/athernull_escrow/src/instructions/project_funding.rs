@@ -93,6 +93,85 @@ pub fn deposit_project_funding_handler(
     Ok(())
 }
 
+// --- Phase 4E.2: settlement and refund. Both are platform-authority-only
+// and both close the account, so a funding account can be paid out at most
+// once — a second settle/refund fails on the missing account, which is the
+// on-chain half of settlement idempotency (Postgres holds the other half).
+
+#[derive(Accounts)]
+pub struct SettleProjectFunding<'info> {
+    /// Must be the authority recorded at initialization. `mut`: it paid the
+    /// rent, so it receives the rent back when the account closes.
+    #[account(mut)]
+    pub authority: Signer<'info>,
+
+    #[account(
+        mut,
+        seeds = [PROJECT_FUNDING_SEED, project_funding.binding_hash.as_ref()],
+        bump = project_funding.bump,
+        has_one = authority @ EscrowError::Unauthorized,
+        has_one = customer,
+        close = authority,
+    )]
+    pub project_funding: Account<'info, ProjectFunding>,
+
+    /// Provider payout destination, named by the authority at call time.
+    #[account(mut)]
+    pub recipient: SystemAccount<'info>,
+
+    /// Bound customer; receives whatever of the deposit is not released.
+    #[account(mut)]
+    pub customer: SystemAccount<'info>,
+}
+
+/// Pays `release_amount` of the deposit to `recipient`, returns the rest of
+/// the deposit to the customer, and closes the account. Only deposited value
+/// moves — lamports sent to the PDA outside `deposit_project_funding` are not
+/// deposits and go back to the authority with the rent on close.
+pub fn settle_project_funding_handler(ctx: Context<SettleProjectFunding>, release_amount: u64) -> Result<()> {
+    let deposited = ctx.accounts.project_funding.deposited_amount;
+    let remainder = split_settlement(deposited, release_amount)?;
+
+    **ctx.accounts.project_funding.to_account_info().try_borrow_mut_lamports()? -= deposited;
+    **ctx.accounts.recipient.to_account_info().try_borrow_mut_lamports()? += release_amount;
+    **ctx.accounts.customer.to_account_info().try_borrow_mut_lamports()? += remainder;
+    Ok(())
+}
+
+#[derive(Accounts)]
+pub struct RefundProjectFunding<'info> {
+    #[account(mut)]
+    pub authority: Signer<'info>,
+
+    #[account(
+        mut,
+        seeds = [PROJECT_FUNDING_SEED, project_funding.binding_hash.as_ref()],
+        bump = project_funding.bump,
+        has_one = authority @ EscrowError::Unauthorized,
+        has_one = customer,
+        close = authority,
+    )]
+    pub project_funding: Account<'info, ProjectFunding>,
+
+    #[account(mut)]
+    pub customer: SystemAccount<'info>,
+}
+
+/// Returns the full deposit to the customer and closes the account.
+pub fn refund_project_funding_handler(ctx: Context<RefundProjectFunding>) -> Result<()> {
+    let deposited = ctx.accounts.project_funding.deposited_amount;
+    **ctx.accounts.project_funding.to_account_info().try_borrow_mut_lamports()? -= deposited;
+    **ctx.accounts.customer.to_account_info().try_borrow_mut_lamports()? += deposited;
+    Ok(())
+}
+
+/// Settlement split: the released part may not exceed the deposit. Returns
+/// the remainder owed back to the customer.
+pub fn split_settlement(deposited: u64, release_amount: u64) -> Result<u64> {
+    require!(release_amount <= deposited, EscrowError::SettlementExceedsDeposit);
+    Ok(deposited - release_amount)
+}
+
 /// Pure deposit arithmetic: amount must be > 0 and neither counter may
 /// overflow. Split out so overflow handling is unit-testable without
 /// needing 2^64 lamports on a validator.
@@ -128,5 +207,13 @@ mod tests {
     #[test]
     fn count_overflow_rejected() {
         assert!(apply_deposit(0, u64::MAX, 1).is_err());
+    }
+
+    #[test]
+    fn settlement_split() {
+        assert_eq!(split_settlement(100, 60).unwrap(), 40);
+        assert_eq!(split_settlement(100, 100).unwrap(), 0);
+        assert_eq!(split_settlement(100, 0).unwrap(), 100);
+        assert!(split_settlement(100, 101).is_err());
     }
 }

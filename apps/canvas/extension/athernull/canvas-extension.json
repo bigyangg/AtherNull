@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "name": "athernull",
+  "display_name": "AtherNull Builds",
+  "version": "0.1.0",
+  "description": "Plan, fund on Solana devnet, review and settle AtherNull builds without leaving the canvas.",
+  "entrypoint": "extension.js",
+  "contributes": {
+    "pages": [
+      {
+        "id": "builds",
+        "title": "AtherNull Builds",
+        "path": "/builds",
+        "nav_label": "Builds"
+      }
+    ]
+  }
+}

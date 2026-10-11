@@ -4,6 +4,7 @@ import {
   EstimateJobRequestSchema,
   RejectJobRequestSchema,
   VerifyJobRequestSchema,
+  type SettlementProgressResponse,
   type TaskStatus,
 } from "@athernull/contracts";
 import type { FastifyInstance } from "fastify";
@@ -14,6 +15,14 @@ import { db } from "../db.js";
 import { resolveRouting } from "../routing.js";
 import { assertDevnetNetworkPolicy } from "../solana/config.js";
 import { FundingError, toHttpError } from "../solana/errors.js";
+import {
+  checkSettlementFinality,
+  insertSettlement,
+  loadSettlementByTask,
+  submitSettlement,
+  toSettlementView,
+  type SettlementKind,
+} from "../solana/settlement-service.js";
 import { loadFundingByTask, MAX_VERIFICATION_AGE_MS, refreshFundingForGate } from "../solana/funding-service.js";
 import { getFundingRuntime } from "../solana/runtime.js";
 import { assertTaskProvenanceChain } from "../task-provenance-check.js";
@@ -51,6 +60,132 @@ async function loadOwnedTask(taskId: string, organizationId: string) {
 // way they already set AUTH_TEST_RATE_LIMIT_MAX.
 function legacyJobCreationEnabled(): boolean {
   return process.env.ALLOW_LEGACY_JOB_CREATION === "true";
+}
+
+// --- Phase 4E.2 settlement / refund -----------------------------------------
+
+const PAYOUT_STATES = {
+  SETTLE: { decided: "SETTLING", done: "SETTLED", via: "ACCEPTED", legacyKey: "settle" },
+  REFUND: { decided: "REFUNDING", done: "REFUNDED", via: "REJECTED", legacyKey: "refund" },
+} as const;
+
+// Records the settle/refund decision and moves the task to SETTLING /
+// REFUNDING in one transaction, then tries to push the payout through.
+async function decidePayout(args: {
+  taskId: string;
+  organizationId: string;
+  userId: string;
+  kind: SettlementKind;
+  from: TaskStatus[];
+}) {
+  const states = PAYOUT_STATES[args.kind];
+  const notReady =
+    args.kind === "SETTLE" || args.from.includes("AWAITING_ACCEPTANCE")
+      ? "Task is not awaiting acceptance"
+      : "Task is not failed or cancelled";
+
+  // The funding runtime is only needed (and only loaded) when there is a
+  // deposit to pay out; RPC calls never run inside the DB transaction.
+  const preFunding = await loadFundingByTask(args.taskId, args.organizationId);
+  const hasDeposit = preFunding !== undefined && BigInt(preFunding.confirmed_amount_base_units) > 0n;
+  const rt = hasDeposit ? getFundingRuntime() : null;
+  if (!hasDeposit && !args.from.includes("AWAITING_ACCEPTANCE")) {
+    throw new FundingError("NO_FUNDING_ACCOUNT", "This build has no confirmed devnet deposit to refund");
+  }
+
+  const decided = await db.transaction().execute(async (trx) => {
+    const task = await trx
+      .selectFrom("tasks")
+      .selectAll()
+      .where("id", "=", args.taskId)
+      .where("organization_id", "=", args.organizationId)
+      .forUpdate()
+      .executeTakeFirst();
+    if (!task) throw new HttpError(404, "Not found");
+    const current = task.status as TaskStatus;
+    if (!args.from.includes(current)) throw new HttpError(409, notReady);
+    // AWAITING_ACCEPTANCE goes through ACCEPTED/REJECTED; FAILED/CANCELLED
+    // go straight to REFUNDING. Either way the FSM must allow every hop.
+    const hops: TaskStatus[] =
+      current === "AWAITING_ACCEPTANCE"
+        ? [current, states.via, states.decided, states.done]
+        : [current, states.decided, states.done];
+    try {
+      for (let i = 1; i < hops.length; i++) assertTransition(hops[i - 1]!, hops[i]!);
+    } catch {
+      throw new HttpError(409, notReady);
+    }
+
+    const settlement = rt
+      ? await insertSettlement(trx, {
+          taskId: task.id,
+          organizationId: args.organizationId,
+          kind: args.kind,
+          userId: args.userId,
+          recipient: rt.config.settlementRecipient,
+        })
+      : null;
+
+    if (!settlement) {
+      // Legacy (no on-chain deposit): unchanged pre-4E.2 behavior.
+      await trx
+        .insertInto("payment_intents")
+        .values({
+          job_id: task.id,
+          chain: "stub",
+          asset: task.currency,
+          amount_minor: task.max_budget_minor,
+          actor: "platform",
+          idempotency_key: `${states.legacyKey}:${task.id}`,
+          status: "CONFIRMED",
+        })
+        .onConflict((oc) => oc.column("idempotency_key").doNothing())
+        .execute();
+    }
+
+    const result = await trx
+      .updateTable("tasks")
+      .set({ status: settlement ? states.decided : states.done, version: task.version + 1, updated_at: new Date() })
+      .where("id", "=", task.id)
+      .where("organization_id", "=", args.organizationId)
+      .where("status", "=", current)
+      .where("version", "=", task.version)
+      .returningAll()
+      .executeTakeFirst();
+    if (!result) throw new HttpError(409, notReady);
+    return { task: result, settled: settlement !== null };
+  });
+
+  if (!decided.settled) return decided.task;
+  // The decision is committed; a chain hiccup here only delays the payout,
+  // which the settlement/verify endpoint resumes.
+  try {
+    await advanceSettlement(args.taskId, args.organizationId);
+  } catch (err) {
+    console.warn(`[settlement] payout for task ${args.taskId} not completed yet: ${(err as Error).message}`);
+  }
+  return (await loadOwnedTask(args.taskId, args.organizationId)) ?? decided.task;
+}
+
+// Sends (if needed) and checks the decided payout; once the chain has it
+// finalized, moves the task from SETTLING/REFUNDING to SETTLED/REFUNDED.
+async function advanceSettlement(taskId: string, organizationId: string) {
+  const existing = await loadSettlementByTask(taskId, organizationId);
+  if (!existing) return null;
+  const rt = getFundingRuntime();
+  if (existing.status !== "FINALIZED") await submitSettlement(rt, existing.id);
+  const { status, row } = await checkSettlementFinality(rt, existing.id);
+  if (status === "FINALIZED") {
+    const states = PAYOUT_STATES[row.kind as SettlementKind];
+    await db
+      .updateTable("tasks")
+      .set({ status: states.done, version: sql`version + 1`, updated_at: new Date() })
+      .where("id", "=", taskId)
+      .where("organization_id", "=", organizationId)
+      .where("status", "=", states.decided)
+      .execute();
+  }
+  return row;
 }
 
 export async function jobRoutes(app: FastifyInstance) {
@@ -386,65 +521,20 @@ export async function jobRoutes(app: FastifyInstance) {
   // call): contracts/solana/plansol.md's locked-in sequencing decision
   // blocks wiring the Solana escrow into apps/api until Phases 1-4 exist.
   // Replace the body of this handler, not its route, when that lands.
+  // Phase 4E.2 — accepting a funded build settles its devnet project
+  // account: the decision (SETTLING + a settlement ledger row) commits in
+  // one transaction, then the authority-signed payout is sent, and the task
+  // reaches SETTLED only once that payout is finalized on chain (here if it
+  // is quick, otherwise via POST /v1/jobs/:id/settlement/verify). A task with
+  // no on-chain deposit (pre-4E.1 data) keeps the legacy immediate path.
   app.post("/v1/jobs/:id/accept", async (request, reply) => {
     try {
-      const { organizationId, role } = await requireOrgSession(request);
+      const { organizationId, role, userId } = await requireOrgSession(request);
       requirePrivilegedRole(role);
       const { id } = z.object({ id: z.string() }).parse(request.params);
-
-      const updated = await db.transaction().execute(async (trx) => {
-        const task = await trx
-          .selectFrom("tasks")
-          .selectAll()
-          .where("id", "=", id)
-          .where("organization_id", "=", organizationId)
-          .executeTakeFirst();
-        if (!task) {
-          throw new HttpError(404, "Not found");
-        }
-
-        try {
-          assertTransition(task.status as TaskStatus, "ACCEPTED");
-          assertTransition("ACCEPTED", "SETTLING");
-          assertTransition("SETTLING", "SETTLED");
-        } catch {
-          throw new HttpError(409, "Task is not awaiting acceptance");
-        }
-
-        await trx
-          .insertInto("payment_intents")
-          .values({
-            job_id: id,
-            chain: "stub",
-            asset: task.currency,
-            amount_minor: task.max_budget_minor,
-            actor: "platform",
-            idempotency_key: `settle:${id}`,
-            status: "CONFIRMED",
-          })
-          .onConflict((oc) => oc.column("idempotency_key").doNothing())
-          .execute();
-
-        const result = await trx
-          .updateTable("tasks")
-          .set({ status: "SETTLED", version: task.version + 1, updated_at: new Date() })
-          .where("id", "=", id)
-          .where("organization_id", "=", organizationId)
-          .where("status", "=", "AWAITING_ACCEPTANCE")
-          .where("version", "=", task.version)
-          .returningAll()
-          .executeTakeFirst();
-
-        if (!result) {
-          throw new HttpError(409, "Task is not awaiting acceptance");
-        }
-
-        return result;
-      });
-
-      reply.send(updated);
+      reply.send(await decidePayout({ taskId: id, organizationId, userId, kind: "SETTLE", from: ["AWAITING_ACCEPTANCE"] }));
     } catch (err) {
-      if (sendHttpError(reply, err)) return;
+      if (sendHttpError(reply, toHttpError(err))) return;
       if (err instanceof z.ZodError) {
         reply.status(400).send({ error: err.message });
         return;
@@ -453,72 +543,56 @@ export async function jobRoutes(app: FastifyInstance) {
     }
   });
 
-  // Collapses AWAITING_ACCEPTANCE -> REJECTED -> REFUNDING -> REFUNDED,
-  // mirroring accept's structure. Same DB-only settlement scope as accept.
+  // Rejecting returns the full deposit to the customer's wallet.
   app.post("/v1/jobs/:id/reject", async (request, reply) => {
     try {
-      const { organizationId, role } = await requireOrgSession(request);
+      const { organizationId, role, userId } = await requireOrgSession(request);
       requirePrivilegedRole(role);
       const { id } = z.object({ id: z.string() }).parse(request.params);
       RejectJobRequestSchema.parse(request.body ?? {});
-
-      const updated = await db.transaction().execute(async (trx) => {
-        const task = await trx
-          .selectFrom("tasks")
-          .selectAll()
-          .where("id", "=", id)
-          .where("organization_id", "=", organizationId)
-          .executeTakeFirst();
-        if (!task) {
-          throw new HttpError(404, "Not found");
-        }
-
-        try {
-          assertTransition(task.status as TaskStatus, "REJECTED");
-          assertTransition("REJECTED", "REFUNDING");
-          assertTransition("REFUNDING", "REFUNDED");
-        } catch {
-          throw new HttpError(409, "Task is not awaiting acceptance");
-        }
-
-        await trx
-          .insertInto("payment_intents")
-          .values({
-            job_id: id,
-            chain: "stub",
-            asset: task.currency,
-            amount_minor: task.max_budget_minor,
-            actor: "platform",
-            idempotency_key: `refund:${id}`,
-            status: "CONFIRMED",
-          })
-          .onConflict((oc) => oc.column("idempotency_key").doNothing())
-          .execute();
-
-        const result = await trx
-          .updateTable("tasks")
-          .set({ status: "REFUNDED", version: task.version + 1, updated_at: new Date() })
-          .where("id", "=", id)
-          .where("organization_id", "=", organizationId)
-          .where("status", "=", "AWAITING_ACCEPTANCE")
-          .where("version", "=", task.version)
-          .returningAll()
-          .executeTakeFirst();
-
-        if (!result) {
-          throw new HttpError(409, "Task is not awaiting acceptance");
-        }
-
-        return result;
-      });
-
-      reply.send(updated);
+      reply.send(await decidePayout({ taskId: id, organizationId, userId, kind: "REFUND", from: ["AWAITING_ACCEPTANCE"] }));
     } catch (err) {
-      if (sendHttpError(reply, err)) return;
+      if (sendHttpError(reply, toHttpError(err))) return;
       if (err instanceof z.ZodError) {
         reply.status(400).send({ error: err.message });
         return;
       }
+      throw err;
+    }
+  });
+
+  // A failed (or cancelled) funded build is refunded the same way. Unlike
+  // reject there is no legacy fallback: with no deposit there is nothing to
+  // refund.
+  app.post("/v1/jobs/:id/refund", async (request, reply) => {
+    try {
+      const { organizationId, role, userId } = await requireOrgSession(request);
+      requirePrivilegedRole(role);
+      const { id } = z.object({ id: z.string() }).parse(request.params);
+      reply.send(await decidePayout({ taskId: id, organizationId, userId, kind: "REFUND", from: ["FAILED", "CANCELLED"] }));
+    } catch (err) {
+      if (sendHttpError(reply, toHttpError(err))) return;
+      throw err;
+    }
+  });
+
+  // Drives an already-decided settlement/refund forward (idempotent; never
+  // decides anything itself) and reports progress. Any org member may poll.
+  app.post("/v1/jobs/:id/settlement/verify", async (request, reply) => {
+    try {
+      const { organizationId } = await requireOrgSession(request);
+      const { id } = z.object({ id: z.string() }).parse(request.params);
+      const task = await loadOwnedTask(id, organizationId);
+      if (!task) throw new HttpError(404, "Not found");
+      const settlement = await advanceSettlement(id, organizationId);
+      const current = await loadOwnedTask(id, organizationId);
+      const response: SettlementProgressResponse = {
+        taskStatus: current?.status ?? task.status,
+        settlement: settlement ? toSettlementView(settlement) : null,
+      };
+      reply.send(response);
+    } catch (err) {
+      if (sendHttpError(reply, toHttpError(err))) return;
       throw err;
     }
   });

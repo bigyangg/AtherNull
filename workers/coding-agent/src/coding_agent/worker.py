@@ -36,7 +36,10 @@ load_dotenv(Path(__file__).resolve().parents[2] / ".env")
 
 API_URL = os.getenv("ATHERNULL_API_URL", "http://localhost:3001")
 INTERNAL_TOKEN = os.getenv("INTERNAL_API_TOKEN")
-WORKER_ID = os.getenv("WORKER_ID", f"coding-agent-{uuid.uuid4().hex[:8]}")
+# setdefault: the module is loaded twice (as __main__ and as
+# coding_agent.worker by the adapters), and both copies must agree on the id
+# the lease is held under.
+WORKER_ID = os.environ.setdefault("WORKER_ID", f"coding-agent-{uuid.uuid4().hex[:8]}")
 POLL_INTERVAL_SECONDS = float(os.getenv("POLL_INTERVAL_SECONDS", "5"))
 HEARTBEAT_INTERVAL_SECONDS = float(os.getenv("HEARTBEAT_INTERVAL_SECONDS", "60"))
 # "direct" (default) is this file's own run_dispatch, unchanged. "agent_server"
@@ -177,8 +180,8 @@ def main() -> None:
     if not INTERNAL_TOKEN:
         print("INTERNAL_API_TOKEN must be set (must match apps/api's own value).", file=sys.stderr)
         raise SystemExit(2)
-    if EXECUTION_ADAPTER not in ("direct", "agent_server"):
-        print(f"EXECUTION_ADAPTER must be 'direct' or 'agent_server', got {EXECUTION_ADAPTER!r}", file=sys.stderr)
+    if EXECUTION_ADAPTER not in ("direct", "agent_server", "org_sandbox"):
+        print(f"EXECUTION_ADAPTER must be 'direct', 'agent_server' or 'org_sandbox', got {EXECUTION_ADAPTER!r}", file=sys.stderr)
         raise SystemExit(2)
 
     # Imported lazily so the "direct" default (production today) never pays
@@ -189,6 +192,12 @@ def main() -> None:
         from coding_agent.agent_server_adapter import run_dispatch_via_agent_server
 
         dispatch_fn = run_dispatch_via_agent_server
+    elif EXECUTION_ADAPTER == "org_sandbox":
+        # ADR-0015: builds run as conversations on the org's own sandboxed
+        # Agent Server, live in the Agent Canvas.
+        from coding_agent.org_sandbox_adapter import run_dispatch_via_org_sandbox
+
+        dispatch_fn = run_dispatch_via_org_sandbox
 
     log(f"online, polling {API_URL} every {POLL_INTERVAL_SECONDS}s (adapter={EXECUTION_ADAPTER})")
     with httpx.Client(timeout=30.0) as client:

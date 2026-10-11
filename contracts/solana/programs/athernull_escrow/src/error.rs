@@ -22,4 +22,7 @@ pub enum EscrowError {
     InvalidRequiredAmount,
     #[msg("Customer must be a non-default pubkey")]
     InvalidCustomer,
+    // --- 4E.2 settlement. Appended for the same reason.
+    #[msg("Settlement release amount exceeds the deposited amount")]
+    SettlementExceedsDeposit,
 }

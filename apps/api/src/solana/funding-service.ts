@@ -33,6 +33,7 @@ import { parseDepositTransaction } from "./deposit-parse.js";
 import { FundingError, SolanaRpcError } from "./errors.js";
 import type { Commitment, RpcAccount } from "./provider.js";
 import { assertDevnetChain, type FundingRuntime } from "./runtime.js";
+import { toSettlementView } from "./settlement-service.js";
 import type { ProjectFundingAccountsTable } from "@athernull/database";
 
 type FundingRow = Selectable<ProjectFundingAccountsTable>;
@@ -61,6 +62,11 @@ export async function toFundingView(row: FundingRow, conn: Kysely<Database> = db
     .orderBy("slot", "asc")
     .orderBy("created_at", "asc")
     .execute();
+  const settlement = await conn
+    .selectFrom("project_funding_settlements")
+    .selectAll()
+    .where("funding_account_id", "=", row.id)
+    .executeTakeFirst();
   return {
     id: row.id,
     taskId: row.task_id,
@@ -82,6 +88,7 @@ export async function toFundingView(row: FundingRow, conn: Kysely<Database> = db
       slot: d.slot,
       verifiedAt: d.verified_at.toISOString(),
     })),
+    settlement: settlement ? toSettlementView(settlement) : null,
   };
 }
 

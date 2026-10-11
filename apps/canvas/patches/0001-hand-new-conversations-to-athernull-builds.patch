@@ -1,0 +1,23 @@
+diff --git a/src/hooks/mutation/use-create-conversation.ts b/src/hooks/mutation/use-create-conversation.ts
+index 225cd02..35fd591 100644
+--- a/src/hooks/mutation/use-create-conversation.ts
++++ b/src/hooks/mutation/use-create-conversation.ts
+@@ -80,6 +80,18 @@ export const useCreateConversation = () => {
+     mutationFn: async (
+       variables: CreateConversationVariables,
+     ): Promise<CreateConversationResponse> => {
++      // AtherNull: agent conversations only start from a funded build, so a
++      // deployment that sets VITE_ATHERNULL_BUILDS_URL hands the prompt to
++      // AtherNull's build flow (plan -> budget -> funding) instead of
++      // creating a conversation directly.
++      const athernullBuildsUrl = import.meta.env.VITE_ATHERNULL_BUILDS_URL;
++      if (athernullBuildsUrl) {
++        const target = new URL(athernullBuildsUrl, window.location.origin);
++        if (variables.query?.trim()) target.searchParams.set("prompt", variables.query.trim());
++        window.location.assign(target.toString());
++        return new Promise<CreateConversationResponse>(() => {});
++      }
++
+       const {
+         query,
+         conversationInstructions,

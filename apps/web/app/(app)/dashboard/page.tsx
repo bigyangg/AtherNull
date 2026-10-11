@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { Suspense, useMemo } from "react";
 import Link from "next/link";
 import {
   ClipboardCheck,
@@ -19,6 +19,7 @@ import { IconBadge } from "@/components/icon-badge";
 import { PageHeader } from "@/components/page-header";
 import { StatusBadge } from "@/components/status-badge";
 import { EmptyState } from "@/components/empty-state";
+import { AgentPromptHero } from "@/components/canvas/agent-prompt-hero";
 import { useCurrentOrg } from "@/lib/auth/current-org-provider";
 import { useLiveTasks } from "@/lib/hooks/use-tasks";
 import { useRepoProjects } from "@/lib/hooks/use-repo-projects";
@@ -70,6 +71,10 @@ export default function DashboardPage() {
         }
       />
 
+      <Suspense>
+        <AgentPromptHero />
+      </Suspense>
+
       <div className="flex flex-col gap-6">
         <Card>
           <CardHeader className="flex-row items-center gap-3 space-y-0">
@@ -90,7 +95,7 @@ export default function DashboardPage() {
                 {needsReview.map((task) => (
                   <li key={task.id}>
                     <Link
-                      href={`/projects/${task.projectId}/tasks/${task.id}`}
+                      href={`/projects/${task.projectId}?taskId=${task.id}`}
                       className="flex items-center justify-between gap-3 py-3 text-sm"
                     >
                       <span className="min-w-0 flex-1 truncate font-medium text-foreground">
@@ -127,7 +132,7 @@ export default function DashboardPage() {
                 {liveActivity.map((task) => (
                   <li key={task.id}>
                     <Link
-                      href={`/projects/${task.projectId}/tasks/${task.id}`}
+                      href={`/projects/${task.projectId}?taskId=${task.id}`}
                       className="flex items-center justify-between gap-3 py-3 text-sm"
                     >
                       <span className="flex min-w-0 flex-1 items-center gap-2 font-medium text-foreground">

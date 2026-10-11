@@ -84,10 +84,14 @@ import { after, before, describe, test } from "node:test";
 
 import type { FastifyInstance, LightMyRequestResponse } from "fastify";
 import { sql } from "kysely";
+import { Keypair, PublicKey } from "@solana/web3.js";
 
 const { buildApp } = await import("../src/app.js");
 const { seedFundedFunding } = await import("./support/funding-fixtures.js");
 const { db } = await import("../src/db.js");
+const { setFundingRuntimeForTests } = await import("../src/solana/runtime.js");
+const { FakeChain, makeRuntime, SETTLEMENT_RECIPIENT } = await import("./support/fake-chain.js");
+const { FIXTURE_PROGRAM_ID } = await import("./support/funding-fixtures.js");
 
 let app: FastifyInstance;
 
@@ -298,6 +302,24 @@ async function createFundedTask(
   return taskId;
 }
 
+// Phase 4E.2: accept/reject now pay out the task's devnet funding on chain.
+// The funding fixture is DB-only, so back it with the same account on a
+// deterministic chain double before accepting/rejecting.
+async function backFundingOnChain(taskId: string) {
+  const funding = await db.selectFrom("project_funding_accounts").selectAll().where("task_id", "=", taskId).executeTakeFirstOrThrow();
+  const chain = new FakeChain(FIXTURE_PROGRAM_ID);
+  const authority = Keypair.generate();
+  chain.seedAccount(new PublicKey(funding.onchain_account), {
+    binding: Uint8Array.from(funding.binding_hash),
+    customer: new PublicKey(funding.customer_wallet!),
+    authority: authority.publicKey,
+    required: BigInt(funding.required_amount_base_units),
+    deposited: BigInt(funding.confirmed_amount_base_units),
+  });
+  setFundingRuntimeForTests(makeRuntime(chain, authority));
+  return { chain, customer: funding.customer_wallet! };
+}
+
 // FIXTURE-ONLY path — see this file's header comment. Deliberately bypasses
 // POST /internal/executions/claim (and /complete) and their shared global
 // queue entirely: every test using this only needs a real tasks/executions
@@ -458,7 +480,7 @@ describe("job lifecycle: estimate, verify, accept, reject", () => {
     assert.deepEqual(JSON.parse(list.body), [], "estimate must not create a task row");
   });
 
-  test("verify(PASS) then accept reaches SETTLED with one settle payment intent", async () => {
+  test("verify(PASS) then accept settles the devnet funding on chain and reaches SETTLED", async () => {
     const suffix = randomUUID();
     const { owner, organizationId, projectId, agentProfileId } = await setUpOwnerWithOrg(suffix);
     const { taskId, executionId } = await createVerifyingTaskDirect(owner, organizationId, projectId, agentProfileId);
@@ -481,6 +503,7 @@ describe("job lifecycle: estimate, verify, accept, reject", () => {
     assert.equal(runs[0]?.outcome, "PASS");
     assert.equal(runs[0]?.execution_id, executionId);
 
+    const { chain } = await backFundingOnChain(taskId);
     const accepted = await app.inject({
       method: "POST",
       url: `/v1/jobs/${taskId}/accept`,
@@ -488,35 +511,26 @@ describe("job lifecycle: estimate, verify, accept, reject", () => {
     });
     assert.equal(accepted.statusCode, 200, `accept failed: ${accepted.body}`);
     assert.equal((JSON.parse(accepted.body) as { status: string }).status, "SETTLED");
+    assert.equal(chain.payouts.get(SETTLEMENT_RECIPIENT.toBase58()), 50_000_000n);
 
-    const intents = await db
-      .selectFrom("payment_intents")
-      .selectAll()
-      .where("job_id", "=", taskId)
-      .where("idempotency_key", "=", `settle:${taskId}`)
-      .execute();
-    assert.equal(intents.length, 1);
-    assert.equal(intents[0]?.status, "CONFIRMED");
+    const settlements = await db.selectFrom("project_funding_settlements").selectAll().where("task_id", "=", taskId).execute();
+    assert.equal(settlements.length, 1);
+    assert.equal(settlements[0]?.status, "FINALIZED");
 
     const getRes = await app.inject({ method: "GET", url: `/v1/jobs/${taskId}`, headers: { cookie: owner.jar.header } });
     const getBody = JSON.parse(getRes.body) as { verificationRuns: unknown[] };
     assert.equal(getBody.verificationRuns.length, 1);
 
     // A second accept on an already-SETTLED task must be rejected, not
-    // produce a second payment intent.
+    // pay out again.
     const secondAccept = await app.inject({
       method: "POST",
       url: `/v1/jobs/${taskId}/accept`,
       headers: { cookie: owner.jar.header },
     });
     assert.equal(secondAccept.statusCode, 409, `expected 409 on repeat accept: ${secondAccept.body}`);
-    const intentsAfter = await db
-      .selectFrom("payment_intents")
-      .selectAll()
-      .where("job_id", "=", taskId)
-      .where("idempotency_key", "=", `settle:${taskId}`)
-      .execute();
-    assert.equal(intentsAfter.length, 1, "repeat accept must not create a second settle payment intent");
+    assert.equal(chain.payouts.get(SETTLEMENT_RECIPIENT.toBase58()), 50_000_000n, "repeat accept must not pay out twice");
+    setFundingRuntimeForTests(null);
   });
 
   test("verify(FAIL) moves the task to FAILED, not AWAITING_ACCEPTANCE", async () => {
@@ -534,7 +548,7 @@ describe("job lifecycle: estimate, verify, accept, reject", () => {
     assert.equal((JSON.parse(verified.body) as { status: string }).status, "FAILED");
   });
 
-  test("reject moves an awaiting-acceptance task to REFUNDED with one refund payment intent", async () => {
+  test("reject refunds the devnet funding to the customer and reaches REFUNDED", async () => {
     const suffix = randomUUID();
     const { owner, organizationId, projectId, agentProfileId } = await setUpOwnerWithOrg(suffix);
     const { taskId } = await createVerifyingTaskDirect(owner, organizationId, projectId, agentProfileId);
@@ -547,6 +561,7 @@ describe("job lifecycle: estimate, verify, accept, reject", () => {
     });
     assert.equal(verified.statusCode, 200, `verify failed: ${verified.body}`);
 
+    const { chain, customer } = await backFundingOnChain(taskId);
     const rejected = await app.inject({
       method: "POST",
       url: `/v1/jobs/${taskId}/reject`,
@@ -555,14 +570,8 @@ describe("job lifecycle: estimate, verify, accept, reject", () => {
     });
     assert.equal(rejected.statusCode, 200, `reject failed: ${rejected.body}`);
     assert.equal((JSON.parse(rejected.body) as { status: string }).status, "REFUNDED");
-
-    const intents = await db
-      .selectFrom("payment_intents")
-      .selectAll()
-      .where("job_id", "=", taskId)
-      .where("idempotency_key", "=", `refund:${taskId}`)
-      .execute();
-    assert.equal(intents.length, 1);
+    assert.equal(chain.payouts.get(customer), 50_000_000n);
+    setFundingRuntimeForTests(null);
   });
 });
 

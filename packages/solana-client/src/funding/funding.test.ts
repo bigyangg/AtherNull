@@ -10,6 +10,8 @@ import {
   BINDING_VECTORS,
   buildDepositProjectFundingIx,
   buildInitializeProjectFundingIx,
+  buildRefundProjectFundingIx,
+  buildSettleProjectFundingIx,
   computeBindingHash,
   decodeDepositInstructionData,
   decodeProjectFunding,
@@ -17,6 +19,8 @@ import {
   deriveProjectFundingPda,
   INITIALIZE_PROJECT_FUNDING_DISCRIMINATOR,
   PROJECT_FUNDING_ACCOUNT_DISCRIMINATOR,
+  REFUND_PROJECT_FUNDING_DISCRIMINATOR,
+  SETTLE_PROJECT_FUNDING_DISCRIMINATOR,
   PROJECT_FUNDING_ACCOUNT_SIZE,
   toHex,
   uuidToBytes,
@@ -62,6 +66,8 @@ test("discriminators equal the Anchor sha256 derivation", () => {
   const d = (n: string) => Uint8Array.from(createHash("sha256").update(n).digest().subarray(0, 8));
   assert.deepEqual(INITIALIZE_PROJECT_FUNDING_DISCRIMINATOR, d("global:initialize_project_funding"));
   assert.deepEqual(DEPOSIT_PROJECT_FUNDING_DISCRIMINATOR, d("global:deposit_project_funding"));
+  assert.deepEqual(SETTLE_PROJECT_FUNDING_DISCRIMINATOR, d("global:settle_project_funding"));
+  assert.deepEqual(REFUND_PROJECT_FUNDING_DISCRIMINATOR, d("global:refund_project_funding"));
   assert.deepEqual(PROJECT_FUNDING_ACCOUNT_DISCRIMINATOR, d("account:ProjectFunding"));
 });
 
@@ -78,6 +84,10 @@ test("discriminators match the built program IDL when one is present", () => {
   if (!ins("deposit_project_funding")) return; // legacy-only vendored IDL
   assert.deepEqual(ins("deposit_project_funding")!.discriminator, [...DEPOSIT_PROJECT_FUNDING_DISCRIMINATOR]);
   assert.deepEqual(ins("initialize_project_funding")!.discriminator, [...INITIALIZE_PROJECT_FUNDING_DISCRIMINATOR]);
+  if (ins("settle_project_funding")) {
+    assert.deepEqual(ins("settle_project_funding")!.discriminator, [...SETTLE_PROJECT_FUNDING_DISCRIMINATOR]);
+    assert.deepEqual(ins("refund_project_funding")!.discriminator, [...REFUND_PROJECT_FUNDING_DISCRIMINATOR]);
+  }
   assert.deepEqual(
     idl.accounts.find((a) => a.name === "ProjectFunding")!.discriminator,
     [...PROJECT_FUNDING_ACCOUNT_DISCRIMINATOR],
@@ -128,4 +138,19 @@ test("initialize instruction layout and account decode", () => {
   assert.throws(() => decodeProjectFunding(raw.subarray(0, 129)));
   raw[0] = 0;
   assert.throws(() => decodeProjectFunding(raw));
+});
+
+test("settle/refund instructions carry the IDL account order and u64 release amount", () => {
+  const authority = Keypair.generate().publicKey;
+  const recipient = Keypair.generate().publicKey;
+  const customer = Keypair.generate().publicKey;
+  const [pda] = deriveProjectFundingPda(PROGRAM_ID, computeBindingHash(BINDING_VECTORS[0]));
+  const settle = buildSettleProjectFundingIx({ programId: PROGRAM_ID, authority, projectFunding: pda, recipient, customer, releaseAmount: 50_000_000n });
+  assert.deepEqual(settle.keys.map((k) => k.pubkey.toBase58()), [authority, pda, recipient, customer].map((k) => k.toBase58()));
+  assert.deepEqual(settle.keys.map((k) => [k.isSigner, k.isWritable]), [[true, true], [false, true], [false, true], [false, true]]);
+  assert.deepEqual([...settle.data.subarray(0, 8)], [...SETTLE_PROJECT_FUNDING_DISCRIMINATOR]);
+  assert.equal(settle.data.readBigUInt64LE(8), 50_000_000n);
+  const refund = buildRefundProjectFundingIx({ programId: PROGRAM_ID, authority, projectFunding: pda, customer });
+  assert.deepEqual(refund.keys.map((k) => k.pubkey.toBase58()), [authority, pda, customer].map((k) => k.toBase58()));
+  assert.deepEqual([...refund.data], [...REFUND_PROJECT_FUNDING_DISCRIMINATOR]);
 });

@@ -2,6 +2,7 @@ import type {
   PrepareFundingRequest,
   PrepareFundingResponse,
   ProjectFundingView,
+  SettlementProgressResponse,
   VerifyFundingResponse,
 } from "@athernull/contracts";
 import type {
@@ -404,6 +405,15 @@ export const liveApi: TaskDashboardApi = {
       body: JSON.stringify(reason ? { reason } : {}),
     });
     return toTask(raw);
+  },
+
+  async refundTask(taskId: string) {
+    const raw = await apiFetch<RawTask>(`/v1/jobs/${taskId}/refund`, { method: "POST" });
+    return toTask(raw);
+  },
+
+  verifySettlement(taskId: string) {
+    return apiFetch<SettlementProgressResponse>(`/v1/jobs/${taskId}/settlement/verify`, { method: "POST" });
   },
 
   async getUsageSummary() {

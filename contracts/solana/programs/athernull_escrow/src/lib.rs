@@ -59,4 +59,13 @@ pub mod athernull_escrow {
     pub fn deposit_project_funding(ctx: Context<DepositProjectFunding>, amount: u64) -> Result<()> {
         project_funding::deposit_project_funding_handler(ctx, amount)
     }
+
+    // --- Phase 4E.2: acceptance-triggered settlement / rejection refund.
+    pub fn settle_project_funding(ctx: Context<SettleProjectFunding>, release_amount: u64) -> Result<()> {
+        project_funding::settle_project_funding_handler(ctx, release_amount)
+    }
+
+    pub fn refund_project_funding(ctx: Context<RefundProjectFunding>) -> Result<()> {
+        project_funding::refund_project_funding_handler(ctx)
+    }
 }

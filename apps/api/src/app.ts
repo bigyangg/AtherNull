@@ -12,6 +12,7 @@ import { jobRoutes } from "./routes/jobs.js";
 import { openhandsCompatRoutes } from "./routes/openhands-compat.js";
 import { projectFundingRoutes } from "./routes/project-funding.js";
 import { projectRoutes } from "./routes/projects.js";
+import { agentGatewayRoutes } from "./routes/agent-gateway.js";
 import { realtimeGatewayRoutes } from "./routes/realtime-gateway.js";
 import { MAX_RELAY_MESSAGE_BYTES, relayRoutes } from "./routes/relay.js";
 import { taskProvenanceRoutes } from "./routes/task-provenance.js";
@@ -82,6 +83,10 @@ export async function buildApp(opts: { logger?: boolean } = {}): Promise<Fastify
   // instance as relayRoutes above (no second websocket plugin registration
   // needed — @fastify/websocket decorates the whole Fastify instance once).
   await app.register(realtimeGatewayRoutes);
+  // ADR-0015 — agent gateway: the real OpenHands Agent Canvas's only
+  // backend (/oh/*), proxying to the org's sandboxed Agent Server behind
+  // AtherNull auth and the funded-build gate.
+  await app.register(agentGatewayRoutes);
   // Phase 2 — OpenHands compatibility layer (ADR-0006). Registers its own
   // literal `/api/conversations/*`, `/api/settings`, `/server_info` paths
   // directly; it doesn't collide with Better Auth's `/api/auth/*` catch-all

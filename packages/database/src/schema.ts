@@ -341,6 +341,37 @@ export interface ProjectFundingDepositsTable {
   created_at: Generated<Date>;
 }
 
+// Phase 4E.2 — one settle/refund decision per funding account
+// (0014_project_funding_settlements.sql). Amounts are lamports (bigint).
+export interface ProjectFundingSettlementsTable {
+  id: Generated<string>;
+  funding_account_id: string;
+  organization_id: string;
+  task_id: string;
+  kind: string; // SETTLE | REFUND
+  release_amount_base_units: string;
+  refund_amount_base_units: string;
+  recipient_wallet: string | null;
+  customer_wallet: string;
+  status: Generated<string>; // PENDING | SUBMITTED | FINALIZED
+  signature: string | null;
+  sent_at: NullableTimestamp;
+  finalized_slot: string | null; // bigint
+  finalized_at: NullableTimestamp;
+  created_by: string;
+  created_at: Generated<Date>;
+}
+
+// ADR-0015 — an organization's sandboxed Agent Server (agent gateway target).
+export interface OrgAgentServersTable {
+  organization_id: string;
+  base_url: string;
+  session_api_key: string;
+  container_name: string | null;
+  created_at: Generated<Date>;
+  updated_at: Generated<Date>;
+}
+
 export interface Database {
   projects: ProjectsTable;
   agent_profiles: AgentProfilesTable;
@@ -357,4 +388,6 @@ export interface Database {
   task_usage_pauses: TaskUsagePausesTable;
   project_funding_accounts: ProjectFundingAccountsTable;
   project_funding_deposits: ProjectFundingDepositsTable;
+  project_funding_settlements: ProjectFundingSettlementsTable;
+  org_agent_servers: OrgAgentServersTable;
 }

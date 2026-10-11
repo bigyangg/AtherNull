@@ -27,6 +27,8 @@ export function useAuthorizeBudget(projectId: string, estimateId: string | null)
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["budget-authorizations", projectId, estimateId] });
+      // The project-wide list (Prepare Build, agent canvas) changes too.
+      queryClient.invalidateQueries({ queryKey: ["budget-authorizations", "project", projectId] });
     },
   });
 }

@@ -1,0 +1,33 @@
+diff --git a/src/entry.client.tsx b/src/entry.client.tsx
+index 8e72274..8f763f2 100644
+--- a/src/entry.client.tsx
++++ b/src/entry.client.tsx
+@@ -14,7 +14,28 @@ import {
+ import { waitForI18n } from "./i18n";
+ import { shouldStartMockWorker } from "./mocks/should-start-mock-worker";
+ 
++// AtherNull: the canvas's backend is AtherNull's agent gateway, which
++// authenticates the AtherNull session cookie. Without a session, send the
++// user to AtherNull sign-in (and back here) instead of letting the canvas
++// report a disconnected backend.
++async function requireAtherNullSession() {
++  const sessionUrl = import.meta.env.VITE_ATHERNULL_SESSION_URL;
++  if (!sessionUrl) return;
++  let signedIn = false;
++  try {
++    const res = await fetch(sessionUrl, { credentials: "same-origin" });
++    signedIn = res.ok && (await res.json()) !== null;
++  } catch {
++    signedIn = false;
++  }
++  if (signedIn) return;
++  const back = `${window.location.pathname}${window.location.search}`;
++  window.location.assign(`/sign-in?callbackURL=${encodeURIComponent(back)}`);
++  await new Promise(() => {});
++}
++
+ async function prepareApp() {
++  await requireAtherNullSession();
+   await waitForI18n();
+ 
+   if (shouldStartMockWorker()) {

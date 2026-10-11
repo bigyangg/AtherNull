@@ -1,0 +1,7 @@
+{
+  "repository": "https://github.com/OpenHands/OpenHands.git",
+  "commit": "380fd839d6bcb1f9e1674ab0ff5c0225705118e8",
+  "package": "@openhands/agent-canvas",
+  "version": "1.20.0",
+  "agentServer": "1.49.2"
+}

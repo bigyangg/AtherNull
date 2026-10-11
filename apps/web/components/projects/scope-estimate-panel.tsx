@@ -81,7 +81,7 @@ function CostCard({ estimate }: { estimate: ProjectEstimate }) {
   );
 }
 
-function PlanView({ estimate }: { estimate: ProjectEstimate }) {
+export function PlanView({ estimate }: { estimate: ProjectEstimate }) {
   const { plannerOutput: plan } = estimate;
   return (
     <div className="flex flex-col gap-4">

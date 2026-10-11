@@ -41,3 +41,25 @@ export function useVerifyProjectFunding(taskId: string) {
     onSuccess: (res) => queryClient.setQueryData(key(taskId), res.funding),
   });
 }
+
+// Phase 4E.2 — while a payout is in flight (SETTLING/REFUNDING), keep
+// asking apps/api to drive it to finality. The server decides when it is
+// done (finalized on chain); this only polls and refreshes what it shows.
+export function useSettlementProgress(taskId: string, inFlight: boolean) {
+  const queryClient = useQueryClient();
+  return useQuery({
+    queryKey: ["settlement-progress", taskId],
+    queryFn: async () => {
+      const progress = await dashboardApi.verifySettlement(taskId);
+      queryClient.invalidateQueries({ queryKey: key(taskId) });
+      if (progress.taskStatus !== "SETTLING" && progress.taskStatus !== "REFUNDING") {
+        queryClient.invalidateQueries({ queryKey: ["task", taskId] });
+        queryClient.invalidateQueries({ queryKey: ["tasks"] });
+      }
+      return progress;
+    },
+    enabled: inFlight,
+    refetchInterval: inFlight ? 4_000 : false,
+    retry: false,
+  });
+}

@@ -157,3 +157,16 @@ export function useRejectTask(taskId: string) {
     },
   });
 }
+
+// Phase 4E.2 — refunds a FAILED/CANCELLED funded build's devnet deposit.
+export function useRefundTask(taskId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () => dashboardApi.refundTask(taskId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["task", taskId] });
+      queryClient.invalidateQueries({ queryKey: ["tasks"] });
+      queryClient.invalidateQueries({ queryKey: ["project-funding", taskId] });
+    },
+  });
+}

@@ -122,6 +122,13 @@ field you include will be discarded. Respond with ONLY the JSON object, no
 surrounding prose or markdown fences.`;
 }
 
+// undici reports every network failure as "TypeError: fetch failed" and puts
+// the useful part (ENOTFOUND, ECONNRESET, ...) on `cause`.
+function describeFetchError(err: unknown): string {
+  const cause = err instanceof Error ? (err.cause as { code?: unknown } | undefined) : undefined;
+  return typeof cause?.code === "string" ? `${String(err)} (${cause.code})` : String(err);
+}
+
 // Bounded, provider-agnostic repair instruction. Deliberately does NOT echo
 // the previous bad response back to the model (no "continue this JSON" —
 // the spec is explicit that a repair retry must produce a complete fresh
@@ -185,7 +192,7 @@ export const callAnthropicPlanner: PlannerClient = async (sourcePrompt, repair) 
     // A network failure or our own timeout abort — the provider was never
     // actually reached with a definitive answer, so this is transient by
     // nature: the exact same request may well succeed a moment later.
-    const reason = err instanceof Error && err.name === "AbortError" ? "request timed out" : String(err);
+    const reason = err instanceof Error && err.name === "AbortError" ? "request timed out" : describeFetchError(err);
     throw new PlannerError(`Planner LLM call failed before receiving a response: ${reason}`, "transient_provider");
   } finally {
     clearTimeout(timeout);
@@ -220,14 +227,88 @@ export const callAnthropicPlanner: PlannerClient = async (sourcePrompt, repair) 
   }
 };
 
+// NVIDIA NIM (OpenAI-compatible chat completions) — the same provider the
+// coding worker already runs on, so a deployment with only an NVIDIA key can
+// still plan. Identical contract to callAnthropicPlanner: strict JSON.parse
+// of the message content, same failure classification, nothing lenient.
+// Reasoning models return their chain of thought in a separate field
+// (reasoning_content), which is never read.
+const NIM_PLANNER_MODEL = process.env.PLANNER_NIM_MODEL ?? "nvidia/nemotron-3-super-120b-a12b";
+
+export const callNimPlanner: PlannerClient = async (sourcePrompt, repair) => {
+  const apiKey = process.env.NVIDIA_NIM_API_KEY;
+  if (!apiKey) {
+    throw new PlannerError(
+      "NVIDIA_NIM_API_KEY is not configured — planner generation is unavailable",
+      "terminal_provider",
+    );
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+
+  let res: Response;
+  try {
+    res = await fetch("https://integrate.api.nvidia.com/v1/chat/completions", {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${apiKey}` },
+      body: JSON.stringify({
+        model: NIM_PLANNER_MODEL,
+        max_tokens: PLANNER_MAX_TOKENS,
+        temperature: 0.2,
+        messages: [
+          { role: "system", content: buildSystemPrompt() },
+          { role: "user", content: withRepairNote(sourcePrompt, repair) },
+        ],
+      }),
+      signal: controller.signal,
+    });
+  } catch (err) {
+    const reason = err instanceof Error && err.name === "AbortError" ? "request timed out" : describeFetchError(err);
+    throw new PlannerError(`Planner LLM call failed before receiving a response: ${reason}`, "transient_provider");
+  } finally {
+    clearTimeout(timeout);
+  }
+
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    const kind: PlannerFailureKind = TRANSIENT_HTTP_STATUS_CODES.has(res.status)
+      ? "transient_provider"
+      : "terminal_provider";
+    throw new PlannerError(`Planner LLM call failed with ${res.status}: ${body.slice(0, 500)}`, kind);
+  }
+
+  const payload = (await res.json()) as { choices?: { message?: { content?: string | null } }[] };
+  const text = payload.choices?.[0]?.message?.content;
+  if (!text) {
+    throw new PlannerError("Planner LLM response contained no text content", "malformed_output");
+  }
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new PlannerError("Planner LLM response was not valid JSON", "malformed_output");
+  }
+};
+
+// PLANNER_PROVIDER picks explicitly ("anthropic" | "nvidia_nim"); otherwise
+// Anthropic when its key is present, else NIM when its key is present.
+export function resolvePlanner(): { client: PlannerClient; model: string } {
+  const provider =
+    process.env.PLANNER_PROVIDER ??
+    (process.env.ANTHROPIC_API_KEY ? "anthropic" : process.env.NVIDIA_NIM_API_KEY ? "nvidia_nim" : "anthropic");
+  return provider === "nvidia_nim"
+    ? { client: callNimPlanner, model: NIM_PLANNER_MODEL }
+    : { client: callAnthropicPlanner, model: PLANNER_MODEL };
+}
+
 // Test-only override — mirrors no existing DI pattern in this codebase 1:1
 // (none exists yet; jobs.ts/routing.ts call their collaborators directly),
 // but a real network call to an LLM provider is not something the test
 // suite can or should depend on, so this is the narrowest seam: production
 // code paths (routes/estimates.ts) never call this, only test setup does.
-let activeClient: PlannerClient = callAnthropicPlanner;
+let testClient: PlannerClient | null = null;
 export function setPlannerClientForTests(client: PlannerClient | null): void {
-  activeClient = client ?? callAnthropicPlanner;
+  testClient = client;
 }
 
 function classifyFailure(err: unknown): PlannerFailureKind {
@@ -288,6 +369,7 @@ function logPlanner(message: string): void {
 // successful return value — zero project_estimates rows are ever created.
 export async function generatePlannerOutput(sourcePrompt: string): Promise<PlannerResult> {
   let lastErr: unknown;
+  const { client, model } = testClient ? { client: testClient, model: PLANNER_MODEL } : resolvePlanner();
 
   for (let attempt = 1; attempt <= MAX_PLANNER_ATTEMPTS; attempt++) {
     const isRetry = attempt > 1;
@@ -307,10 +389,10 @@ export async function generatePlannerOutput(sourcePrompt: string): Promise<Plann
     }
 
     try {
-      const raw = await activeClient(sourcePrompt, repair);
+      const raw = await client(sourcePrompt, repair);
       const plannerOutput = PlannerOutputSchema.parse(raw);
       logPlanner(isRetry ? `success on retry (attempt ${attempt})` : "success on first attempt");
-      return { plannerOutput, plannerModel: PLANNER_MODEL };
+      return { plannerOutput, plannerModel: model };
     } catch (err) {
       lastErr = err;
       const kind = classifyFailure(err);

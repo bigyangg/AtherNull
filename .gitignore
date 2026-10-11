@@ -39,3 +39,6 @@ infrastructure/**/*.local.yml
 # OpenHands integration prototype — spike A's full upstream checkout is
 # reproducible from spike-a-standalone-shell/commit.txt; never commit the clone.
 prototypes/openhands-integration/spike-a-standalone-shell/upstream/
+
+# ADR-0015: pinned OpenHands Agent Canvas checkout (apps/canvas/setup.mjs)
+apps/canvas/upstream/

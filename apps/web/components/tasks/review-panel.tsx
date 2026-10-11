@@ -20,8 +20,8 @@ function formatTimestamp(iso: string): string {
 // Verification and acceptance stay two separate steps here, mirroring
 // apps/api's FSM exactly (VERIFYING -> AWAITING_ACCEPTANCE via verify(PASS),
 // then a distinct accept/reject decision) — see apps/api/src/routes/jobs.ts.
-// A verify(FAIL) task lands in FAILED with no action here on purpose: the
-// FAILED -> refund backend path is deliberately deferred (.memory/TODO.md).
+// A verify(FAIL) task lands in FAILED; its devnet deposit is refunded from
+// PayoutStatus (components/tasks/payout-status.tsx), not from here.
 export function ReviewPanel({ task }: { task: TaskDetail }) {
   const verifyTask = useVerifyTask(task.id);
   const acceptTask = useAcceptTask(task.id);
@@ -145,10 +145,10 @@ export function ReviewPanel({ task }: { task: TaskDetail }) {
             </div>
             <div className="flex gap-2">
               <Button disabled={isBusy} onClick={handleAccept}>
-                {acceptTask.isPending ? "Settling…" : "Accept & settle"}
+                {acceptTask.isPending ? "Settling on-chain…" : "Accept & release payment"}
               </Button>
               <Button variant="outline" disabled={isBusy} onClick={handleReject}>
-                {rejectTask.isPending ? "Refunding…" : "Reject & refund"}
+                {rejectTask.isPending ? "Refunding on-chain…" : "Reject & refund"}
               </Button>
             </div>
           </div>

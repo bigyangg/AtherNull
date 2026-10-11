@@ -1,0 +1,10 @@
+{
+  "name": "@athernull/canvas",
+  "private": true,
+  "version": "0.0.0",
+  "description": "The OpenHands Agent Canvas, pinned and patched for AtherNull (ADR-0015).",
+  "scripts": {
+    "canvas:setup": "node setup.mjs",
+    "canvas:build": "node build.mjs"
+  }
+}

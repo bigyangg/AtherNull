@@ -35,13 +35,13 @@ export const TASK_STATUS_DISPLAY: Record<
   VERIFYING: { label: "Verifying", tone: "default" },
   AWAITING_ACCEPTANCE: { label: "Needs your review", tone: "warning" },
   ACCEPTED: { label: "Accepted", tone: "success" },
-  SETTLING: { label: "Settling", tone: "muted" },
-  SETTLED: { label: "Live", tone: "success" },
+  SETTLING: { label: "Settling on-chain", tone: "default" },
+  SETTLED: { label: "Settled", tone: "success" },
   FAILED: { label: "Failed", tone: "destructive" },
   CANCELLED: { label: "Cancelled", tone: "muted" },
   REJECTED: { label: "Rejected", tone: "destructive" },
   DISPUTED: { label: "Disputed", tone: "destructive" },
-  REFUNDING: { label: "Refunding", tone: "warning" },
+  REFUNDING: { label: "Refunding on-chain", tone: "warning" },
   REFUNDED: { label: "Refunded", tone: "muted" },
   PAUSED_USAGE_LIMIT: { label: "Paused: usage limit reached", tone: "warning" },
 };
@@ -49,16 +49,15 @@ export const TASK_STATUS_DISPLAY: Record<
 // A task status counts as "settled" once the workspace should stop polling
 // for progress — either it reached a terminal outcome or it's waiting on the
 // customer, not the agent.
+// SETTLING/REFUNDING stay active: the on-chain payout is still finalizing.
 const INACTIVE_STATUSES = new Set<TaskStatus>([
   "AWAITING_ACCEPTANCE",
   "ACCEPTED",
-  "SETTLING",
   "SETTLED",
   "FAILED",
   "CANCELLED",
   "REJECTED",
   "DISPUTED",
-  "REFUNDING",
   "REFUNDED",
 ]);
 

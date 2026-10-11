@@ -8,6 +8,8 @@
 //                             apps/api only, never the worker/browser/logs>
 //   SOLANA_AUTHORITY_PUBKEY=<optional; derived from the keypair when omitted>
 //   SOLANA_DEMO_REQUIRED_LAMPORTS=50000000   (DEMO_FIXED requirement; default shown)
+//   SOLANA_SETTLEMENT_RECIPIENT=<optional provider payout wallet for accepted
+//                                builds (4E.2); defaults to the authority>
 //
 // Chain identity is NOT inferred from the URL: the funding service also
 // asserts getGenesisHash == the Solana devnet genesis hash.
@@ -32,6 +34,8 @@ export interface FundingConfig {
   genesisHash: string;
   /** Loaded lazily by prepareFunding only — verification/gating never needs it. */
   loadAuthority: () => Keypair;
+  /** Phase 4E.2 provider payout wallet for accepted builds. */
+  settlementRecipient: PublicKey;
 }
 
 /** The network policy alone, used by the activation gate: SOLANA_NETWORK must be exactly "devnet". */
@@ -104,6 +108,15 @@ export function loadFundingConfig(env: NodeJS.ProcessEnv = process.env): Funding
     throw new FundingError("FUNDING_NOT_CONFIGURED", "SOLANA_AUTHORITY_PUBKEY is invalid");
   }
 
+  let settlementRecipient = authorityPublicKey;
+  if (env.SOLANA_SETTLEMENT_RECIPIENT) {
+    try {
+      settlementRecipient = new PublicKey(env.SOLANA_SETTLEMENT_RECIPIENT);
+    } catch {
+      throw new FundingError("FUNDING_NOT_CONFIGURED", "SOLANA_SETTLEMENT_RECIPIENT is invalid");
+    }
+  }
+
   return {
     network: "devnet",
     rpcProvider: "helius",
@@ -113,5 +126,6 @@ export function loadFundingConfig(env: NodeJS.ProcessEnv = process.env): Funding
     genesisHash: DEVNET_GENESIS_HASH,
     authorityPublicKey,
     loadAuthority,
+    settlementRecipient,
   };
 }

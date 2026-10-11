@@ -13,6 +13,7 @@ import { BudgetMeter } from "@/components/workspace/budget-meter";
 import { UsageLimitMeter } from "@/components/workspace/usage-limit-meter";
 import { ExecutionList } from "@/components/tasks/execution-list";
 import { ProjectFundingPanel } from "@/components/projects/project-funding-panel";
+import { PayoutStatus } from "@/components/tasks/payout-status";
 import { ReviewPanel } from "@/components/tasks/review-panel";
 import { TaskDetailSkeleton } from "@/components/tasks/task-detail-skeleton";
 import { useTask } from "@/lib/hooks/use-task";
@@ -42,7 +43,7 @@ export default function TaskStatusPage() {
   return (
     <main className="mx-auto max-w-3xl px-6 py-10">
       <PageHeader
-        backHref={`/projects/${projectId}`}
+        backHref={`/projects/${projectId}?taskId=${taskId}`}
         title={task.requirements}
         subtitle={`Revision ${task.repositoryRevision}`}
         trailing={
@@ -137,6 +138,8 @@ export default function TaskStatusPage() {
         {task.status === "AWAITING_FUNDING" && <ProjectFundingPanel taskId={task.id} />}
 
         <ReviewPanel task={task} />
+
+        <PayoutStatus task={task} />
 
         <Card>
           <CardHeader className="flex-row items-center gap-3 space-y-0">

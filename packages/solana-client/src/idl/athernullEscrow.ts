@@ -339,6 +339,57 @@ export type AthernullEscrow = {
       "args": []
     },
     {
+      "name": "refundProjectFunding",
+      "discriminator": [
+        194,
+        125,
+        232,
+        76,
+        45,
+        111,
+        62,
+        234
+      ],
+      "accounts": [
+        {
+          "name": "authority",
+          "writable": true,
+          "signer": true,
+          "relations": [
+            "projectFunding"
+          ]
+        },
+        {
+          "name": "projectFunding",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  102
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "project_funding.binding_hash",
+                "account": "projectFunding"
+              }
+            ]
+          }
+        },
+        {
+          "name": "customer",
+          "writable": true,
+          "relations": [
+            "projectFunding"
+          ]
+        }
+      ],
+      "args": []
+    },
+    {
       "name": "releaseEscrow",
       "discriminator": [
         146,
@@ -414,6 +465,76 @@ export type AthernullEscrow = {
       "args": [
         {
           "name": "amount",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "settleProjectFunding",
+      "discriminator": [
+        157,
+        153,
+        88,
+        203,
+        92,
+        99,
+        43,
+        108
+      ],
+      "accounts": [
+        {
+          "name": "authority",
+          "docs": [
+            "Must be the authority recorded at initialization. `mut`: it paid the",
+            "rent, so it receives the rent back when the account closes."
+          ],
+          "writable": true,
+          "signer": true,
+          "relations": [
+            "projectFunding"
+          ]
+        },
+        {
+          "name": "projectFunding",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  102
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "project_funding.binding_hash",
+                "account": "projectFunding"
+              }
+            ]
+          }
+        },
+        {
+          "name": "recipient",
+          "docs": [
+            "Provider payout destination, named by the authority at call time."
+          ],
+          "writable": true
+        },
+        {
+          "name": "customer",
+          "docs": [
+            "Bound customer; receives whatever of the deposit is not released."
+          ],
+          "writable": true,
+          "relations": [
+            "projectFunding"
+          ]
+        }
+      ],
+      "args": [
+        {
+          "name": "releaseAmount",
           "type": "u64"
         }
       ]
@@ -562,6 +683,11 @@ export type AthernullEscrow = {
       "code": 6008,
       "name": "invalidCustomer",
       "msg": "Customer must be a non-default pubkey"
+    },
+    {
+      "code": 6009,
+      "name": "settlementExceedsDeposit",
+      "msg": "Settlement release amount exceeds the deposited amount"
     }
   ],
   "types": [

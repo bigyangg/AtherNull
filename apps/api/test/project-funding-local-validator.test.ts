@@ -1,4 +1,4 @@
-// Phase 4E.1 — the REAL funding service, real RPC JSON shapes, and the REAL
+// Phase 4E.1/4E.2 — the REAL funding and settlement services, real RPC JSON shapes, and the REAL
 // deployed program bytes, against a local solana-test-validator (no devnet,
 // no Helius). Skipped unless SOLANA_LOCAL_VALIDATOR_URL is set, e.g.:
 //
@@ -39,6 +39,8 @@ describe("project funding against a real local validator", { skip }, () => {
   let createAwaitingFundingTask: typeof import("./support/app-fixtures.js").createAwaitingFundingTask;
   const programId = new PublicKey("9isSF5USV3WURyJaKLtvcd82W2txUQnFDaRz6WK8Vcjv");
   const authority = Keypair.generate();
+  // Phase 4E.2: dedicated provider payout wallet, so its balance is exact.
+  const recipient = Keypair.generate();
   let airdropTo: (k: PublicKey) => Promise<void>;
 
   before(async () => {
@@ -68,6 +70,7 @@ describe("project funding against a real local validator", { skip }, () => {
         genesisHash: genesis, // local validator identity (test harness only)
         authorityPublicKey: authority.publicKey,
         loadAuthority: () => authority,
+        settlementRecipient: recipient.publicKey,
       },
       provider: new HeliusSolanaRpcProvider({ url: URL_! }),
       pollIntervalMs: 500,
@@ -150,7 +153,49 @@ describe("project funding against a real local validator", { skip }, () => {
     const act = await post(`/v1/jobs/${t.taskId}/fund`);
     assert.equal(act.statusCode, 200, act.body);
     assert.equal((JSON.parse(act.body) as { status: string }).status, "QUEUED");
-    // Neutralize (shared claim queue rule).
+    // Neutralize (shared claim queue rule) — straight to the review state,
+    // as if the build had run and passed verification.
+    await db.updateTable("tasks").set({ status: "AWAITING_ACCEPTANCE" }).where("id", "=", t.taskId).execute();
+
+    // Phase 4E.2: accept settles through the real program.
+    const accepted = await post(`/v1/jobs/${t.taskId}/accept`);
+    assert.equal(accepted.statusCode, 200, accepted.body);
+    const status = await settleUntilDone(post, t.taskId);
+    assert.equal(status, "SETTLED");
+    assert.equal(await connection.getBalance(recipient.publicKey, "finalized"), 50_000_000);
+    assert.equal(await connection.getAccountInfo(pda, "finalized"), null, "project account closed on chain");
+  });
+
+  // Drives settlement/verify until the payout is finalized (local finality takes a few seconds).
+  async function settleUntilDone(post: (url: string) => Promise<{ body: string }>, taskId: string) {
+    for (let i = 0; i < 90; i++) {
+      const res = JSON.parse((await post(`/v1/jobs/${taskId}/settlement/verify`)).body) as { taskStatus: string };
+      if (res.taskStatus === "SETTLED" || res.taskStatus === "REFUNDED") return res.taskStatus;
+      await new Promise((r) => setTimeout(r, 1000));
+    }
+    throw new Error("settlement did not finalize in time");
+  }
+
+  test("a failed funded build refunds the full deposit to the customer through the real program", { timeout: 240_000 }, async () => {
+    const t = await createAwaitingFundingTask(app);
+    const post = (url: string, payload?: object) => app.inject({ method: "POST", url, headers: { cookie: t.jar.header }, payload });
+    assert.equal((await post(`/v1/jobs/${t.taskId}/funding`)).statusCode, 201);
+    const wallet = Keypair.generate();
+    await airdropTo(wallet.publicKey);
+    const prep = await post(`/v1/jobs/${t.taskId}/funding/prepare`, { customerWallet: wallet.publicKey.toBase58(), amountLamports: "60000000" });
+    assert.equal(prep.statusCode, 200, prep.body);
+    const tx = Transaction.from(Buffer.from((JSON.parse(prep.body) as { transaction: { base64: string } }).transaction.base64, "base64"));
+    tx.partialSign(wallet);
+    const sig = await connection.sendRawTransaction(tx.serialize());
+    await connection.confirmTransaction(sig, "confirmed");
+    await waitFinalized(sig);
+    assert.equal((await post(`/v1/jobs/${t.taskId}/funding/verify`, { signature: sig })).statusCode, 200);
     await db.updateTable("tasks").set({ status: "FAILED" }).where("id", "=", t.taskId).execute();
+
+    const before = await connection.getBalance(wallet.publicKey, "finalized");
+    const refunded = await post(`/v1/jobs/${t.taskId}/refund`);
+    assert.equal(refunded.statusCode, 200, refunded.body);
+    assert.equal(await settleUntilDone(post, t.taskId), "REFUNDED");
+    assert.equal((await connection.getBalance(wallet.publicKey, "finalized")) - before, 60_000_000);
   });
 });

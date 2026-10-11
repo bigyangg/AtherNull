@@ -19,6 +19,7 @@ import { Sheet, SheetContent, SheetTitle, SheetTrigger } from "@/components/ui/s
 import { UserMenu } from "@/components/auth/user-menu";
 import { cn } from "@/lib/utils";
 import { useNeedsReviewCount } from "@/lib/hooks/use-needs-review-count";
+import { useEmbeddedInCanvas } from "@/lib/use-embedded";
 
 const NAV_ITEMS = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
@@ -98,6 +99,9 @@ function SidebarBody({ pathname, onNavigate }: { pathname: string; onNavigate?: 
 
 export function AppSidebar() {
   const pathname = usePathname();
+  // Inside the Agent Canvas the canvas rail is the navigation.
+  const embedded = useEmbeddedInCanvas();
+  if (embedded) return null;
 
   return (
     <>

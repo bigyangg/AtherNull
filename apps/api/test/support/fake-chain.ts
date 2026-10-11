@@ -11,6 +11,8 @@ import {
   INITIALIZE_PROJECT_FUNDING_DISCRIMINATOR,
   PROJECT_FUNDING_ACCOUNT_DISCRIMINATOR,
   PROJECT_FUNDING_ACCOUNT_SIZE,
+  REFUND_PROJECT_FUNDING_DISCRIMINATOR,
+  SETTLE_PROJECT_FUNDING_DISCRIMINATOR,
 } from "@athernull/solana-client";
 import { Keypair, PublicKey, SystemProgram, Transaction } from "@solana/web3.js";
 import bs58 from "bs58";
@@ -76,6 +78,11 @@ export class FakeChain implements SolanaRpcProvider {
   private sendCount = 0;
   /** If true, newly submitted transactions stop at `confirmed` until finalize() is called. */
   holdAtConfirmed = false;
+  /** Phase 4E.2: lamports paid out of closed funding accounts, by wallet. */
+  readonly payouts = new Map<string, bigint>();
+  private credit(wallet: string, lamports: bigint) {
+    this.payouts.set(wallet, (this.payouts.get(wallet) ?? 0n) + lamports);
+  }
 
   constructor(public readonly programId: PublicKey) {}
 
@@ -193,6 +200,28 @@ export class FakeChain implements SolanaRpcProvider {
               }
             };
           }
+        } else if (
+          disc.equals(Buffer.from(SETTLE_PROJECT_FUNDING_DISCRIMINATOR)) ||
+          disc.equals(Buffer.from(REFUND_PROJECT_FUNDING_DISCRIMINATOR))
+        ) {
+          // Phase 4E.2: authority-signed payout that closes the account.
+          const settle = disc.equals(Buffer.from(SETTLE_PROJECT_FUNDING_DISCRIMINATOR));
+          const pda = ix.keys[1]!.pubkey.toBase58();
+          const st = this.live.get(pda);
+          const customer = ix.keys[settle ? 3 : 2]!.pubkey;
+          const release = settle ? ix.data.readBigUInt64LE(8) : 0n;
+          if (!st || !st.authority.equals(ix.keys[0]!.pubkey) || !st.customer.equals(customer) || release > st.deposited) {
+            err = { InstructionError: [0, { Custom: 2006 }] };
+          } else {
+            const deposited = st.deposited;
+            const recipient = settle ? ix.keys[2]!.pubkey.toBase58() : null;
+            this.live.delete(pda);
+            apply = () => {
+              this.finalizedState.delete(pda);
+              if (recipient && release > 0n) this.credit(recipient, release);
+              if (deposited - release > 0n) this.credit(customer.toBase58(), deposited - release);
+            };
+          }
         }
       }
     }
@@ -242,6 +271,14 @@ export class FakeChain implements SolanaRpcProvider {
     return this.submit(tx, opts);
   }
 
+  /** Test helper: places an already-initialized, already-funded account on chain (finalized), e.g. to back a DB-only funding fixture. */
+  seedAccount(pda: PublicKey, st: { binding: Uint8Array; customer: PublicKey; authority: PublicKey; required: bigint; deposited: bigint }) {
+    const [, bump] = PublicKey.findProgramAddressSync([Buffer.from("pf"), Buffer.from(st.binding)], this.programId);
+    const state: PfState = { ...st, count: st.deposited > 0n ? 1n : 0n, bump };
+    this.live.set(pda.toBase58(), state);
+    this.finalizedState.set(pda.toBase58(), { ...state });
+  }
+
   /** Test helper: raw state peek (live view). */
   peek(address: string): { deposited: bigint; count: bigint } | null {
     const st = this.live.get(address);
@@ -259,6 +296,9 @@ export class FakeChain implements SolanaRpcProvider {
   }
 }
 
+/** Fixed provider payout wallet for settlement tests. */
+export const SETTLEMENT_RECIPIENT = Keypair.generate().publicKey;
+
 export function makeRuntime(chain: FakeChain, authority: Keypair, requiredLamports = 50_000_000n): FundingRuntime {
   const config: FundingConfig = {
     network: "devnet",
@@ -269,6 +309,7 @@ export function makeRuntime(chain: FakeChain, authority: Keypair, requiredLampor
     genesisHash: DEVNET_GENESIS_HASH,
     authorityPublicKey: authority.publicKey,
     loadAuthority: () => authority,
+    settlementRecipient: SETTLEMENT_RECIPIENT,
   };
   return { config, provider: chain, pollIntervalMs: 0, sleep: async () => {} };
 }

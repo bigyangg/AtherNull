@@ -1,0 +1,87 @@
+diff --git a/src/components/features/home/home-chat-launcher.tsx b/src/components/features/home/home-chat-launcher.tsx
+index 3be6692..078314a 100644
+--- a/src/components/features/home/home-chat-launcher.tsx
++++ b/src/components/features/home/home-chat-launcher.tsx
+@@ -33,6 +33,7 @@ import type { PluginSpec } from "#/api/conversation-service/agent-server-convers
+ import { PluginPickerModal } from "#/components/features/plugins/plugin-picker-modal";
+ import { PluginPickerTrigger } from "#/components/features/plugins/plugin-picker-trigger";
+ import { RecommendedAutomationsLauncher } from "#/components/features/automations/recommended-automations-launcher";
++import { hasAutomationInterface } from "#/manifests/automation-interface";
+ import { PinnedAutomationsDashboard } from "./featured-automations/pinned-automations-dashboard";
+ import { RunningAutomationsList } from "./featured-automations/running-automations-list";
+ import { HomeHeaderTitle } from "./home-header/home-header-title";
+@@ -272,11 +273,13 @@ export function HomeChatLauncher() {
+           />
+         </div>
+ 
+-        <div className="mt-8 flex w-full flex-col gap-8">
+-          <RecommendedAutomationsLauncher variant="rail" />
+-          <PinnedAutomationsDashboard />
+-          <RunningAutomationsList />
+-        </div>
++        {hasAutomationInterface() && (
++          <div className="mt-8 flex w-full flex-col gap-8">
++            <RecommendedAutomationsLauncher variant="rail" />
++            <PinnedAutomationsDashboard />
++            <RunningAutomationsList />
++          </div>
++        )}
+       </div>
+ 
+       {isLocal ? (
+diff --git a/src/components/features/sidebar/use-sidebar-onboarding-checklist.ts b/src/components/features/sidebar/use-sidebar-onboarding-checklist.ts
+index 410192d..8bdc963 100644
+--- a/src/components/features/sidebar/use-sidebar-onboarding-checklist.ts
++++ b/src/components/features/sidebar/use-sidebar-onboarding-checklist.ts
+@@ -114,10 +114,14 @@ export function useSidebarOnboardingChecklist() {
+ 
+   const items = useMemo(
+     (): SidebarOnboardingChecklistItemState[] =>
+-      SIDEBAR_ONBOARDING_CHECKLIST_ITEM_IDS.map((id) => ({
+-        id,
+-        isComplete: completionById[id],
+-      })),
++      SIDEBAR_ONBOARDING_CHECKLIST_ITEM_IDS
++        // AtherNull: no community Slack, and no automations (see
++        // manifests/automation-interface.ts), so neither is a setup step.
++        .filter((id) => !(import.meta.env.VITE_ATHERNULL && (id === "join-slack" || id === "schedule-task")))
++        .map((id) => ({
++          id,
++          isComplete: completionById[id],
++        })),
+     [completionById],
+   );
+ 
+diff --git a/src/hooks/query/use-latest-agent-canvas-version.ts b/src/hooks/query/use-latest-agent-canvas-version.ts
+index 762b036..baedd93 100644
+--- a/src/hooks/query/use-latest-agent-canvas-version.ts
++++ b/src/hooks/query/use-latest-agent-canvas-version.ts
+@@ -15,7 +15,9 @@ export function useLatestAgentCanvasVersion({
+   return useQuery({
+     queryKey: APP_UPDATE_QUERY_KEYS.latestVersion,
+     queryFn: ({ signal }) => fetchLatestAgentCanvasVersion(signal),
+-    enabled,
++    // AtherNull pins the canvas version (apps/canvas/UPSTREAM.json); npm
++    // releases are not upgrades users can apply.
++    enabled: enabled && !import.meta.env.VITE_ATHERNULL,
+     // Offline/air-gapped must settle into the quiet inline state immediately
+     // rather than sitting through exponential backoff.
+     retry: false,
+diff --git a/src/manifests/automation-interface.ts b/src/manifests/automation-interface.ts
+index 18b04ab..5742e19 100644
+--- a/src/manifests/automation-interface.ts
++++ b/src/manifests/automation-interface.ts
+@@ -81,7 +81,12 @@ function admitInterfaceManifest(candidate: unknown): InterfaceManifest | null {
+   return candidate as InterfaceManifest;
+ }
+ 
+-const ADMITTED = admitInterfaceManifest(AUTOMATION_INTERFACE_CANDIDATE);
++// AtherNull: automations start agent runs outside a funded build (they call
++// the sandbox directly on a schedule or webhook), which AtherNull does not
++// allow, so the deployment has no automation interface.
++const ADMITTED = import.meta.env.VITE_ATHERNULL
++  ? null
++  : admitInterfaceManifest(AUTOMATION_INTERFACE_CANDIDATE);
+ 
+ /**
+  * Whether this deployment has an automation interface at all. The nav entries

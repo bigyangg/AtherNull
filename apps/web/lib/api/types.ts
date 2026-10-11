@@ -2,6 +2,7 @@ import type {
   PrepareFundingRequest,
   PrepareFundingResponse,
   ProjectFundingView,
+  SettlementProgressResponse,
   VerifyFundingResponse,
 } from "@athernull/contracts";
 import type {
@@ -106,6 +107,12 @@ export interface TaskDashboardApi {
   verifyTask(taskId: string, outcome: "PASS" | "FAIL"): Promise<Task>;
   acceptTask(taskId: string): Promise<Task>;
   rejectTask(taskId: string, reason?: string): Promise<Task>;
+  // Phase 4E.2 — on-chain payout. accept settles and reject refunds the
+  // task's devnet funding; refundTask refunds a FAILED/CANCELLED funded
+  // build; verifySettlement drives an already-decided payout and reports
+  // progress (SETTLING/REFUNDING -> SETTLED/REFUNDED once finalized).
+  refundTask(taskId: string): Promise<Task>;
+  verifySettlement(taskId: string): Promise<SettlementProgressResponse>;
   getUsageSummary(): Promise<UsageSummary>;
   getExecutionEvents(taskId: string, executionId: string): Promise<ExecutionEvent[]>;
 

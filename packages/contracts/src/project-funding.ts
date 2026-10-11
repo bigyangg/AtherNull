@@ -23,6 +23,20 @@ export const ProjectFundingDepositViewSchema = z.object({
 });
 export type ProjectFundingDepositView = z.infer<typeof ProjectFundingDepositViewSchema>;
 
+// Phase 4E.2 — the one settle (accepted) or refund (rejected/failed) payout
+// of a funding account. Only FINALIZED means the chain has it.
+export const ProjectFundingSettlementViewSchema = z.object({
+  kind: z.enum(["SETTLE", "REFUND"]),
+  status: z.enum(["PENDING", "SUBMITTED", "FINALIZED"]),
+  releaseLamports: LamportsString,
+  refundLamports: LamportsString,
+  recipientWallet: z.string().nullable(),
+  customerWallet: z.string(),
+  signature: z.string().nullable(),
+  finalizedAt: z.string().nullable(),
+});
+export type ProjectFundingSettlementView = z.infer<typeof ProjectFundingSettlementViewSchema>;
+
 export const ProjectFundingViewSchema = z.object({
   id: z.string(),
   taskId: z.string(),
@@ -39,6 +53,7 @@ export const ProjectFundingViewSchema = z.object({
   initSignature: z.string().nullable(),
   verifiedAt: z.string().nullable(),
   deposits: z.array(ProjectFundingDepositViewSchema),
+  settlement: ProjectFundingSettlementViewSchema.nullable(),
 });
 export type ProjectFundingView = z.infer<typeof ProjectFundingViewSchema>;
 
@@ -104,3 +119,11 @@ export function formatDevnetSol(lamports: string | bigint): string {
   const frac = (v % 1_000_000_000n).toString().padStart(9, "0").replace(/0+$/, "").padEnd(2, "0");
   return `${whole}.${frac}`;
 }
+
+// POST /v1/jobs/:id/settlement/verify — drives an already-decided settlement
+// or refund forward and reports where the task and the payout stand.
+export const SettlementProgressResponseSchema = z.object({
+  taskStatus: z.string(),
+  settlement: ProjectFundingSettlementViewSchema.nullable(),
+});
+export type SettlementProgressResponse = z.infer<typeof SettlementProgressResponseSchema>;

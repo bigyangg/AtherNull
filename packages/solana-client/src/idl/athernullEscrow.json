@@ -329,6 +329,57 @@
       "args": []
     },
     {
+      "name": "refund_project_funding",
+      "discriminator": [
+        194,
+        125,
+        232,
+        76,
+        45,
+        111,
+        62,
+        234
+      ],
+      "accounts": [
+        {
+          "name": "authority",
+          "writable": true,
+          "signer": true,
+          "relations": [
+            "project_funding"
+          ]
+        },
+        {
+          "name": "project_funding",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  102
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "project_funding.binding_hash",
+                "account": "ProjectFunding"
+              }
+            ]
+          }
+        },
+        {
+          "name": "customer",
+          "writable": true,
+          "relations": [
+            "project_funding"
+          ]
+        }
+      ],
+      "args": []
+    },
+    {
       "name": "release_escrow",
       "discriminator": [
         146,
@@ -404,6 +455,76 @@
       "args": [
         {
           "name": "amount",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "settle_project_funding",
+      "discriminator": [
+        157,
+        153,
+        88,
+        203,
+        92,
+        99,
+        43,
+        108
+      ],
+      "accounts": [
+        {
+          "name": "authority",
+          "docs": [
+            "Must be the authority recorded at initialization. `mut`: it paid the",
+            "rent, so it receives the rent back when the account closes."
+          ],
+          "writable": true,
+          "signer": true,
+          "relations": [
+            "project_funding"
+          ]
+        },
+        {
+          "name": "project_funding",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  102
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "project_funding.binding_hash",
+                "account": "ProjectFunding"
+              }
+            ]
+          }
+        },
+        {
+          "name": "recipient",
+          "docs": [
+            "Provider payout destination, named by the authority at call time."
+          ],
+          "writable": true
+        },
+        {
+          "name": "customer",
+          "docs": [
+            "Bound customer; receives whatever of the deposit is not released."
+          ],
+          "writable": true,
+          "relations": [
+            "project_funding"
+          ]
+        }
+      ],
+      "args": [
+        {
+          "name": "release_amount",
           "type": "u64"
         }
       ]
@@ -552,6 +673,11 @@
       "code": 6008,
       "name": "InvalidCustomer",
       "msg": "Customer must be a non-default pubkey"
+    },
+    {
+      "code": 6009,
+      "name": "SettlementExceedsDeposit",
+      "msg": "Settlement release amount exceeds the deposited amount"
     }
   ],
   "types": [

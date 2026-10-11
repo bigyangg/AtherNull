@@ -20,7 +20,9 @@ import { describeAuthError } from "@/lib/auth/errors";
 function SignInForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const callbackPath = searchParams.get("callbackURL") || "/dashboard";
+  // Same-site paths only (never "//host" or an absolute URL).
+  const requested = searchParams.get("callbackURL");
+  const callbackPath = requested && requested.startsWith("/") && !requested.startsWith("//") ? requested : "/dashboard";
   const urlError = describeAuthError(searchParams.get("error"));
 
   const [email, setEmail] = useState("");
@@ -55,6 +57,12 @@ function SignInForm() {
       return;
     }
 
+    // /canvas is the OpenHands Agent Canvas, a separate app on this origin:
+    // it needs a full page load, not a client-side Next.js transition.
+    if (callbackPath === "/canvas" || callbackPath.startsWith("/canvas/") || callbackPath.startsWith("/canvas?")) {
+      window.location.assign(callbackPath);
+      return;
+    }
     router.push(callbackPath);
   }
 

@@ -37,47 +37,42 @@ Open from spec §11 still needing validation: backend runtime choice (TypeScript
 
 ## 2. Build phases (from spec §10, adjusted)
 
-- [~] **Phase 0 — Repo and decisions**
-  - [x] Scaffold repo layout (see §3 below) — `pnpm install`, `pnpm -r typecheck`, `pnpm -r build` all verified green (2026-09-19)
-  - [x] ADR: OpenHands SDK as pinned dependency, not fork — pin exact version (`docs/adr/0001-openhands-sdk-as-dependency.md`, pinned 1.42.1)
-  - [~] ADR: sandbox isolation choice (gVisor vs Docker-only vs Daytona-hosted for MVP) — written (`docs/adr/0002-sandbox-isolation-strategy.md`) but Status: Proposed, blocked on confirming Coolify VPS KVM/nested-virt support
-  - [~] Threat model doc in `docs/` — skeleton in place (`docs/threat-model.md`), fill in per-phase
-  - [x] Baseline CI (`.github/workflows/ci.yml` — node typecheck/build matrix + python install/ruff matrix)
-- [x] **Phase 0.5 — Identity (Better Auth)** — not in the original spec's phase list; inserted because Phase 1's tables all assume a real `organization_id`/user concept that didn't exist yet. See `docs/adr/0004-better-auth-for-identity.md`.
-  - [x] Better Auth wired into `apps/api` (`src/auth.ts`, mounted at `/api/auth/*` in `src/index.ts`) — Postgres via its built-in Kysely+`pg.Pool` adapter, `generateId: "uuid"`, `organization` plugin enabled.
-  - [x] `packages/database/migrations/0001_better_auth_schema.sql` — generated for real via `pnpm dlx auth@1.7.5 generate` against a live DB, not hand-written. Defines `user`/`session`/`account`/`verification`/`organization`/`member`/`invitation`.
-  - [x] `packages/database/migrations/0001_init.sql` renamed → `0002_platform_tables.sql`; hand-rolled `organizations`/`memberships` tables deleted; every `organization_id` FK repointed at `"organization"`; `projects.owner_member_id` → `owner_user_id` repointed at `"user"`.
-  - [x] Verified live, not just compiled: both migrations applied in order against a real local Postgres with zero FK errors; `apps/api` booted for real and `/health` (200), `/api/auth/get-session` (200, null), `/api/auth/organization/list` (401 anonymous) all responded correctly through the Fastify mount.
-  - [ ] No sign-in method enabled yet (email/password, OAuth, etc.) — open decision, not blocking Phase 1.
-  - [ ] `apps/web` client-side session/org wiring — deliberately deferred to Phase 6.
-- [~] **Phase 1 — Core job engine**
-  - [x] PostgreSQL migrations for `organizations`, `tasks`, `executions`, `usage_events` (schema in spec §5) — now split across `0001_better_auth_schema.sql` (identity) + `0002_platform_tables.sql` (platform), see Phase 0.5. Includes `agent_profiles.model_tiers` and `executions.routing_*` columns (ADR-0003).
-  - [ ] Task FSM: `CREATED → AWAITING_FUNDING → FUNDED → QUEUED → RUNNING → VERIFYING → AWAITING_ACCEPTANCE → ACCEPTED → SETTLING → SETTLED` (+ `FAILED`/`CANCELLED`/`REJECTED`/`DISPUTED`/`REFUNDING→REFUNDED`)
-  - [ ] API + queue wiring — `apps/api` has `/health` + Better Auth's `/api/auth/*`, but no job endpoints yet
-  - [ ] Wire `packages/model-router`'s `chooseTier()` into task dispatch so `InternalWorkDispatch.resolvedModel`/`routingTier`/`routingScore`/`routingReason` are actually populated, not just schema fields
-  - [ ] Exit test: job survives API/worker restart without duplicate execution
-- [~] **Phase 2 — OpenHands adapter**
-  - [x] Minimal spike: SDK agent edits a disposable test repo — ran live 2026-09-19 against `nvidia_nim/nvidia/nemotron-3-super-120b-a12b` (NVIDIA Build). Agent added `add(a, b)` to `src/math_utils.py`, wrote `test_math_utils.py` itself, ran it via the terminal tool, confirmed exit 0 — independently re-verified outside the agent's own claim. First model tried (`qwen/qwen3-coder-480b-a35b-instruct`) had hit NVIDIA's EOL; swapped for a currently-live catalog entry.
-  - [ ] Wrap SDK calls behind an internal adapter (spec §7 internal work dispatch contract) so upgrades don't touch the public API
-  - [ ] Event capture → `usage_events`, `CHECKPOINT_SAVED`
-  - [x] Exit test: produces a patch on an approved test repository — met by the spike above
-- [ ] **Phase 3 — Isolated execution**
-  - [ ] Stand up chosen sandbox (gVisor-hardened `DockerWorkspace` per Phase 0 ADR)
-  - [ ] Quotas: CPU, memory, wall time, spend cap enforced outside the agent
-  - [ ] Default-deny outbound network; allowlist package registries
-  - [ ] Exit test: no host or sibling-tenant access; cleanup verified
-- [ ] **Phase 4 — Independent verification**
-  - [ ] Verifier service: fresh checkout, deterministic tests, evidence report — never trusts agent's own success claim
-  - [ ] Exit test: a failing test blocks acceptance and payout
-- [ ] **Phase 5 — Payment integration**
-  - [ ] Solana devnet escrow: fund / release / refund, idempotent settlement intents
-  - [ ] Exit test: real testnet transactions; retries don't double-pay
-- [ ] **Phase 6 — Customer experience**
-  - [ ] Task form, live status, artifact/result review, wallet state in Next.js UI
-  - [ ] Exit test: user completes full workflow without an operator console
-- [ ] **Phase 7 — Reliability and demo**
-  - [ ] Backup/restore drills, crash tests, spend-cap tests, demo recordings
-  - [ ] Exit test: demo works repeatedly, including the failure/refund path
+Refreshed 2026-10-11 against the code and ADRs 0001–0015; per-phase detail
+lives in the ADRs, not here.
+
+- [x] **Phase 0 — Repo and decisions** — layout, CI, ADR-0001 (SDK pinned
+  1.42.1). ADR-0002 sandbox choice still Proposed (VPS KVM support unconfirmed).
+- [x] **Phase 0.5 — Identity** — Better Auth + organizations (ADR-0004);
+  email/password sign-in with verification is live in `apps/web`.
+- [x] **Phase 1 — Core job engine** — task FSM, leased claim/heartbeat/
+  complete, retries, routing via `packages/model-router` (ADR-0003).
+- [x] **Phase 2 — OpenHands adapter** — Agent Server dispatch, persisted
+  `execution_events`, OpenHands compatibility API (ADR-0005/0006).
+- [x] **Phase 3 — Isolated execution + realtime** — loopback-bound Agent
+  Server, worker relay, authenticated realtime view/control, reconnect
+  (ADR-0007). Real usage metering + soft usage limits (ADR-0011/0012).
+  gVisor hardening still tied to ADR-0002.
+- [x] **Phase 4A–4C — Plan, budget, provenance** — planner scope/estimate
+  (Anthropic or NVIDIA NIM), authorized budgets, provenance-bound task
+  creation (ADR-0008/0009/0010).
+- [ ] **Phase 4 — Independent verification** — `services/verifier` is still a
+  stub; verification is a privileged manual PASS/FAIL. Needs: worker captures
+  a patch artifact -> verifier applies it on a fresh checkout and runs the
+  project's tests -> reports via an internal endpoint.
+- [x] **Phase 5 — Payments (Solana devnet)** — 4E.1 funding + activation gate
+  (ADR-0013, verified live on devnet); 4E.2 settle/refund on accept/reject/
+  failure (ADR-0014, verified on a local validator; **devnet program upgrade
+  pending**).
+- [x] **Phase 6b — Real OpenHands canvas** — the pinned OpenHands Agent
+  Canvas (integrations, MCP, skills, terminal, files) behind AtherNull's
+  agent gateway, one sandboxed Agent Server per org, funded builds run as
+  canvas conversations, AtherNull Builds as a canvas extension (ADR-0015).
+- [x] **Phase 6 — Customer experience** — agent-first canvas
+  (`/projects/[id]`): one conversation from prompt -> plan -> budget -> devnet
+  funding -> live agent -> verification -> review -> on-chain settlement, with
+  Plan / Changes / Terminal / On-chain / Checks tabs; dashboard prompt hand-off.
+- [ ] **Phase 7 — Reliability and demo** — demo runbook + recordings,
+  including the failure/refund path; backup/restore and crash drills.
 
 **Go/no-go gate** (spec §10): don't add marketplace bidding, multi-chain, autonomous prod deploy, or more agent types until one coding job reliably produces a verified patch within budget and survives retries.
 
