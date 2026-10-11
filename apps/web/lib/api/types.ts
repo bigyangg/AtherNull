@@ -7,6 +7,7 @@ import type {
 } from "@athernull/contracts";
 import type {
   AgentProfile,
+  BuildPatch,
   Discussion,
   BudgetAuthorization,
   BudgetAuthorizationSource,
@@ -125,6 +126,8 @@ export interface TaskDashboardApi {
   // server reads the transcript from the org's sandbox itself).
   generateEstimateFromDiscussion(projectId: string, discussionId: string): Promise<ProjectEstimate>;
   listDiscussions(): Promise<Discussion[]>;
+  // ADR-0017 — the build's captured change; null until one exists.
+  getBuildPatch(taskId: string): Promise<BuildPatch | null>;
   listEstimates(projectId: string): Promise<ProjectEstimate[]>;
   getEstimate(projectId: string, estimateId: string): Promise<ProjectEstimate>;
   reviseEstimate(projectId: string, estimateId: string, prompt: string): Promise<ProjectEstimate>;

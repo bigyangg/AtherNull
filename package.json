@@ -12,6 +12,7 @@
     "typecheck": "pnpm -r --if-present typecheck",
     "test": "pnpm -r --if-present test",
     "dev:web": "pnpm --filter @athernull/web dev",
-    "dev:api": "pnpm --filter @athernull/api dev"
+    "dev:api": "pnpm --filter @athernull/api dev",
+    "dev": "node scripts/dev.mjs"
   }
 }

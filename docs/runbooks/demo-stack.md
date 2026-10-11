@@ -9,37 +9,21 @@ Everything on one origin, `http://localhost:8080` (ADR-0015):
 | `/api/auth`, `/v1` | AtherNull API |
 | everything else | AtherNull web app |
 
-## One-time setup
+## One command
 
 ```sh
 pnpm install
-docker compose -f infrastructure/docker-compose.yml up -d postgres
-# apply packages/database/migrations/*.sql in order (0001 … 0016)
-node apps/canvas/setup.mjs      # pinned Agent Canvas + AtherNull patch
-node apps/canvas/build.mjs      # brands + builds; CANVAS_PUBLIC_ORIGIN defaults to http://localhost:8080
-docker pull ghcr.io/openhands/agent-server:latest-python
+node scripts/dev.mjs --init-env   # first time: writes apps/api/.env from ~/.athernull-devnet
+pnpm dev                          # afterwards
 ```
 
-`apps/api/.env` (see `.env.example`) must use the single origin:
-
-```
-BETTER_AUTH_URL=http://localhost:8080
-WEB_APP_URL=http://localhost:8080
-TRUSTED_ORIGINS=http://localhost:8080
-NVIDIA_NIM_API_KEY=...            # planner + sandbox LLM
-SOLANA_RPC_URL=... SOLANA_AUTHORITY_KEYPAIR=...   # devnet funding/settlement
-```
-
-`apps/web/.env.local`: `NEXT_PUBLIC_API_URL=http://localhost:8080`.
-
-## Start (one terminal each)
-
-```sh
-pnpm --filter @athernull/api dev
-pnpm --filter @athernull/web dev
-CANVAS_DIST=apps/canvas/upstream/build node infrastructure/ingress/dev-ingress.mjs
-cd workers/coding-agent && EXECUTION_ADAPTER=org_sandbox .venv/Scripts/python -m coding_agent.worker
-```
+`scripts/dev.mjs` starts Postgres, applies migrations (recording any that a
+hand-built database already has), builds the canvas on first run, prepares
+the demo repository (`~/.athernull/demo-api`, from `examples/demo-api`),
+then runs API, web, ingress, the worker (`org_sandbox`) and the independent
+verifier with prefixed logs. It refuses to start if 3000, 3001 or 8080 is
+taken. Ctrl-C stops everything. Needs Docker and the worker venv
+(`workers/coding-agent/.venv`).
 
 ## Per organization
 
@@ -68,9 +52,15 @@ Builds extension. Re-running it is safe.
    tools: open it from Builds ("Watch and steer the agent live in the
    canvas") or the conversation list; owners/admins can message it while it
    runs.
-5. Verify → **Accept & release payment** (settles on devnet) or **Reject &
-   refund**; a failed build offers **Refund deposit**. Each payout links to
-   Solana Explorer.
+5. The independent verifier applies the captured change to a fresh checkout
+   and runs the tests with no network; the build moves to review (or fails)
+   on its own. Changes shows the exact diff; Checks shows the evidence.
+6. **Accept & release payment** (settles on devnet) or **Reject & refund**;
+   a failed build offers **Refund deposit**. Each payout links to Solana
+   Explorer.
+
+Use the demo repository (`~/.athernull/demo-api`) as the project: e.g.
+"Add GET /version that returns the package.json version, with a test".
 
 Discussions are tool-less and capped (ADR-0016); agent work with tools only happens inside a funded, running build (402 otherwise).
 The devnet program must include the 4E.2 settle/refund instructions

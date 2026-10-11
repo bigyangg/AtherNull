@@ -382,6 +382,22 @@ export interface DiscussionConversationsTable {
   last_message_at: Generated<Date>;
 }
 
+// ADR-0017 — the agent's change for one execution, as verified.
+export interface ExecutionPatchesTable {
+  execution_id: string;
+  task_id: string;
+  organization_id: string;
+  base_revision: string;
+  patch: string;
+  sha256: string;
+  files_changed: number;
+  insertions: number;
+  deletions: number;
+  created_at: Generated<Date>;
+  verify_lease_owner: string | null;
+  verify_lease_expires_at: NullableTimestamp;
+}
+
 export interface Database {
   projects: ProjectsTable;
   agent_profiles: AgentProfilesTable;
@@ -401,4 +417,5 @@ export interface Database {
   project_funding_settlements: ProjectFundingSettlementsTable;
   org_agent_servers: OrgAgentServersTable;
   discussion_conversations: DiscussionConversationsTable;
+  execution_patches: ExecutionPatchesTable;
 }

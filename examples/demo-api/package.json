@@ -1,0 +1,15 @@
+{
+  "name": "athernull-demo-api",
+  "version": "1.0.0",
+  "description": "A tiny, dependency-free notes API used to demo AtherNull builds.",
+  "private": true,
+  "type": "module",
+  "main": "src/app.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

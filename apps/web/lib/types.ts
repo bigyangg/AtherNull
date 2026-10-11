@@ -395,3 +395,15 @@ export interface Discussion {
 // Planner input produced from a discussion starts with this marker (apps/api
 // agent-gateway/discussions.ts); the UI shows it collapsed.
 export const DISCUSSION_PROMPT_MARKER = "[Planned from a canvas discussion]";
+
+// ADR-0017 — the exact change under review for a build (latest captured patch).
+export interface BuildPatch {
+  executionId: string;
+  baseRevision: string;
+  patch: string;
+  sha256: string;
+  filesChanged: number;
+  insertions: number;
+  deletions: number;
+  capturedAt: string;
+}

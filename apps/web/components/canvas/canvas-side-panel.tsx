@@ -6,12 +6,14 @@ import {
   devnetExplorerTxUrl,
   formatDevnetSol,
 } from "@athernull/contracts";
-import { CheckCircle2, CircleDashed, ExternalLink, XCircle } from "lucide-react";
+import { CheckCircle2, CircleDashed, ExternalLink, ShieldCheck, XCircle } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { PlanView } from "@/components/projects/scope-estimate-panel";
 import { FileChangesPanel } from "@/components/workspace/file-changes-panel";
+import { PatchView } from "@/components/workspace/patch-view";
+import { useBuildPatch } from "@/lib/hooks/use-build-patch";
 import { TerminalActivityPanel } from "@/components/workspace/terminal-activity-panel";
 import { useProjectFunding } from "@/lib/hooks/use-project-funding";
 import { cn } from "@/lib/utils";
@@ -178,6 +180,42 @@ function TxRow({ label, signature }: { label: string; signature: string }) {
   );
 }
 
+// The captured patch once it exists (what was verified and is being
+// accepted); until then, the agent's edits as they stream in.
+function ChangesPanel({ task, events }: { task: TaskDetail; events: ExecutionEvent[] }) {
+  const pending = task.status === "RUNNING" || task.status === "VERIFYING" || task.status === "QUEUED";
+  const { data: patch } = useBuildPatch(task.id, pending);
+  return patch ? <PatchView patch={patch} /> : <FileChangesPanel events={events} />;
+}
+
+function Evidence({ evidence }: { evidence: Record<string, unknown> }) {
+  const text = (key: string) => (typeof evidence[key] === "string" ? (evidence[key] as string) : null);
+  const reason = text("reason");
+  const command = text("testCommand");
+  const logTail = text("logTail");
+  return (
+    <div className="mt-2 flex flex-col gap-1 text-xs text-muted-foreground">
+      {evidence.independent === true && (
+        <span className="flex items-center gap-1 text-foreground">
+          <ShieldCheck className="size-3.5" /> Independent verifier: fresh checkout + the captured patch, tests run with no network
+        </span>
+      )}
+      {reason && <span>{reason}</span>}
+      {command && (
+        <span>
+          Ran <code className="font-mono text-foreground">{command}</code>
+        </span>
+      )}
+      {logTail && (
+        <details>
+          <summary className="cursor-pointer select-none">Test output</summary>
+          <pre className="mt-1 max-h-64 overflow-auto whitespace-pre-wrap rounded-md bg-[#0e0e10] p-2 font-mono text-[11px]">{logTail}</pre>
+        </details>
+      )}
+    </div>
+  );
+}
+
 function ChecksPanel({ task }: { task: TaskDetail }) {
   const latestRun = task.verificationRuns.at(-1);
   return (
@@ -213,6 +251,7 @@ function ChecksPanel({ task }: { task: TaskDetail }) {
                   <Badge variant={run.outcome === "PASS" ? "success" : "destructive"}>{run.outcome}</Badge>
                   <span className="text-xs text-muted-foreground">{new Date(run.createdAt).toLocaleString()}</span>
                 </div>
+                <Evidence evidence={run.evidence} />
                 {run.tests.length > 0 && (
                   <ul className="mt-2 flex flex-col gap-1 font-mono text-xs">
                     {run.tests.map((t) => (
@@ -264,7 +303,7 @@ export function CanvasPanelContent({
         <Empty>Describe what you want built and the agent will draft a plan here.</Empty>
       );
     case "changes":
-      return <FileChangesPanel events={events} />;
+      return task ? <ChangesPanel task={task} events={events} /> : <FileChangesPanel events={events} />;
     case "terminal":
       return <TerminalActivityPanel events={events} />;
     case "chain":

@@ -543,7 +543,7 @@ function TaskCanvas({
             <AgentTurn>
               <p className="text-sm text-foreground">
                 {stage === "verifying"
-                  ? "I'm done. The result now goes through verification."
+                  ? "I'm done. An independent verifier now applies my change to a fresh checkout and runs the tests."
                   : stage === "review"
                     ? "Verification passed. Accept to release payment, or reject for a refund."
                     : "Verification record:"}

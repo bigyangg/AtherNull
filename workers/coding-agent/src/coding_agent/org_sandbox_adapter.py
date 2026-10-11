@@ -169,6 +169,32 @@ def _forward_usage(client: httpx.Client, execution_id: str, info: dict, seen: se
         log(f"usage forward failed ({res.status_code}): {res.text}")
 
 
+def _capture_patch(client: httpx.Client, sandbox: _Sandbox, execution_id: str, workdir: str, snapshot: str) -> None:
+    """Captures the agent's change (ADR-0017) as a git diff of the working
+    tree against the approved revision, and hands it to apps/api for the
+    independent verifier. Untracked files are included; .gitignore applies."""
+    revision = snapshot.rpartition("@")[2]
+    q = shlex.quote
+    patch_path = f"{BUILDS_ROOT}/.patches/{execution_id}.patch"
+    code, output = sandbox.bash(
+        f"mkdir -p {q(BUILDS_ROOT)}/.patches && cd {q(workdir)} && git add -A && "
+        f"git -c core.quotepath=off diff --cached --binary {q(revision)} > {q(patch_path)}"
+    )
+    if code != 0:
+        raise RuntimeError(f"capturing the patch failed (exit {code}): {output[-300:]}")
+    res = sandbox.http.get("/api/file/download", params={"path": patch_path})
+    res.raise_for_status()
+    post = client.post(
+        f"{API_URL}/internal/executions/{execution_id}/patch",
+        json={"workerId": WORKER_ID, "baseRevision": revision, "patch": res.content.decode("utf-8", errors="replace")},
+        headers=api_headers(),
+        timeout=60.0,
+    )
+    if post.status_code != 201:
+        raise RuntimeError(f"patch upload failed ({post.status_code}): {post.text[:300]}")
+    log(f"captured patch for {execution_id}: {post.json()}")
+
+
 def run_dispatch_via_org_sandbox(client: httpx.Client, dispatch: dict) -> tuple[str, str | None]:
     server = dispatch.get("orgAgentServer")
     if not server:
@@ -224,6 +250,9 @@ def run_dispatch_via_org_sandbox(client: httpx.Client, dispatch: dict) -> tuple[
             _forward_usage(client, execution_id, info, seen_usage)
             status = info.get("execution_status")
             if status in TERMINAL_SUCCESS:
+                # The verifier judges the change itself, never this claim;
+                # without a captured patch there is nothing to verify.
+                _capture_patch(client, sandbox, execution_id, workdir, dispatch["repositorySnapshot"])
                 return "success", None
             if status in TERMINAL_FAILURE:
                 return "failure", f"agent ended in status {status}"

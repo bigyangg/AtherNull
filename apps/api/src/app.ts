@@ -14,6 +14,7 @@ import { projectFundingRoutes } from "./routes/project-funding.js";
 import { projectRoutes } from "./routes/projects.js";
 import { agentGatewayRoutes } from "./routes/agent-gateway.js";
 import { discussionRoutes } from "./routes/discussions.js";
+import { verificationRoutes } from "./routes/verification.js";
 import { realtimeGatewayRoutes } from "./routes/realtime-gateway.js";
 import { MAX_RELAY_MESSAGE_BYTES, relayRoutes } from "./routes/relay.js";
 import { taskProvenanceRoutes } from "./routes/task-provenance.js";
@@ -71,6 +72,8 @@ export async function buildApp(opts: { logger?: boolean } = {}): Promise<Fastify
   // payment_intents (correction 23).
   await app.register(usagePolicyRoutes);
   await app.register(internalRoutes);
+  // ADR-0017 — patch capture + independent verifier endpoints.
+  await app.register(verificationRoutes);
   // ADR-0007 Phase 3B — worker -> apps/api outbound relay tunnel.
   // @fastify/websocket must be registered before relayRoutes (it decorates
   // the fastify instance with the `websocket: true` route option and the

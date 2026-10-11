@@ -37,7 +37,7 @@ Open from spec §11 still needing validation: backend runtime choice (TypeScript
 
 ## 2. Build phases (from spec §10, adjusted)
 
-Refreshed 2026-10-11 against the code and ADRs 0001–0016; per-phase detail
+Refreshed 2026-10-11 against the code and ADRs 0001–0017; per-phase detail
 lives in the ADRs, not here.
 
 - [x] **Phase 0 — Repo and decisions** — layout, CI, ADR-0001 (SDK pinned
@@ -55,10 +55,10 @@ lives in the ADRs, not here.
 - [x] **Phase 4A–4C — Plan, budget, provenance** — planner scope/estimate
   (Anthropic or NVIDIA NIM), authorized budgets, provenance-bound task
   creation (ADR-0008/0009/0010).
-- [ ] **Phase 4 — Independent verification** — `services/verifier` is still a
-  stub; verification is a privileged manual PASS/FAIL. Needs: worker captures
-  a patch artifact -> verifier applies it on a fresh checkout and runs the
-  project's tests -> reports via an internal endpoint.
+- [x] **Phase 4 — Independent verification** — worker captures the patch;
+  `services/verifier` applies it to a fresh checkout and runs the tests with
+  no network under its own credential; verdict moves the task to review or
+  FAILED (ADR-0017). Verified end to end on `examples/demo-api`.
 - [x] **Phase 5 — Payments (Solana devnet)** — 4E.1 funding + activation gate
   (ADR-0013, verified live on devnet); 4E.2 settle/refund on accept/reject/
   failure (ADR-0014, verified on a local validator; **devnet program upgrade
@@ -74,8 +74,9 @@ lives in the ADRs, not here.
   (`/projects/[id]`): one conversation from prompt -> plan -> budget -> devnet
   funding -> live agent -> verification -> review -> on-chain settlement, with
   Plan / Changes / Terminal / On-chain / Checks tabs; dashboard prompt hand-off.
-- [ ] **Phase 7 — Reliability and demo** — demo runbook + recordings,
-  including the failure/refund path; backup/restore and crash drills.
+- [~] **Phase 7 — Reliability and demo** — one-command stack
+  (`pnpm dev`), dependency-free demo repo, demo runbook. Still: devnet
+  rehearsal incl. refund path, recordings, backup/restore and crash drills.
 
 **Go/no-go gate** (spec §10): don't add marketplace bidding, multi-chain, autonomous prod deploy, or more agent types until one coding job reliably produces a verified patch within budget and survives retries.
 
