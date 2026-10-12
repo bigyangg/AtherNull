@@ -16,10 +16,16 @@ RUN pnpm install --frozen-lockfile --filter @athernull/web...
 # ---- builder: full source, produce .next/standalone ----
 FROM base AS builder
 WORKDIR /repo
+# The workspace manifest pins pnpm (packageManager) for corepack; without it
+# corepack fetches whatever pnpm is latest.
+COPY package.json pnpm-workspace.yaml ./
 COPY --from=deps /repo/node_modules ./node_modules
 COPY --from=deps /repo/apps/web/node_modules ./apps/web/node_modules
 COPY tsconfig.base.json ./
 COPY packages/contracts packages/contracts
+# pnpm links each workspace package's own dependencies (zod for contracts)
+# into that package's node_modules: the source copy above has none.
+COPY --from=deps /repo/packages/contracts/node_modules ./packages/contracts/node_modules
 COPY apps/web apps/web
 ENV NEXT_TELEMETRY_DISABLED=1
 # NEXT_PUBLIC_* are inlined at build time. With the API behind the same
