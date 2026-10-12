@@ -1,0 +1,63 @@
+AtherNull Proprietary License
+
+Copyright (c) 2026 AtherNull. All rights reserved.
+
+This repository and all of its contents, including source code, documentation,
+designs, configuration and other materials (the "Software"), are the
+proprietary property of AtherNull, except for the third-party components
+identified below, which remain under their own licenses.
+
+No license or right is granted to any person to use, copy, modify, merge,
+publish, distribute, sublicense, sell, host, or create derivative works of the
+Software, in whole or in part, without the prior written permission of
+AtherNull.
+
+The Software is made visible on GitHub for review and evaluation. Viewing it,
+and the limited rights granted to GitHub users under GitHub's Terms of Service
+for public repositories, do not grant any other license.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
+ATHERNULL BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN
+ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
+WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+For permissions, contact AtherNull through https://athernull.io/contact.
+
+--------------------------------------------------------------------------------
+Third-party components
+--------------------------------------------------------------------------------
+
+AtherNull uses OpenHands (https://github.com/OpenHands/OpenHands). The OpenHands
+Agent Canvas is fetched from upstream at the commit pinned in
+apps/canvas/UPSTREAM.json, and the patch files in apps/canvas/patches/ contain
+portions of OpenHands code. Those portions, and OpenHands itself, are licensed
+under the MIT License below, not under the AtherNull Proprietary License above.
+The OpenHands SDK, tools and Agent Server used by workers/coding-agent are
+installed as dependencies under their own licenses.
+
+The MIT License (MIT)
+
+Copyright (c) 2025 OpenHands contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+Other dependencies installed by the package managers (npm/pnpm, pip, cargo)
+are licensed under their own terms, as stated in their respective packages.

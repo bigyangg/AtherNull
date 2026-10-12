@@ -236,4 +236,4 @@ The full assessment and the plan to close these gaps:
 
 AtherNull's agent runtime and workspace UI are built on **[OpenHands](https://github.com/OpenHands/OpenHands)**, © OpenHands contributors, released under the **MIT License**. The Agent Canvas is fetched from upstream at a pinned commit and modified only through the patches in `apps/canvas/patches/`. The OpenHands license and copyright notice apply to that code.
 
-AtherNull's own code in this repository does not yet carry a license file. Until one is added, all rights are reserved by the AtherNull authors.
+AtherNull is **proprietary software**: Copyright (c) 2026 AtherNull, all rights reserved. The source is visible here for review and evaluation, but it may not be used, copied, modified or distributed without written permission. OpenHands and the OpenHands portions in `apps/canvas/patches/` remain under the MIT License. See [LICENSE](LICENSE).
