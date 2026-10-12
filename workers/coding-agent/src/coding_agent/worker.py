@@ -167,8 +167,9 @@ def run_dispatch(client: httpx.Client, dispatch: dict) -> str:
         conversation.send_message(message)
         conversation.run()
 
-        from coding_agent.agent_server_adapter import get_fresh_execution_status
         from openhands.sdk.conversation.state import ConversationExecutionStatus
+
+        from coding_agent.agent_server_adapter import get_fresh_execution_status
 
         if get_fresh_execution_status(conversation) != ConversationExecutionStatus.FINISHED:
             return "failure"
@@ -230,7 +231,9 @@ def main() -> None:
             reason: str | None = None
             try:
                 if dispatch.get("usagePolicy") and EXECUTION_ADAPTER == "direct":
-                    from coding_agent.agent_server_adapter import run_dispatch_via_agent_server
+                    from coding_agent.agent_server_adapter import (
+                        run_dispatch_via_agent_server,
+                    )
 
                     result = run_dispatch_via_agent_server(client, dispatch)
                 else:

@@ -4,12 +4,11 @@ to it — not the `websockets` library itself, and no real network or Docker,
 matching test_agent_server_adapter.py's mocking style."""
 
 import json
+import os
 import re
 import threading
 import time
 from unittest.mock import MagicMock
-
-import os
 
 os.environ.setdefault("WORKER_ID", "test-worker")
 os.environ.setdefault("ATHERNULL_API_URL", "http://localhost:3001")

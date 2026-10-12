@@ -51,7 +51,7 @@ AGENT_IDENTITY = (
 
 
 _PLATFORM_SKILL = re.compile(
-    r"openhands[\s-]*(software agent )?(sdk|cloud|enterprise|api|automation|agent sdk)|all-hands|agent canvas|\bOHE\b", re.I
+    r"openhands[\s-]*(software agent )?(sdk|cloud|enterprise|api|automation|agent sdk)|all-hands|agent canvas|\bOHE\b", re.IGNORECASE
 )
 
 
@@ -402,8 +402,8 @@ def run_dispatch_via_org_sandbox(client: httpx.Client, dispatch: dict) -> tuple[
         conversation_id = res.json()["id"]
         try:
             sandbox.http.patch(f"/api/conversations/{conversation_id}", json={"title": build_title(dispatch["objective"])})
-        except Exception:  # best-effort: an untitled build still runs
-            pass
+        except Exception as err:  # noqa: BLE001 - best-effort: an untitled build still runs
+            log(f"build {task_id}: could not set the conversation title: {err!r}")
         log(f"build {task_id} running as conversation {conversation_id} in the org sandbox")
         report = client.post(
             f"{API_URL}/internal/executions/{execution_id}/conversation",

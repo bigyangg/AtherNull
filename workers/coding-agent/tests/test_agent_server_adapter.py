@@ -185,6 +185,7 @@ def test_concurrent_flushes_do_not_drop_new_events() -> None:
 def test_failed_run_flushes_before_container_cleanup(monkeypatch) -> None:
     import json
     from unittest.mock import MagicMock
+
     from coding_agent import agent_server_adapter as adapter
 
     received = []

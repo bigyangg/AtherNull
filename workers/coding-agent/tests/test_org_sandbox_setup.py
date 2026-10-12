@@ -12,7 +12,11 @@ import json
 
 import httpx
 
-from coding_agent.org_sandbox_adapter import AGENT_IDENTITY, build_title, workspace_agent_setup
+from coding_agent.org_sandbox_adapter import (
+    AGENT_IDENTITY,
+    build_title,
+    workspace_agent_setup,
+)
 
 
 def sandbox(settings: dict, skills: list | None = None, plugins: list | None = None, fail: bool = False):

@@ -106,7 +106,7 @@ import random
 import threading
 import time
 from collections import deque
-from typing import Callable
+from collections.abc import Callable
 from urllib.parse import urlencode
 
 import websockets.sync.client as ws_client
@@ -310,7 +310,7 @@ class RelayClient:
         try:
             if self._connected.is_set():
                 self._enqueue_lifecycle("execution.completed")
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001, S110 - closing is best-effort
             pass
         self._stop.set()
         self._has_work.set()
@@ -319,7 +319,7 @@ class RelayClient:
         try:
             if self._ws is not None:
                 self._ws.close()
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001, S110 - closing is best-effort
             pass
         if self._recv_thread is not None:
             self._recv_thread.join(timeout=timeout)
@@ -500,7 +500,7 @@ class RelayClient:
                 self._connected.clear()
                 try:
                     current_ws.close()
-                except Exception:  # noqa: BLE001
+                except Exception:  # noqa: BLE001, S110 - closing is best-effort
                     pass
 
             if self._stop.is_set():

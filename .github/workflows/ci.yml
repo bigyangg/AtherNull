@@ -8,6 +8,24 @@ on:
 jobs:
   node:
     runs-on: ubuntu-latest
+    # apps/api's tests run against a real, migrated Postgres (the same
+    # database name and port they default to locally).
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: athernull
+          POSTGRES_PASSWORD: athernull
+          POSTGRES_DB: athernull_test
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U athernull -d athernull_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      TEST_DATABASE_URL: postgres://athernull:athernull@localhost:5433/athernull_test
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -18,6 +36,11 @@ jobs:
       - run: pnpm install
       - run: pnpm -r typecheck
       - run: pnpm -r build
+      - name: Apply database migrations
+        run: |
+          for f in packages/database/migrations/*.sql; do
+            psql "$TEST_DATABASE_URL" -v ON_ERROR_STOP=1 -q -f "$f"
+          done
       - run: pnpm -r --if-present test
 
   python:

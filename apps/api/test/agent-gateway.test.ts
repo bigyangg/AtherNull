@@ -151,7 +151,7 @@ describe("agent gateway HTTP", () => {
       initial_message: { content: [{ type: "text", text: "I want a /version endpoint" }] },
     });
     assert.equal(res.statusCode, 200, res.body);
-    const start = sandboxA.requests.findLast((r) => r.method === "POST" && r.url === "/api/conversations")!;
+    const start = [...sandboxA.requests].reverse().find((r) => r.method === "POST" && r.url === "/api/conversations")!;
     const sent = JSON.parse(start.body) as {
       autotitle: boolean;
       conversation_id: string;

@@ -21,11 +21,11 @@ os.environ.setdefault("INTERNAL_API_TOKEN", "test-token")
 
 import json
 import threading
-import time
 from unittest.mock import MagicMock
 
 import httpx
 import pytest
+from openhands.sdk.conversation.state import ConversationExecutionStatus
 
 from coding_agent import agent_server_adapter as adapter
 from coding_agent.agent_server_adapter import (
@@ -34,7 +34,6 @@ from coding_agent.agent_server_adapter import (
     _enforce_usage_limit,
     get_fresh_execution_status,
 )
-from openhands.sdk.conversation.state import ConversationExecutionStatus
 
 
 def make_client(handler) -> httpx.Client:
@@ -230,7 +229,7 @@ def test_worker_main_loop_skips_complete_entirely_for_paused_outcome() -> None:
     transitioned the task via the worker's own /usage-pause call."""
     # Mirrors the exact branch in worker.main()'s dispatch loop.
     result = ("paused", None)
-    outcome, reason = (result, None) if isinstance(result, str) else result
+    outcome, _reason = (result, None) if isinstance(result, str) else result
     should_call_complete = outcome != "paused"
     assert should_call_complete is False
 

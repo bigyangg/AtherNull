@@ -611,17 +611,16 @@ class UsageForwarder:
             # confirmed apps/api accepted — never a second, independently
             # maintained count. A no-op whenever this dispatch has no ACTIVE
             # usage policy (self._usage_limit_state is None, correction 19).
-            if self._usage_limit_state is not None:
-                if self._usage_limit_state.should_enforce():
-                    _enforce_usage_limit(
-                        conversation,
-                        self._get_docker_workspace(),
-                        self._client,
-                        self._execution_id,
-                        self._worker_id,
-                        self._usage_limit_state,
-                        self._log,
-                    )
+            if self._usage_limit_state is not None and self._usage_limit_state.should_enforce():
+                _enforce_usage_limit(
+                    conversation,
+                    self._get_docker_workspace(),
+                    self._client,
+                    self._execution_id,
+                    self._worker_id,
+                    self._usage_limit_state,
+                    self._log,
+                )
 
 
 class CommandHandler:
