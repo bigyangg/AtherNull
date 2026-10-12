@@ -4,7 +4,7 @@ Target: the Ubuntu 24.04 VPS that already serves the athernull.io web app throug
 
 ```
 Internet ─► Coolify Traefik (443, athernull.io)
-             ├─ /v1 /oh /api/auth /canvas /health ─► 172.17.0.1:8080  ingress (host)   ─► API 127.0.0.1:3001
+             ├─ /v1 /oh /api/auth /canvas /health ─► 10.0.0.1:8091  ingress (host)   ─► API 127.0.0.1:3001
              └─ everything else ─────────────────────► web app container (Coolify, as today)
 Host (systemd: athernull-backend, user athernull):
    Postgres (Docker, 127.0.0.1:5433) · API · ingress + canvas · worker · provisioner · verifier
@@ -24,9 +24,9 @@ apt-get update && apt-get install -y git python3.12-venv curl
 curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && apt-get install -y nodejs
 corepack enable
 # Nothing else may use these:
-ss -ltnp | grep -E ':(3001|5433|8080)\b' || echo "ports free"
+ss -ltnp | grep -E ':(3001|5433|8091)\b' || echo "ports free"   # 8080 is Coolify's proxy: AtherNull uses 8091
 docker network inspect $(docker network ls -q) -f '{{.Name}} {{range .IPAM.Config}}{{.Subnet}}{{end}}' | grep 172.30. || echo "172.30.0.0/16 free"
-ip -4 addr show docker0 | grep inet        # expect 172.17.0.1; otherwise use that address below
+ip -4 addr show docker0 | grep inet        # this VPS: 10.0.0.1 (set in athernull-backend.service and the Traefik file)
 ```
 
 ## 2. User and code
@@ -34,7 +34,7 @@ ip -4 addr show docker0 | grep inet        # expect 172.17.0.1; otherwise use th
 ```bash
 useradd --system --create-home --home-dir /opt/athernull --shell /bin/bash athernull
 usermod -aG docker athernull
-sudo -iu athernull git clone --branch feat/openhands-canvas-and-devnet-settlement https://github.com/bigyangg/AtherNull.git /opt/athernull/app
+sudo -iu athernull git clone --branch main https://github.com/bigyangg/AtherNull.git /opt/athernull/app
 sudo -iu athernull bash -c 'cd /opt/athernull/app && corepack pnpm install --frozen-lockfile'
 sudo -iu athernull bash -c 'cd /opt/athernull/app/workers/coding-agent && python3.12 -m venv .venv && .venv/bin/pip install -q -e .'
 ```
@@ -100,20 +100,20 @@ Size check: every active organization can take up to `SANDBOX_MEMORY`. `free -g`
 cp /opt/athernull/app/infrastructure/vps/athernull-backend.service /etc/systemd/system/
 systemctl daemon-reload && systemctl enable --now athernull-backend
 journalctl -u athernull-backend -f      # first start builds the canvas: a few minutes
-curl -s http://172.17.0.1:8080/health    # {"status":"ok"}-style answer once up
+curl -s http://10.0.0.1:8091/health    # {"status":"ok"}-style answer once up
 ```
 
 If `ufw` is active, let Coolify's proxy (not the internet) reach the ingress:
 
 ```bash
-ufw status | grep -q "Status: active" && ufw allow from 10.0.0.0/8 to 172.17.0.1 port 8080 proto tcp
+ufw status | grep -q "Status: active" && ufw allow from 10.0.0.0/8 to 10.0.0.1 port 8091 proto tcp
 ```
 
 ## 6. Route athernull.io to it (Coolify)
 
 1. Coolify → Servers → this server → Proxy → Dynamic Configurations → new file `athernull-backend.yaml` with `infrastructure/vps/athernull-backend.traefik.yaml`.
 2. The web app resource in Coolify:
-   - Git branch: `feat/openhands-canvas-and-devnet-settlement`; Base Directory `/`; Dockerfile `apps/web/Dockerfile`.
+   - Git branch: `main`; Base Directory `/`; Dockerfile `apps/web/Dockerfile`.
    - Environment: `NEXT_PUBLIC_API_URL=https://athernull.io` (tick **Build Variable**). Remove `LANDING_ONLY_MODE` (or set it to `false`).
    - Redeploy.
 

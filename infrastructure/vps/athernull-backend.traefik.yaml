@@ -20,4 +20,5 @@ http:
     athernull-backend:
       loadBalancer:
         servers:
-          - url: "http://172.17.0.1:8080"
+          # docker0 address and INGRESS_PORT from athernull-backend.service.
+          - url: "http://10.0.0.1:8091"

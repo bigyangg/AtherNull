@@ -231,7 +231,9 @@ if (!existsSync(join(root, "apps/api/.env"))) {
 }
 
 ensureVerifierToken();
-await assertPortsFree(PROD ? [3001, 8080] : [3000, 3001, 8080]);
+// The ingress port is configurable: on the shared VPS 8080 belongs to Coolify.
+const INGRESS_PORT = Number(process.env.INGRESS_PORT ?? 8080);
+await assertPortsFree(PROD ? [3001, INGRESS_PORT] : [3000, 3001, INGRESS_PORT]);
 startPostgres();
 migrate();
 ensureCanvas();
