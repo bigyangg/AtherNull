@@ -59,7 +59,7 @@ export default function LandingPage() {
           <HeroTitle />
           <p className={styles.heroCopy} data-hero-copy>Tell AtherNull what needs to happen. Agents understand your codebase, complete the work, and return proof. Not just a promise.</p>
           <div className={styles.heroActions} data-hero-actions>
-            <Button asChild size="lg" className={styles.darkButton}><Link href="/waitlist">Join Waitlist <ArrowRight /></Link></Button>
+            <Button asChild size="lg" className={styles.darkButton}><Link href="/sign-up">Start building <ArrowRight /></Link></Button>
             <a className={styles.textButton} href="#workflow">See the workflow <ArrowRight /></a>
           </div>
           <noscript>
@@ -123,7 +123,7 @@ export default function LandingPage() {
           </div>
         </section>
 
-        <section className={styles.finalCta} data-section><Sparkles /><p>The next release starts with one sentence.</p><h2>Give your idea<br />a way forward.</h2><Button asChild size="lg" className={styles.darkButton}><Link href="/waitlist">Join Waitlist <ArrowRight /></Link></Button></section>
+        <section className={styles.finalCta} data-section><Sparkles /><p>The next release starts with one sentence.</p><h2>Give your idea<br />a way forward.</h2><Button asChild size="lg" className={styles.darkButton}><Link href="/sign-up">Start building <ArrowRight /></Link></Button></section>
       </LandingMotion>
       <SiteFooter />
     </main>

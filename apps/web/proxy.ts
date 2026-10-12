@@ -13,12 +13,17 @@ const AUTH_PATHS = [
 ];
 
 // Public marketing routes, reachable with or without a session.
-const PUBLIC_PATHS = ["/", "/docs", "/whitepaper", "/privacy-policy", "/refund-policy", "/contact", "/waitlist"];
+const PUBLIC_PATHS = ["/", "/docs", "/whitepaper", "/privacy-policy", "/refund-policy", "/contact"];
 
 export function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
   const isPublicPath = PUBLIC_PATHS.includes(pathname);
   const landingOnly = process.env.LANDING_ONLY_MODE === "true";
+
+  // The waitlist is gone: old links go straight to sign-up.
+  if (pathname === "/waitlist") {
+    return NextResponse.redirect(new URL(landingOnly ? "/" : "/sign-up", request.url));
+  }
 
   // Until apps/api is live, keep account/product routes closed. Marketing,
   // policy, and contact pages are public and don't depend on the API.

@@ -17,7 +17,7 @@ const FOOTER_COLUMNS = [
   {
     heading: "AtherNull",
     links: [
-      { label: "Request access", href: "/waitlist" },
+      { label: "Get started", href: "/sign-up" },
       { label: "Contact", href: "/contact" },
       { label: "Log in", href: "/sign-in" },
     ],
