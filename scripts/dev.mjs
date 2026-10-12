@@ -4,6 +4,11 @@
 //   node scripts/dev.mjs              start everything on http://localhost:8080
 //   node scripts/dev.mjs --init-env   first write apps/api/.env from your local
 //                                     secrets (~/.athernull-devnet, worker .env)
+//   node scripts/dev.mjs --prod       the server (docs/runbooks/vps-deploy.md):
+//                                     PUBLIC_ORIGIN, no file watching, no web app
+//                                     (the web app is deployed on its own), the
+//                                     canvas rebuilt for PUBLIC_ORIGIN, API on
+//                                     127.0.0.1, ingress on INGRESS_HOST
 //
 // Postgres (Docker) -> migrations -> canvas build (if missing) -> demo repo ->
 // API, web, ingress and worker as child processes with prefixed output.
@@ -18,7 +23,9 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
-const ORIGIN = "http://localhost:8080";
+const PROD = process.argv.includes("--prod");
+const ORIGIN = (PROD ? process.env.PUBLIC_ORIGIN : null) ?? "http://localhost:8080";
+if (PROD && !process.env.PUBLIC_ORIGIN) throw new Error("--prod needs PUBLIC_ORIGIN, e.g. https://athernull.io");
 const PG_CONTAINER = "athernull-dev-postgres-1";
 const DB = "postgres://athernull:athernull@localhost:5433/athernull_dev";
 const isWin = process.platform === "win32";
@@ -136,6 +143,13 @@ function migrate() {
 // --- canvas + demo repo -------------------------------------------------------------
 
 function ensureCanvas() {
+  if (PROD) {
+    // Always rebuilt on the server: the build bakes in the public origin.
+    log(`building the Agent Canvas for ${ORIGIN}`);
+    run(process.execPath, ["apps/canvas/setup.mjs"]);
+    run(process.execPath, ["apps/canvas/build.mjs"], { env: { ...process.env, CANVAS_PUBLIC_ORIGIN: ORIGIN } });
+    return;
+  }
   if (existsSync(join(root, "apps/canvas/upstream/build/index.html"))) return;
   log("building the Agent Canvas (first run takes a few minutes)");
   run(process.execPath, ["apps/canvas/setup.mjs"]);
@@ -217,17 +231,23 @@ if (!existsSync(join(root, "apps/api/.env"))) {
 }
 
 ensureVerifierToken();
-await assertPortsFree([3000, 3001, 8080]);
+await assertPortsFree(PROD ? [3001, 8080] : [3000, 3001, 8080]);
 startPostgres();
 migrate();
 ensureCanvas();
-const demoRepo = ensureDemoRepo();
+const demoRepo = PROD ? null : ensureDemoRepo();
 
 const worker = parseEnv(join(root, "workers/coding-agent/.env"));
 const python = join(root, "workers/coding-agent", isWin ? ".venv/Scripts/python.exe" : ".venv/bin/python");
 
-start("api", "32", "pnpm", ["--filter", "@athernull/api", "dev"]);
-start("web", "35", "pnpm", ["--filter", "@athernull/web", "dev"], { env: { ...process.env, NEXT_PUBLIC_API_URL: ORIGIN } });
+if (PROD) {
+  start("api", "32", "pnpm", ["--filter", "@athernull/api", "exec", "tsx", "--env-file-if-exists=.env", "src/index.ts"], {
+    env: { ...process.env, NODE_ENV: "production", HOST: "127.0.0.1" },
+  });
+} else {
+  start("api", "32", "pnpm", ["--filter", "@athernull/api", "dev"]);
+  start("web", "35", "pnpm", ["--filter", "@athernull/web", "dev"], { env: { ...process.env, NEXT_PUBLIC_API_URL: ORIGIN } });
+}
 start("ingress", "34", process.execPath, ["infrastructure/ingress/dev-ingress.mjs"], {
   env: { ...process.env, CANVAS_DIST: join(root, "apps/canvas/upstream/build") },
 });
@@ -265,8 +285,10 @@ start("verifier", "31", existsSync(python) ? python : "python", ["-u", "-m", "ve
 });
 
 log(`AtherNull on ${ORIGIN}  (sign in, then provision your org's sandbox once)`);
-log(`demo repository for projects: ${demoRepo}`);
-process.on("SIGINT", () => {
-  stopAll();
-  process.exit(0);
-});
+if (demoRepo) log(`demo repository for projects: ${demoRepo}`);
+for (const signal of ["SIGINT", "SIGTERM"]) {
+  process.on(signal, () => {
+    stopAll();
+    process.exit(0);
+  });
+}

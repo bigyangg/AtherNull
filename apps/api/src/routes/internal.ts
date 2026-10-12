@@ -5,6 +5,7 @@ import { z } from "zod";
 
 import { randomUUID } from "node:crypto";
 
+import { reachableSandboxUrl } from "../agent-gateway/org-server.js";
 import { db } from "../db.js";
 import { persistExecutionEvents } from "../execution-events.js";
 import { requireInternalToken } from "../internal-auth.js";
@@ -222,7 +223,9 @@ export async function internalRoutes(app: FastifyInstance) {
           }
         : null,
       usageBaseline,
-      orgAgentServer: orgAgentServer ? { url: orgAgentServer.base_url, sessionApiKey: orgAgentServer.session_api_key } : null,
+      orgAgentServer: orgAgentServer
+        ? { url: await reachableSandboxUrl(orgAgentServer.base_url), sessionApiKey: orgAgentServer.session_api_key }
+        : null,
     });
   });
 

@@ -9,6 +9,7 @@ import type {
   AgentProfile,
   BuildListItem,
   BuildPatch,
+  ChatBuildState,
   Discussion,
   BudgetAuthorization,
   BudgetAuthorizationSource,
@@ -127,6 +128,12 @@ export interface TaskDashboardApi {
   // server reads the transcript from the org's sandbox itself).
   generateEstimateFromDiscussion(projectId: string, discussionId: string): Promise<ProjectEstimate>;
   listDiscussions(): Promise<Discussion[]>;
+  // Chat-native builds: one discussion's build state (null when the
+  // conversation isn't a discussion of this org), and drafting/updating its
+  // plan from the chat (a new idea gets an AtherNull-hosted repository).
+  getChatBuild(discussionId: string): Promise<ChatBuildState | null>;
+  draftChatPlan(discussionId: string): Promise<ProjectEstimate>;
+  updateChatPlan(discussionId: string): Promise<ProjectEstimate>;
   // ADR-0017 — the build's captured change; null until one exists.
   getBuildPatch(taskId: string): Promise<BuildPatch | null>;
   listBuilds(): Promise<BuildListItem[]>;

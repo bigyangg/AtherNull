@@ -22,6 +22,13 @@ COPY tsconfig.base.json ./
 COPY packages/contracts packages/contracts
 COPY apps/web apps/web
 ENV NEXT_TELEMETRY_DISABLED=1
+# NEXT_PUBLIC_* are inlined at build time. With the API behind the same
+# origin (docs/runbooks/vps-deploy.md) this is the site's own origin, e.g.
+# https://athernull.io. In Coolify, mark these as build variables.
+ARG NEXT_PUBLIC_API_URL
+ARG NEXT_PUBLIC_APP_HOME
+ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
+ENV NEXT_PUBLIC_APP_HOME=$NEXT_PUBLIC_APP_HOME
 RUN pnpm --filter @athernull/web build
 
 # ---- runner: just the standalone server + static assets ----

@@ -100,6 +100,6 @@ server.on("upgrade", (req, socket, head) => {
   socket.on("error", drop);
 });
 
-server.listen(PORT, "127.0.0.1", () => {
+server.listen(PORT, process.env.INGRESS_HOST ?? "127.0.0.1", () => {
   console.log(`ingress on http://localhost:${PORT}  (canvas ${CANVAS_DIST ?? `:${CANVAS}`}, api :${API}, web :${WEB})`);
 });

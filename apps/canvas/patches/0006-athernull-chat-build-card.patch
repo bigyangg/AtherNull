@@ -1,0 +1,81 @@
+diff --git a/src/components/features/chat/athernull-build-card.tsx b/src/components/features/chat/athernull-build-card.tsx
+new file mode 100644
+index 0000000..bda26fb
+--- /dev/null
++++ b/src/components/features/chat/athernull-build-card.tsx
+@@ -0,0 +1,53 @@
++import React from "react";
++
++// AtherNull: the chat-native build card (plan -> approve -> bill -> pay ->
++// build -> review). The card itself is AtherNull's page /chat-build/<id>,
++// framed from the same origin so the session cookie and every server-side
++// check apply; it reports its height, and stays hidden for conversations
++// that aren't AtherNull discussions (it reports no height then).
++export function AtherNullBuildCard({
++  conversationId,
++}: {
++  conversationId: string | null | undefined;
++}) {
++  const [height, setHeight] = React.useState(0);
++
++  React.useEffect(() => {
++    setHeight(0);
++    const onMessage = (event: MessageEvent) => {
++      if (event.origin !== window.location.origin) return;
++      const data = event.data as
++        | { type?: string; discussionId?: string; height?: number }
++        | undefined;
++      if (
++        data?.type === "athernull:chat-build" &&
++        data.discussionId === conversationId &&
++        typeof data.height === "number"
++      ) {
++        setHeight(data.height);
++      }
++    };
++    window.addEventListener("message", onMessage);
++    return () => window.removeEventListener("message", onMessage);
++  }, [conversationId]);
++
++  if (!import.meta.env.VITE_ATHERNULL || !conversationId) return null;
++  const visible = height > 16;
++  return (
++    <iframe
++      key={conversationId}
++      title="AtherNull build"
++      src={`/chat-build/${encodeURIComponent(conversationId)}`}
++      data-testid="athernull-build-card"
++      style={{
++        display: "block",
++        width: "100%",
++        height: visible ? height : 0,
++        border: 0,
++        background: "transparent",
++        colorScheme: "normal",
++      }}
++      aria-hidden={!visible}
++    />
++  );
++}
+diff --git a/src/components/features/chat/chat-interface.tsx b/src/components/features/chat/chat-interface.tsx
+index c0d40d8..b359b24 100644
+--- a/src/components/features/chat/chat-interface.tsx
++++ b/src/components/features/chat/chat-interface.tsx
+@@ -7,6 +7,7 @@ import { convertImageToBase64 } from "#/utils/convert-image-to-base-64";
+ import { createChatMessage } from "#/services/chat-service";
+ import { BtwMessages } from "./btw-messages";
+ import { GoalStatusBanner } from "./goal-status-banner";
++import { AtherNullBuildCard } from "./athernull-build-card";
+ import { ModelMessages } from "./model-messages";
+ import { useModelStore } from "#/stores/model-store";
+ import { useGoalStore } from "#/stores/goal-store";
+@@ -595,6 +596,9 @@ export function ChatInterface() {
+             {/* Goal-loop status sits at the end of the message flow — above the
+               composer and its typing indicator — so progress stays in view. */}
+             <GoalStatusBanner conversationId={conversationId} />
++
++            {/* AtherNull: plan, bill, payment and build progress, in the chat. */}
++            <AtherNullBuildCard conversationId={conversationId} />
+           </div>
+ 
+           <div className="flex shrink-0 flex-col gap-1.5 pb-4">

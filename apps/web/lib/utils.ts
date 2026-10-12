@@ -21,6 +21,8 @@ export function githubRevisionUrl(permittedRepository: string, revision: string)
 // "github.com/acme/web" or "https://github.com/acme/web.git" -> "acme/web";
 // a local path -> its last segment.
 export function repoLabel(repository: string): string {
+  // Planned from a chat with no repository: AtherNull hosts the code.
+  if (repository.startsWith("athernull://hosted/")) return "AtherNull-hosted";
   const parts = repository
     .trim()
     .replace(/^[a-z]+:\/\//i, "")

@@ -29,7 +29,7 @@ import { HttpError, requireOrgSession, requirePrivilegedRole, sendHttpError } fr
 // a pre-task planning/pricing artifact — reaching QUEUED only ever happens
 // through the privileged fund transition those other route files own.
 
-function toEstimateResponse(row: Selectable<ProjectEstimatesTable>): EstimateResponse {
+export function toEstimateResponse(row: Selectable<ProjectEstimatesTable>): EstimateResponse {
   return {
     id: row.id,
     lineageId: row.lineage_id,
@@ -133,6 +133,133 @@ function isUniqueViolation(err: unknown): boolean {
   );
 }
 
+// Planner + pricing for one prompt. Planner trouble is a 502 for the caller.
+async function planAndPrice(sourcePrompt: string) {
+  let result;
+  try {
+    result = await generatePlannerOutput(sourcePrompt);
+  } catch (err) {
+    if (err instanceof PlannerError) throw new HttpError(502, err.message);
+    if (err instanceof z.ZodError) throw new HttpError(502, `Planner produced invalid output: ${err.message}`);
+    throw err;
+  }
+  return { ...result, pricing: priceEstimate(result.plannerOutput.resourceEstimate, RATE_CONFIG) };
+}
+
+/** v1 of a new lineage, READY_FOR_REVIEW. Shared with the chat-native flow. */
+export async function createEstimate(input: {
+  organizationId: string;
+  userId: string;
+  projectId: string;
+  sourcePrompt: string;
+}): Promise<EstimateResponse> {
+  const { plannerOutput, plannerModel, pricing } = await planAndPrice(input.sourcePrompt);
+  const inserted = await db
+    .insertInto("project_estimates")
+    .values({
+      lineage_id: randomUUID(),
+      version: 1,
+      // Generated output is fully formed and ready for a privileged
+      // reviewer immediately — this phase has no separate "save as
+      // draft, keep editing before submitting" authoring step, so DRAFT
+      // (retained in the status enum/DB check constraint for future use)
+      // is never produced by this endpoint today.
+      status: "READY_FOR_REVIEW",
+      organization_id: input.organizationId,
+      project_id: input.projectId,
+      source_prompt: input.sourcePrompt,
+      planner_output: JSON.stringify(plannerOutput),
+      planner_model: plannerModel,
+      created_by: input.userId,
+      ...pricingColumns(pricing),
+    })
+    .returningAll()
+    .executeTakeFirstOrThrow();
+  return toEstimateResponse(inserted);
+}
+
+/**
+ * A new head version from a new prompt; the target must be the current
+ * head. Shared with the chat-native flow. Unique violations (a concurrent
+ * revise) surface as 409.
+ */
+export async function reviseEstimate(input: {
+  organizationId: string;
+  userId: string;
+  projectId: string;
+  estimateId: string;
+  prompt: string;
+}): Promise<EstimateResponse> {
+  const { organizationId, userId, projectId, estimateId } = input;
+  const { plannerOutput, plannerModel, pricing } = await planAndPrice(input.prompt);
+  try {
+    const result = await db.transaction().execute(async (trx) => {
+      const target = await trx
+        .selectFrom("project_estimates")
+        .selectAll()
+        .where("id", "=", estimateId)
+        .where("project_id", "=", projectId)
+        .where("organization_id", "=", organizationId)
+        .forUpdate()
+        .executeTakeFirst();
+      if (!target) {
+        throw new HttpError(404, "Not found");
+      }
+
+      if (target.status === "SUPERSEDED") {
+        const head = await currentHead(target.lineage_id);
+        throw new HttpError(
+          409,
+          `Estimate ${estimateId} is superseded — the current head is version ${head.version} (id ${head.id})`,
+        );
+      }
+
+      // Defensive: with the invariant that revise/approve always keep
+      // exactly one non-SUPERSEDED row per lineage, target.status !==
+      // SUPERSEDED already implies target is the head. Checked explicitly
+      // anyway rather than assumed.
+      const head = await currentHead(target.lineage_id);
+      if (head.id !== target.id) {
+        throw new HttpError(
+          409,
+          `Estimate ${estimateId} is not the current head — the current head is version ${head.version} (id ${head.id})`,
+        );
+      }
+
+      const supersedeResult = await trx
+        .updateTable("project_estimates")
+        .set({ status: "SUPERSEDED" })
+        .where("id", "=", target.id)
+        .where("status", "=", target.status)
+        .executeTakeFirst();
+      if (Number(supersedeResult.numUpdatedRows) !== 1) {
+        throw new HttpError(409, "Estimate changed concurrently — retry");
+      }
+
+      return trx
+        .insertInto("project_estimates")
+        .values({
+          lineage_id: target.lineage_id,
+          version: target.version + 1,
+          status: "READY_FOR_REVIEW",
+          organization_id: organizationId,
+          project_id: projectId,
+          source_prompt: input.prompt,
+          planner_output: JSON.stringify(plannerOutput),
+          planner_model: plannerModel,
+          created_by: userId,
+          ...pricingColumns(pricing),
+        })
+        .returningAll()
+        .executeTakeFirstOrThrow();
+    });
+    return toEstimateResponse(result);
+  } catch (err) {
+    if (isUniqueViolation(err)) throw new HttpError(409, "Estimate changed concurrently — retry");
+    throw err;
+  }
+}
+
 export async function estimateRoutes(app: FastifyInstance) {
   // Generate v1 of a new estimate lineage. Any authorized org member may do
   // this (same permission level as creating a task/job) — it is
@@ -156,48 +283,10 @@ export async function estimateRoutes(app: FastifyInstance) {
         ? await discussionPlannerPrompt(body.discussionId, organizationId)
         : body.prompt!;
 
-      let plannerOutput;
-      let plannerModel: string;
-      try {
-        ({ plannerOutput, plannerModel } = await generatePlannerOutput(sourcePrompt));
-      } catch (err) {
-        if (err instanceof PlannerError) {
-          reply.status(502).send({ error: err.message });
-          return;
-        }
-        if (err instanceof z.ZodError) {
-          reply.status(502).send({ error: `Planner produced invalid output: ${err.message}` });
-          return;
-        }
-        throw err;
-      }
+      const estimate = await createEstimate({ organizationId, userId, projectId, sourcePrompt });
 
-      const pricing = priceEstimate(plannerOutput.resourceEstimate, RATE_CONFIG);
-
-      const inserted = await db
-        .insertInto("project_estimates")
-        .values({
-          lineage_id: randomUUID(),
-          version: 1,
-          // Generated output is fully formed and ready for a privileged
-          // reviewer immediately — this phase has no separate "save as
-          // draft, keep editing before submitting" authoring step, so DRAFT
-          // (retained in the status enum/DB check constraint for future use)
-          // is never produced by this endpoint today.
-          status: "READY_FOR_REVIEW",
-          organization_id: organizationId,
-          project_id: projectId,
-          source_prompt: sourcePrompt,
-          planner_output: JSON.stringify(plannerOutput),
-          planner_model: plannerModel,
-          created_by: userId,
-          ...pricingColumns(pricing),
-        })
-        .returningAll()
-        .executeTakeFirstOrThrow();
-
-      if (body.discussionId) await markDiscussionPlanned(body.discussionId, organizationId, inserted.lineage_id);
-      reply.status(201).send(toEstimateResponse(inserted));
+      if (body.discussionId) await markDiscussionPlanned(body.discussionId, organizationId, estimate.lineageId);
+      reply.status(201).send(estimate);
     } catch (err) {
       if (sendHttpError(reply, err)) return;
       if (err instanceof z.ZodError) {
@@ -293,90 +382,9 @@ export async function estimateRoutes(app: FastifyInstance) {
         return;
       }
 
-      let plannerOutput;
-      let plannerModel: string;
-      try {
-        ({ plannerOutput, plannerModel } = await generatePlannerOutput(body.prompt));
-      } catch (err) {
-        if (err instanceof PlannerError) {
-          reply.status(502).send({ error: err.message });
-          return;
-        }
-        if (err instanceof z.ZodError) {
-          reply.status(502).send({ error: `Planner produced invalid output: ${err.message}` });
-          return;
-        }
-        throw err;
-      }
-      const pricing = priceEstimate(plannerOutput.resourceEstimate, RATE_CONFIG);
-
-      const result = await db.transaction().execute(async (trx) => {
-        const target = await trx
-          .selectFrom("project_estimates")
-          .selectAll()
-          .where("id", "=", estimateId)
-          .where("project_id", "=", projectId)
-          .where("organization_id", "=", organizationId)
-          .forUpdate()
-          .executeTakeFirst();
-        if (!target) {
-          throw new HttpError(404, "Not found");
-        }
-
-        if (target.status === "SUPERSEDED") {
-          const head = await currentHead(target.lineage_id);
-          throw new HttpError(
-            409,
-            `Estimate ${estimateId} is superseded — the current head is version ${head.version} (id ${head.id})`,
-          );
-        }
-
-        // Defensive: with the invariant that revise/approve always keep
-        // exactly one non-SUPERSEDED row per lineage, target.status !==
-        // SUPERSEDED already implies target is the head. Checked explicitly
-        // anyway rather than assumed.
-        const head = await currentHead(target.lineage_id);
-        if (head.id !== target.id) {
-          throw new HttpError(
-            409,
-            `Estimate ${estimateId} is not the current head — the current head is version ${head.version} (id ${head.id})`,
-          );
-        }
-
-        const supersedeResult = await trx
-          .updateTable("project_estimates")
-          .set({ status: "SUPERSEDED" })
-          .where("id", "=", target.id)
-          .where("status", "=", target.status)
-          .executeTakeFirst();
-        if (Number(supersedeResult.numUpdatedRows) !== 1) {
-          throw new HttpError(409, "Estimate changed concurrently — retry");
-        }
-
-        return trx
-          .insertInto("project_estimates")
-          .values({
-            lineage_id: target.lineage_id,
-            version: target.version + 1,
-            status: "READY_FOR_REVIEW",
-            organization_id: organizationId,
-            project_id: projectId,
-            source_prompt: body.prompt,
-            planner_output: JSON.stringify(plannerOutput),
-            planner_model: plannerModel,
-            created_by: userId,
-            ...pricingColumns(pricing),
-          })
-          .returningAll()
-          .executeTakeFirstOrThrow();
-      });
-
-      reply.status(201).send(toEstimateResponse(result));
+      const result = await reviseEstimate({ organizationId, userId, projectId, estimateId, prompt: body.prompt });
+      reply.status(201).send(result);
     } catch (err) {
-      if (isUniqueViolation(err)) {
-        reply.status(409).send({ error: "Estimate changed concurrently — retry" });
-        return;
-      }
       if (sendHttpError(reply, err)) return;
       if (err instanceof z.ZodError) {
         reply.status(400).send({ error: err.message });

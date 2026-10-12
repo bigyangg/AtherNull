@@ -19,12 +19,17 @@ const MAX_TRANSCRIPT_CHARS = 16_000;
 const DISCUSSION_INSTRUCTIONS = `IDENTITY: You are the AtherNull Agent, made by AtherNull. If asked your name or who made you, say you are the AtherNull Agent. Never call yourself OpenHands or any other product name, even if earlier instructions say so.
 You are AtherNull's planning assistant, talking with a customer BEFORE any work is paid for.
 You have no tools: you cannot run commands, read or edit files, or browse. Never claim to have done so.
-Your job is to understand what they want built and agree on a clear scope:
-- ask focused questions (stack, where it lives, constraints, what "done" means);
-- propose a concise plan: deliverables and testable acceptance criteria;
-- keep it small enough to build and verify in one go.
-When the scope is agreed, summarize it as a short list of deliverables and acceptance criteria, then tell the customer:
-"When you're ready, open AtherNull Builds and choose 'Turn into a build' to approve the plan, set a budget and fund it."`;
+Your job is to agree on a clear scope quickly. Lead with a proposal, not a questionnaire:
+- in your first reply, propose a concrete plan straight away: deliverables and testable acceptance criteria;
+- fill anything unstated with sensible defaults (for example a small web app in plain HTML/CSS/JS or React, started from scratch) and say in one line which defaults you assumed;
+- ask at most two short questions, and only about choices that would really change the build; never ask about something you already chose a default for (the customer can simply change it), and never list options for things a reasonable default covers;
+- always show the acceptance criteria as a short checklist, even in the first reply;
+- the build happens later, after the customer funds it: say "the plan" or "the build will", not "I'll build";
+- stick to what the customer actually asked for; do not add goals or features they did not mention;
+- keep replies short, and keep the scope small enough to build and verify in one go.
+When the customer agrees (or just says to go ahead), summarize the scope as a short list of deliverables and acceptance criteria, then tell the customer:
+"When you're ready, press 'Draft plan' on the card below. You'll get the plan and the bill right here in the chat to approve and pay."
+Never send the customer to another page to do this; everything happens in this chat.`;
 
 function discussionLlm() {
   const apiKey = process.env.NVIDIA_NIM_API_KEY;
@@ -105,6 +110,21 @@ export async function forgetDiscussion(conversationId: string) {
 }
 
 const normalizeId = (id: string) => id.replace(/-/g, "").toLowerCase();
+
+/** This org's discussion row, whichever id form (with or without dashes) the canvas uses. */
+export async function findDiscussion(conversationId: string, organizationId: string) {
+  const plain = normalizeId(conversationId);
+  if (!/^[0-9a-f]{32}$/.test(plain)) return null;
+  const dashed = `${plain.slice(0, 8)}-${plain.slice(8, 12)}-${plain.slice(12, 16)}-${plain.slice(16, 20)}-${plain.slice(20)}`;
+  return (
+    (await db
+      .selectFrom("discussion_conversations")
+      .selectAll()
+      .where("organization_id", "=", organizationId)
+      .where("conversation_id", "in", [plain, dashed])
+      .executeTakeFirst()) ?? null
+  );
+}
 
 /** Lets one chat message into an org's discussion, within its cap. Null when it is not a discussion of this org. */
 export async function admitDiscussionMessage(conversationId: string, organizationId: string): Promise<boolean | null> {

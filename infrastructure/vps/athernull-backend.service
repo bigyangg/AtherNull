@@ -1,0 +1,31 @@
+# AtherNull backend on the Coolify VPS (docs/runbooks/vps-deploy.md):
+# Postgres (Docker, 127.0.0.1), API (127.0.0.1:3001), canvas + ingress
+# (INGRESS_HOST:8080, reached only by Coolify's Traefik), coding worker,
+# sandbox provisioner and verifier. Runs as the dedicated `athernull` user
+# (docker group: needed to start sandboxes; never root).
+[Unit]
+Description=AtherNull backend (API, canvas, worker, provisioner, verifier)
+After=network-online.target docker.service athernull-sandbox-firewall.service
+Wants=network-online.target
+Requires=docker.service athernull-sandbox-firewall.service
+
+[Service]
+Type=simple
+User=athernull
+Group=athernull
+WorkingDirectory=/opt/athernull/app
+Environment=PUBLIC_ORIGIN=https://athernull.io
+# The docker0 address: Coolify's Traefik reaches it, the internet doesn't.
+Environment=INGRESS_HOST=172.17.0.1
+Environment=INGRESS_PORT=8080
+# Verifier installs dependencies on the firewalled sandbox network.
+Environment=VERIFIER_INSTALL_NETWORK=athernull-sandboxes
+Environment=VERIFIER_INSTALL_DNS=1.1.1.1,9.9.9.9
+ExecStart=/usr/bin/node scripts/dev.mjs --prod
+Restart=on-failure
+RestartSec=10
+TimeoutStartSec=900
+KillMode=control-group
+
+[Install]
+WantedBy=multi-user.target

@@ -419,3 +419,20 @@ export interface BuildListItem {
   status: string;
   updatedAt: string;
 }
+
+// Chat-native builds — GET /v1/discussions/:id/build: where one canvas
+// discussion is in plan -> approve -> bill -> pay -> build.
+export interface ChatBuildState {
+  discussionId: string;
+  messageCount: number;
+  plan: ProjectEstimate | null;
+  authorization: {
+    id: string;
+    status: BudgetAuthorizationStatus;
+    amountMinor: number;
+    currency: string;
+    source: BudgetAuthorizationSource;
+  } | null;
+  task: { id: string; status: TaskStatus; projectId: string; budgetMinor: number; currency: string } | null;
+  defaultBudget: { amountMinor: number; currency: string };
+}

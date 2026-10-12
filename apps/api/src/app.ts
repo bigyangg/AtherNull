@@ -15,6 +15,7 @@ import { projectRoutes } from "./routes/projects.js";
 import { agentGatewayRoutes } from "./routes/agent-gateway.js";
 import { agentSandboxRoutes } from "./routes/agent-sandbox.js";
 import { buildRoutes } from "./routes/builds.js";
+import { chatBuildRoutes } from "./routes/chat-builds.js";
 import { discussionRoutes } from "./routes/discussions.js";
 import { repoTransferRoutes } from "./routes/repo-transfer.js";
 import { verificationRoutes } from "./routes/verification.js";
@@ -96,6 +97,7 @@ export async function buildApp(opts: { logger?: boolean } = {}): Promise<Fastify
   // AtherNull auth and the funded-build gate.
   await app.register(agentGatewayRoutes);
   await app.register(discussionRoutes);
+  await app.register(chatBuildRoutes);
   await app.register(agentSandboxRoutes);
   await app.register(buildRoutes);
   // Phase 2 — OpenHands compatibility layer (ADR-0006). Registers its own

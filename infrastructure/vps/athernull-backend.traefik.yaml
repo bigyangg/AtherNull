@@ -1,0 +1,23 @@
+# Coolify -> Servers -> <this server> -> Proxy -> Dynamic Configurations ->
+# add a file named athernull-backend.yaml with this content.
+#
+# Everything on athernull.io keeps going to the web app Coolify already
+# deploys, except the backend paths below, which go to the AtherNull
+# backend running on the host (infrastructure/vps/athernull-backend.service).
+# One origin for all of it: the canvas, the login cookie and the in-chat
+# build card depend on that.
+http:
+  routers:
+    athernull-backend:
+      rule: "(Host(`athernull.io`) || Host(`www.athernull.io`)) && (PathPrefix(`/v1`) || PathPrefix(`/oh`) || PathPrefix(`/api/auth`) || PathPrefix(`/canvas`) || Path(`/health`))"
+      entryPoints:
+        - https
+      service: athernull-backend
+      priority: 1000
+      tls:
+        certResolver: letsencrypt
+  services:
+    athernull-backend:
+      loadBalancer:
+        servers:
+          - url: "http://172.17.0.1:8080"

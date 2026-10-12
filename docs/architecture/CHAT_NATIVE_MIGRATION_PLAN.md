@@ -3,6 +3,11 @@
 Status: Proposed. Phase 0 is detailed and ready for approval; Phases 1–7 are scoped and get their own detailed plan at each phase boundary.
 Related: [CHAT_NATIVE_USDC_ESCROW_TARGET.md](CHAT_NATIVE_USDC_ESCROW_TARGET.md), [ESCROW_STATE_MACHINE.md](ESCROW_STATE_MACHINE.md), [CHAT_PAYMENT_API_CONTRACT.md](CHAT_PAYMENT_API_CONTRACT.md), [../security/PRE_LAUNCH_SECURITY_GATES.md](../security/PRE_LAUNCH_SECURITY_GATES.md).
 
+**Interim chat flow (2026-10-12, implemented ahead of Phases 1–7).** Customers no longer need the Builds page: a card at the end of every canvas discussion (canvas patch `0006`, framing the web page `/chat-build/<discussionId>`) runs Draft plan → Approve → Bill → Pay now (wallet) → build progress → review, Accept (release) / Reject (refund). It is deliberately a thin layer over what exists:
+- `apps/api/src/routes/chat-builds.ts`: build state per discussion, Draft plan (new **hosted** project via ADR-0019 `createRepo`, no repository URL; idempotent per discussion, in-process lock) and Update plan (re-plans from the whole transcript plus the current plan, fixing audit B2 for this path).
+- Approve, budget (`ESTIMATE_PROPOSED_CAP` when priced, otherwise `CHAT_BUILD_DEFAULT_BUDGET_MINOR`, default 2000 USD minor units), task, funding, activation, accept/reject/refund all call the existing guarded endpoints in order. Payment is the existing **SOL devnet** project funding (fixed `SOLANA_DEMO_REQUIRED_LAMPORTS`), activation is called by the card right after verified funding.
+- Still open from the target design: USDC escrow and invoices (Phases 3–4), server-side auto-activation without the browser (Phase 5), cards as `conversation_events` (Phase 2), plan reject, rate card.
+
 ## 1. Working rules for every phase
 
 1. Inspect the affected code again at the start of the phase. Line numbers drift.
