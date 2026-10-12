@@ -16,6 +16,7 @@ import { agentGatewayRoutes } from "./routes/agent-gateway.js";
 import { agentSandboxRoutes } from "./routes/agent-sandbox.js";
 import { buildRoutes } from "./routes/builds.js";
 import { discussionRoutes } from "./routes/discussions.js";
+import { repoTransferRoutes } from "./routes/repo-transfer.js";
 import { verificationRoutes } from "./routes/verification.js";
 import { realtimeGatewayRoutes } from "./routes/realtime-gateway.js";
 import { MAX_RELAY_MESSAGE_BYTES, relayRoutes } from "./routes/relay.js";
@@ -76,6 +77,7 @@ export async function buildApp(opts: { logger?: boolean } = {}): Promise<Fastify
   await app.register(internalRoutes);
   // ADR-0017 — patch capture + independent verifier endpoints.
   await app.register(verificationRoutes);
+  await app.register(repoTransferRoutes);
   // ADR-0007 Phase 3B — worker -> apps/api outbound relay tunnel.
   // @fastify/websocket must be registered before relayRoutes (it decorates
   // the fastify instance with the `websocket: true` route option and the

@@ -32,6 +32,12 @@ TOKEN = os.getenv("VERIFIER_API_TOKEN", "")
 VERIFIER_ID = os.getenv("VERIFIER_ID", f"verifier-{uuid.uuid4().hex[:8]}")
 IMAGE = os.getenv("VERIFIER_IMAGE", "ghcr.io/openhands/agent-server:latest-python")
 POLL_SECONDS = float(os.getenv("VERIFIER_POLL_SECONDS", "5"))
+# The dependency install is the only step with a network. In production it
+# runs on the customer-sandbox network (athernull-sandboxes), so the host
+# firewall applies: public registries yes, the host / private ranges / other
+# sandboxes no (docs/runbooks/sandbox-network.md). Tests always run offline.
+INSTALL_NETWORK = os.getenv("VERIFIER_INSTALL_NETWORK", "bridge")
+INSTALL_DNS = [d.strip() for d in os.getenv("VERIFIER_INSTALL_DNS", "").split(",") if d.strip()]
 TEST_TIMEOUT = int(os.getenv("VERIFIER_TEST_TIMEOUT_SECONDS", "600"))
 LOG_TAIL = 8000
 
@@ -56,6 +62,16 @@ def api(method: str, path: str, body: dict | None = None) -> tuple[int, dict | N
         return err.code, None
 
 
+def api_bytes(path: str) -> tuple[int, bytes]:
+    """A binary download from the API (a git bundle)."""
+    req = urllib.request.Request(f"{API_URL}{path}", method="GET", headers={"authorization": f"Bearer {TOKEN}"})
+    try:
+        with urllib.request.urlopen(req, timeout=300) as res:
+            return res.status, res.read()
+    except urllib.error.HTTPError as err:
+        return err.code, b""
+
+
 def git(*args: str, cwd: Path) -> subprocess.CompletedProcess:
     # No line-ending conversion: the patch must apply to the committed bytes,
     # whatever the host's git defaults (Windows: core.autocrlf=true).
@@ -64,9 +80,35 @@ def git(*args: str, cwd: Path) -> subprocess.CompletedProcess:
     )
 
 
+def checkout_commit(job: dict, into: Path) -> str | None:
+    """ADR-0019: a fresh clone of exactly the build's result commit, fetched
+    from AtherNull as a bundle. Nothing is applied or re-created."""
+    if not job["patch"].strip():
+        return "the build made no changes"
+    status, bundle = api_bytes(f"/internal/verifications/{job['executionId']}/bundle?verifierId={VERIFIER_ID}")
+    if status != 200 or not bundle:
+        return f"could not fetch the build's commit (HTTP {status})"
+    bundle_file = into.parent / "result.bundle"
+    bundle_file.write_bytes(bundle)
+    clone = subprocess.run(
+        ["git", "-c", "core.autocrlf=false", "clone", "--quiet", "--config", "core.autocrlf=false", str(bundle_file), str(into)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if clone.returncode != 0:
+        return f"could not open the build's commit: {clone.stderr.strip()[-300:]}"
+    co = git("checkout", "--quiet", job["resultCommit"], cwd=into)
+    if co.returncode != 0:
+        return f"the build's commit {job['resultCommit']} is missing: {co.stderr.strip()[-300:]}"
+    return None
+
+
 def checkout(job: dict, into: Path) -> str | None:
     """Fresh checkout of the approved revision plus the patch. Returns an
     error message, or None on success."""
+    if job.get("resultCommit"):
+        return checkout_commit(job, into)
     clone = subprocess.run(
         ["git", "-c", "core.autocrlf=false", "clone", "--quiet", "--config", "core.autocrlf=false", job["repository"], str(into)],
         capture_output=True,
@@ -91,7 +133,8 @@ def checkout(job: dict, into: Path) -> str | None:
 def in_container(workdir: Path, command: str, network: bool, timeout: int) -> tuple[int | None, str]:
     args = [
         "docker", "run", "--rm",
-        "--network", "bridge" if network else "none",
+        "--network", INSTALL_NETWORK if network else "none",
+        *[arg for dns in (INSTALL_DNS if network else []) for arg in ("--dns", dns)],
         "--memory", "2g", "--cpus", "2", "--pids-limit", "512",
         "-v", f"{workdir}:/work", "-w", "/work",
         "--entrypoint", "bash", IMAGE, "-lc", command,
@@ -112,6 +155,7 @@ def verify(job: dict) -> dict:
         "repository": job["repository"],
         "baseRevision": job["baseRevision"],
         "patchSha256": job["patchSha256"],
+        **({"resultCommit": job["resultCommit"]} if job.get("resultCommit") else {}),
         "image": IMAGE,
         "network": "none during tests",
     }

@@ -4,18 +4,23 @@
 //
 //   pnpm --filter @athernull/api sandbox:provision -- --org <organizationId>
 //
-// Idempotent: reuses a registered, running sandbox and only re-applies its
-// configuration. The container port is published on 127.0.0.1 only; the
-// session key is generated here, stored for the gateway/worker, and never
-// printed.
+// Idempotent: reuses a registered, running sandbox whose run policy is
+// unchanged and only re-applies its configuration; a sandbox started under
+// an older policy is recreated on the same volume. The session key is
+// generated here, stored for the gateway/worker, and never printed.
+//
+// How the container runs (image pin, network, limits) is sandbox/policy.ts.
+// With SANDBOX_NETWORK set (production) the sandbox publishes no port: the
+// gateway and worker reach it by container name on that network, and this
+// provisioner (a host process) by its container IP.
 //
 // Env: DATABASE_URL, NVIDIA_NIM_API_KEY (sandbox LLM for the canvas),
-//      SANDBOX_IMAGE (default ghcr.io/openhands/agent-server:latest-python),
+//      SANDBOX_* (sandbox/policy.ts),
 //      SANDBOX_LLM_MODEL (default nvidia_nim/nvidia/nemotron-3-super-120b-a12b)
 
 import { execFileSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -23,14 +28,48 @@ import { fileURLToPath } from "node:url";
 import { sql } from "kysely";
 
 import { db } from "../db.js";
+import {
+  FIREWALL_MARKER_DIR,
+  loadSandboxPolicy,
+  policyFingerprint,
+  registeredBaseUrl,
+  sandboxRunArgs,
+  type SandboxPolicy,
+} from "./policy.js";
 
-const IMAGE = process.env.SANDBOX_IMAGE ?? "ghcr.io/openhands/agent-server:latest-python";
 const LLM_MODEL = process.env.SANDBOX_LLM_MODEL ?? "nvidia_nim/nvidia/nemotron-3-super-120b-a12b";
 const EXTENSION_DIR = fileURLToPath(new URL("../../../canvas/extension/athernull/", import.meta.url));
 const EXTENSION_REMOTE_DIR = "/workspace/.athernull/extensions/athernull";
 
 function docker(...args: string[]): string {
   return execFileSync("docker", args, { encoding: "utf8" }).trim();
+}
+
+function inspect(container: string, format: string): string {
+  try {
+    return docker("inspect", "--format", format, container);
+  } catch {
+    return "";
+  }
+}
+
+/** Fails closed when the host firewall for the sandbox network is not in place. */
+function assertFirewall(policy: SandboxPolicy) {
+  if (!policy.enforceFirewall || !policy.network) return;
+  const marker = join(FIREWALL_MARKER_DIR, `${policy.network}.firewall`);
+  if (!existsSync(marker)) {
+    throw new Error(
+      `sandbox network policy is enforced but ${marker} is missing: run infrastructure/sandbox-network/athernull-sandbox-net.sh apply (docs/runbooks/sandbox-network.md)`,
+    );
+  }
+}
+
+/** Where this process reaches the sandbox while configuring it. */
+function setupUrl(policy: SandboxPolicy, container: string, registered: string): string {
+  if (!policy.network) return registered;
+  const ip = inspect(container, `{{(index .NetworkSettings.Networks "${policy.network}").IPAddress}}`);
+  if (!ip) throw new Error(`${container} has no address on ${policy.network}`);
+  return `http://${ip}:8000`;
 }
 
 function freePort(): Promise<number> {
@@ -84,37 +123,39 @@ export async function provisionOrgSandbox(
   const org = (await sql<{ id: string; name: string }>`select id, name from "organization" where id = ${organizationId}`.execute(db)).rows[0];
   if (!org) throw new Error(`organization ${organizationId} not found`);
   let reused = false;
+  const policy = loadSandboxPolicy();
+  assertFirewall(policy);
 
   const container = `athernull-sandbox-${organizationId.slice(0, 8)}`;
   const existing = await db.selectFrom("org_agent_servers").selectAll().where("organization_id", "=", organizationId).executeTakeFirst();
   const running = docker("ps", "-q", "--filter", `name=^${container}$`) !== "";
+  const samePolicy = inspect(container, '{{index .Config.Labels "athernull.sandbox-policy"}}') === policyFingerprint(policy);
 
   let baseUrl: string;
   let key: string;
-  if (existing && running && existing.container_name === container) {
+  if (existing && running && samePolicy && existing.container_name === container) {
     baseUrl = existing.base_url;
     key = existing.session_api_key;
     reused = true;
     log(`reusing ${container}`);
   } else {
+    if (running && !samePolicy) log(`recreating ${container} under the current sandbox policy (volume kept)`);
     try {
       docker("rm", "-f", container);
     } catch {
       // nothing to remove
     }
-    const port = await freePort();
+    const port = policy.network ? null : await freePort();
     key = randomBytes(32).toString("hex");
-    baseUrl = `http://127.0.0.1:${port}`;
-    docker(
-      "run", "-d", "--name", container, "--restart", "unless-stopped",
-      "-p", `127.0.0.1:${port}:8000`,
-      "-e", `OH_SESSION_API_KEYS_0=${key}`,
-      "-v", `${container}:/workspace`,
-      IMAGE, "--host", "0.0.0.0", "--port", "8000",
-    );
-    log(`started ${container} on 127.0.0.1:${port}`);
+    baseUrl = registeredBaseUrl(policy, container, port);
+    docker(...sandboxRunArgs(policy, { container, key, hostPort: port }));
+    log(`started ${container} (${policy.network ? `network ${policy.network}` : `127.0.0.1:${port}`})`);
   }
 
+  // The registered URL is for the gateway/worker; this process may reach
+  // the sandbox differently (by container IP from the host).
+  const registered = baseUrl;
+  baseUrl = setupUrl(policy, container, registered);
   const info = await waitReady(baseUrl, key);
 
   // The canvas's own LLM (titles, readiness). Agent work itself is still
@@ -152,12 +193,12 @@ export async function provisionOrgSandbox(
   // registered sandbox as ready, so it must already be fully configured.
   await db
     .insertInto("org_agent_servers")
-    .values({ organization_id: organizationId, base_url: baseUrl, session_api_key: key, container_name: container })
+    .values({ organization_id: organizationId, base_url: registered, session_api_key: key, container_name: container })
     .onConflict((oc) =>
-      oc.column("organization_id").doUpdateSet({ base_url: baseUrl, session_api_key: key, container_name: container, updated_at: new Date() }),
+      oc.column("organization_id").doUpdateSet({ base_url: registered, session_api_key: key, container_name: container, updated_at: new Date() }),
     )
     .execute();
   log(`registered sandbox for "${org.name}" (agent-server ${info.version ?? "?"})`);
 
-  return { baseUrl, version: info.version ?? null, reused };
+  return { baseUrl: registered, version: info.version ?? null, reused };
 }

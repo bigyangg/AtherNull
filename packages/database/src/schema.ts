@@ -21,6 +21,9 @@ export interface ProjectsTable {
   scope: string | null;
   owner_user_id: string;
   created_at: Timestamp;
+  // ADR-0019 (0020_hosted_repositories.sql): 'hosted' once AtherNull holds
+  // the project's repository; null until first imported.
+  repo_kind: string | null;
 }
 
 export interface AgentProfilesTable {
@@ -62,6 +65,11 @@ export interface TasksTable {
   // call site, exactly like max_budget_minor/currency.
   source_estimate_id: string | null;
   source_budget_authorization_id: string | null;
+  // ADR-0019 — commit ids in the project's hosted repository.
+  base_commit: string | null;
+  result_commit: string | null;
+  merged_commit: string | null;
+  merge_state: string | null; // VERIFYING | CONFLICT
 }
 
 export interface ExecutionsTable {
@@ -397,6 +405,8 @@ export interface ExecutionPatchesTable {
   created_at: Generated<Date>;
   verify_lease_owner: string | null;
   verify_lease_expires_at: NullableTimestamp;
+  // ADR-0019 — the commit to verify; null for pre-0020 patches.
+  result_commit: string | null;
 }
 
 // ADR-0018 — on-demand agent workspace provisioning.

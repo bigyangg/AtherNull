@@ -10,6 +10,7 @@ import { persistExecutionEvents } from "../execution-events.js";
 import { requireInternalToken } from "../internal-auth.js";
 import { executionBroadcaster } from "../realtime/execution-broadcaster.js";
 import { relayRegistry } from "../realtime/relay-registry.js";
+import { pinBaseCommit } from "../repos/projects.js";
 import { resolveRouting } from "../routing.js";
 import { cumulativeTaskUsage, getActivePolicy, toUsagePauseResponse } from "../usage-policies.js";
 import { persistUsageEvents } from "../usage-events.js";
@@ -164,6 +165,9 @@ export async function internalRoutes(app: FastifyInstance) {
       .select(["permitted_repository"])
       .where("id", "=", task.project_id)
       .executeTakeFirst();
+    // ADR-0019: the commit the build starts from in the project's hosted
+    // repository; the worker fetches it as a bundle (repo-bundle route).
+    const baseCommit = await pinBaseCommit(task, request.log);
 
     // Phase 4D.2A — correction 2/19: only present when an ACTIVE
     // task_usage_policies row genuinely exists for this task; a task with no
@@ -199,6 +203,7 @@ export async function internalRoutes(app: FastifyInstance) {
       executionId: execution.id,
       organizationId: task.organization_id,
       repositorySnapshot: `${project?.permitted_repository ?? "unknown"}@${task.repository_revision}`,
+      baseCommit,
       objective: task.requirements,
       acceptanceCriteria: Array.isArray(task.acceptance_criteria) ? task.acceptance_criteria : [],
       agentProfileVersion: task.agent_profile_config_revision,

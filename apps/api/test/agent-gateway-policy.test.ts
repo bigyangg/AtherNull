@@ -39,13 +39,26 @@ test("stopping work and configuring the sandbox is control (owner/admin), not ag
     ["PUT", "/api/settings/secrets"],
     ["POST", "/api/skills/install"],
     ["DELETE", "/api/plugins/installed/x"],
-    ["POST", "/api/canvas-extensions/install"],
     ["POST", "/api/llm/provider-connections"],
     ["POST", "/api/mcp/oauth/start"],
     ["POST", "/api/bash/execute_bash_command"],
     ["POST", "/api/file/upload"],
   ] as const) {
     assert.equal(c(m, path).kind, "control", `${m} ${path}`);
+  }
+});
+
+test("canvas Apps are platform-managed: readable, never changed from a browser", () => {
+  for (const path of ["/api/canvas-extensions/installed", "/api/canvas-extensions/installed/athernull/bundle"]) {
+    assert.equal(c("GET", path).kind, "read", path);
+  }
+  for (const [m, path] of [
+    ["POST", "/api/canvas-extensions/install"],
+    ["PATCH", "/api/canvas-extensions/installed/athernull"],
+    ["DELETE", "/api/canvas-extensions/installed/athernull"],
+    ["POST", "/api/canvas-extensions"],
+  ] as const) {
+    assert.equal(c(m, path).kind, "blocked", `${m} ${path}`);
   }
 });
 

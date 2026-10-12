@@ -284,6 +284,73 @@ def _capture_patch(client: httpx.Client, sandbox: _Sandbox, execution_id: str, w
     log(f"captured patch for {execution_id}: {post.json()}")
 
 
+def _prepare_hosted_repository(client: httpx.Client, sandbox: _Sandbox, execution_id: str, task_id: str, base: str, workdir: str) -> None:
+    """ADR-0019: the build's base commit comes from AtherNull's hosted
+    repository as a bundle; the sandbox works on builds/<task id>. The
+    sandbox never holds a repository credential."""
+    res = client.get(
+        f"{API_URL}/internal/executions/{execution_id}/repo-bundle",
+        params={"workerId": WORKER_ID},
+        headers=api_headers(),
+        timeout=300.0,
+    )
+    if res.status_code != 200:
+        raise RuntimeError(f"fetching the project's code failed ({res.status_code}): {res.text[:300]}")
+    q = shlex.quote
+    remote_bundle = f"{BUILDS_ROOT}/.bundles/{task_id}.base.bundle"
+    with tempfile.TemporaryDirectory(prefix="athernull-base-") as tmp:
+        local = Path(tmp) / "base.bundle"
+        local.write_bytes(res.content)
+        sandbox.bash(f"mkdir -p {q(BUILDS_ROOT)}/.bundles")
+        sandbox.upload(local, remote_bundle)
+    code, output = sandbox.bash(
+        f"rm -rf {q(workdir)} && git -c core.autocrlf=false clone --quiet --config core.autocrlf=false {q(remote_bundle)} {q(workdir)} "
+        f"&& git -C {q(workdir)} checkout --quiet -B {q('builds/' + task_id)} {q(base)}"
+    )
+    if code != 0:
+        raise RuntimeError(f"preparing the project's code failed (exit {code}): {output[-500:]}")
+
+
+def build_commit_message(objective: str, task_id: str, execution_id: str) -> str:
+    return f"{build_title(objective)}\n\nBuild-Id: {task_id}\nExecution-Id: {execution_id}\n"
+
+
+def _capture_commit(
+    client: httpx.Client, sandbox: _Sandbox, execution_id: str, task_id: str, base: str, workdir: str, objective: str
+) -> None:
+    """ADR-0019: the agent's work becomes ONE commit on builds/<task id> on top
+    of the base, authored by the AtherNull Agent, and goes back to AtherNull
+    as a bundle. AtherNull stores it on that branch (never main) and derives
+    the patch the verifier and the customer review."""
+    q = shlex.quote
+    branch = f"refs/heads/builds/{task_id}"
+    message_file = f"{BUILDS_ROOT}/.bundles/{task_id}.message"
+    bundle_file = f"{BUILDS_ROOT}/.bundles/{task_id}.result.bundle"
+    message = build_commit_message(objective, task_id, execution_id)
+    code, output = sandbox.bash(
+        f"mkdir -p {q(BUILDS_ROOT)}/.bundles && printf %s {q(message)} > {q(message_file)} && cd {q(workdir)} "
+        f"&& git add -A && git reset --quiet --soft {q(base)} "
+        f"&& git -c user.name='AtherNull Agent' -c user.email=agent@athernull.io -c commit.gpgsign=false -c core.autocrlf=false "
+        f"commit --quiet --allow-empty --no-verify -F {q(message_file)} "
+        f"&& git update-ref {q(branch)} HEAD && rm -f {q(bundle_file)} "
+        f"&& git bundle create --quiet {q(bundle_file)} {q(branch)} {q('^' + base)}"
+    )
+    if code != 0:
+        raise RuntimeError(f"committing the build failed (exit {code}): {output[-300:]}")
+    res = sandbox.http.get("/api/file/download", params={"path": bundle_file}, timeout=300.0)
+    res.raise_for_status()
+    post = client.post(
+        f"{API_URL}/internal/executions/{execution_id}/result-bundle",
+        params={"workerId": WORKER_ID},
+        content=res.content,
+        headers={**api_headers(), "Content-Type": "application/octet-stream"},
+        timeout=300.0,
+    )
+    if post.status_code != 201:
+        raise RuntimeError(f"saving the build's commit failed ({post.status_code}): {post.text[:300]}")
+    log(f"build {task_id} committed: {post.json()}")
+
+
 def run_dispatch_via_org_sandbox(client: httpx.Client, dispatch: dict) -> tuple[str, str | None]:
     server = dispatch.get("orgAgentServer")
     if not server:
@@ -299,7 +366,12 @@ def run_dispatch_via_org_sandbox(client: httpx.Client, dispatch: dict) -> tuple[
     seen_usage: set[str] = set()
     conversation_id: str | None = None
     try:
-        _prepare_repository(sandbox, dispatch["repositorySnapshot"], workdir)
+        base = dispatch.get("baseCommit")
+        if base:
+            _prepare_hosted_repository(client, sandbox, execution_id, task_id, base, workdir)
+        else:
+            # A project AtherNull cannot host yet: clone it directly (ADR-0017 path).
+            _prepare_repository(sandbox, dispatch["repositorySnapshot"], workdir)
         model = dispatch["resolvedModel"]
         api_key = require_api_key(model)
         message = build_task_message(dispatch["objective"], dispatch["acceptanceCriteria"])
@@ -352,7 +424,10 @@ def run_dispatch_via_org_sandbox(client: httpx.Client, dispatch: dict) -> tuple[
             if status in TERMINAL_SUCCESS:
                 # The verifier judges the change itself, never this claim;
                 # without a captured patch there is nothing to verify.
-                _capture_patch(client, sandbox, execution_id, workdir, dispatch["repositorySnapshot"])
+                if base:
+                    _capture_commit(client, sandbox, execution_id, task_id, base, workdir, dispatch["objective"])
+                else:
+                    _capture_patch(client, sandbox, execution_id, workdir, dispatch["repositorySnapshot"])
                 return "success", None
             if status in TERMINAL_FAILURE:
                 return "failure", f"agent ended in status {status}"

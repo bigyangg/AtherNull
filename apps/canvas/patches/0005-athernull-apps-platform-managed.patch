@@ -1,0 +1,41 @@
+diff --git a/src/components/features/skills/extensions-navigation.tsx b/src/components/features/skills/extensions-navigation.tsx
+index 3b5ee7b..251b341 100644
+--- a/src/components/features/skills/extensions-navigation.tsx
++++ b/src/components/features/skills/extensions-navigation.tsx
+@@ -68,7 +68,9 @@ export const EXTENSIONS_NAV_ITEMS: ExtensionNavItem[] = [
+     icon: <Blocks width={16} height={16} aria-hidden="true" />,
+     end: true,
+   },
+-];
++  // AtherNull: Apps are platform-managed (AtherNull Builds is installed at
++  // provisioning; the gateway refuses changes), so there is no Apps page.
++].filter((item) => !(import.meta.env.VITE_ATHERNULL && item.to === "/apps"));
+ 
+ export function ExtensionsNavigation() {
+   const { t } = useTranslation("openhands");
+diff --git a/src/routes/canvas-extensions.tsx b/src/routes/canvas-extensions.tsx
+index 60f03c1..a3092c6 100644
+--- a/src/routes/canvas-extensions.tsx
++++ b/src/routes/canvas-extensions.tsx
+@@ -1,4 +1,5 @@
+ import React from "react";
++import { Navigate } from "react-router";
+ import { useTranslation } from "react-i18next";
+ import { ExternalLink } from "lucide-react";
+ import { ExtensionsNavigation } from "#/components/features/skills/extensions-navigation";
+@@ -34,7 +35,14 @@ type PendingAction =
+ const CANVAS_EXTENSIONS_DOCS_URL =
+   "https://docs.openhands.dev/openhands/usage/agent-canvas/canvas-extensions";
+ 
+-export default function CanvasExtensionsScreen() {
++// AtherNull: Apps are platform-managed; their pages (Builds) stay reachable
++// under /extensions/*, the management screen does not.
++export default function CanvasExtensionsRoute() {
++  if (import.meta.env.VITE_ATHERNULL) return <Navigate to="/" replace />;
++  return <CanvasExtensionsScreen />;
++}
++
++function CanvasExtensionsScreen() {
+   const { t } = useTranslation("openhands");
+   const { backend } = useActiveBackend();
+   const [showAddModal, setShowAddModal] = React.useState(false);

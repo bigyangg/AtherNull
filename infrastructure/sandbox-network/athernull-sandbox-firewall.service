@@ -1,0 +1,20 @@
+# Re-applies the AtherNull sandbox network rules at boot and whenever Docker
+# restarts (docs/runbooks/sandbox-network.md). Install:
+#   install -m 0755 athernull-sandbox-net.sh /opt/athernull/athernull-sandbox-net.sh
+#   install -m 0644 athernull-sandbox-firewall.service /etc/systemd/system/
+#   systemctl daemon-reload && systemctl enable --now athernull-sandbox-firewall
+[Unit]
+Description=AtherNull customer-sandbox network and firewall
+After=docker.service
+Requires=docker.service
+PartOf=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+EnvironmentFile=-/etc/athernull/sandbox-net.env
+ExecStart=/opt/athernull/athernull-sandbox-net.sh apply
+ExecStop=/opt/athernull/athernull-sandbox-net.sh remove
+
+[Install]
+WantedBy=multi-user.target

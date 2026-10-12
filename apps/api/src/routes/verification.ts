@@ -25,7 +25,7 @@ export const VERIFIER_VERSION = "athernull-verifier/1";
 const MAX_PATCH_BYTES = 5 * 1024 * 1024;
 const VERIFY_LEASE_SECONDS = Number(process.env.VERIFY_LEASE_SECONDS ?? 900);
 
-function requireVerifierToken(request: FastifyRequest, reply: FastifyReply): boolean {
+export function requireVerifierToken(request: FastifyRequest, reply: FastifyReply): boolean {
   const expected = process.env.VERIFIER_API_TOKEN;
   const header = request.headers.authorization;
   const provided = header?.startsWith("Bearer ") ? header.slice(7) : null;
@@ -167,6 +167,7 @@ export async function verificationRoutes(app: FastifyInstance) {
           "p.base_revision",
           "p.patch",
           "p.sha256",
+          "p.result_commit",
           "t.acceptance_criteria",
           "pr.permitted_repository",
         ])
@@ -212,6 +213,9 @@ export async function verificationRoutes(app: FastifyInstance) {
       baseRevision: job.base_revision,
       patch: job.patch,
       patchSha256: job.sha256,
+      // ADR-0019: when set, fetch this exact commit (GET
+      // /internal/verifications/:id/bundle) instead of applying the patch.
+      resultCommit: job.result_commit,
       acceptanceCriteria: Array.isArray(job.acceptance_criteria) ? job.acceptance_criteria : [],
       leaseSeconds: VERIFY_LEASE_SECONDS,
     });

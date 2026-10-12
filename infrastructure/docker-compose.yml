@@ -15,14 +15,16 @@ services:
       # Host port 5433, not 5432: this machine already runs an unrelated
       # project's Postgres container bound to 5432 (see `docker ps`). Only the
       # host-side mapping changes; the container still speaks 5432 internally.
-      - "5433:5432"
+      # Bound to 127.0.0.1 only (Phase 0): never reachable from the network,
+      # and its well-known dev password never protects anything exposed.
+      - "127.0.0.1:5433:5432"
     volumes:
       - athernull-postgres-dev:/var/lib/postgresql/data
 
   redis:
     image: redis:7-alpine
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     volumes:
       - athernull-redis-dev:/data
 

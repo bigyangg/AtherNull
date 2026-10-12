@@ -22,6 +22,9 @@ venv/
 # transcripts and state, never source.
 workers/coding-agent/workspace/
 
+# ADR-0019 hosted project repositories (customer code) — data, never source.
+apps/api/.data/
+
 # Env / secrets
 .env
 .env.*

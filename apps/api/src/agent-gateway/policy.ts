@@ -3,7 +3,7 @@
 //
 //   read    — any org member (every GET/HEAD).
 //   control — owner/admin: configuring the org's sandbox (settings, MCP,
-//             skills, plugins, profiles, secrets, Apps, files, bash) and
+//             skills, plugins, profiles, secrets, files, bash) and
 //             stopping work (pause/interrupt). None of this spends LLM
 //             budget on the platform's behalf.
 //   agent   — work on one conversation. Allowed for owner/admin when it is
@@ -15,7 +15,10 @@
 //             *discussion* agent (talk and plan only: no terminal, files or
 //             MCP) so people can scope the work before anything is funded.
 //   blocked — never from a browser: the server's raw LLM proxy would bypass
-//             every gate.
+//             every gate, and canvas Apps are platform-managed (installing
+//             one runs its JavaScript in AtherNull's origin as every viewer;
+//             provisioning installs AtherNull Builds directly, not through
+//             here). Apps stay readable: the canvas loads Builds from them.
 //
 // Anything not recognized is blocked (fail closed), so a new upstream
 // endpoint is unreachable until it is classified here.
@@ -72,7 +75,6 @@ const CONTROL_PREFIXES = [
   "/api/agent-profiles",
   "/api/llm/",
   "/api/mcp/",
-  "/api/canvas-extensions",
   "/api/workspaces",
   "/api/bash/",
   "/api/file/",
@@ -108,6 +110,9 @@ export function classifyGatewayRequest(method: string, path: string): GatewayAcc
     return { kind: "blocked", reason: "Unsupported conversation operation" };
   }
 
+  if (p === "/api/canvas-extensions" || p.startsWith("/api/canvas-extensions/")) {
+    return { kind: "blocked", reason: "Apps are managed by AtherNull" };
+  }
   if (CONTROL_PREFIXES.some((prefix) => p === prefix.replace(/\/$/, "") || p.startsWith(prefix))) {
     return { kind: "control" };
   }
