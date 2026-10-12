@@ -13,6 +13,7 @@ and it authenticates with its own token, distinct from the worker's.
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 import shutil
@@ -25,7 +26,13 @@ import urllib.request
 import uuid
 from pathlib import Path
 
-from verifier.checks import decide, detect_test_plan, parse_results
+from verifier.checks import (
+    decide,
+    detect_preview_plan,
+    detect_test_plan,
+    parse_results,
+    preview_root,
+)
 
 API_URL = os.getenv("ATHERNULL_API_URL", "http://localhost:3001").rstrip("/")
 TOKEN = os.getenv("VERIFIER_API_TOKEN", "")
@@ -40,6 +47,10 @@ INSTALL_NETWORK = os.getenv("VERIFIER_INSTALL_NETWORK", "bridge")
 INSTALL_DNS = [d.strip() for d in os.getenv("VERIFIER_INSTALL_DNS", "").split(",") if d.strip()]
 TEST_TIMEOUT = int(os.getenv("VERIFIER_TEST_TIMEOUT_SECONDS", "600"))
 LOG_TAIL = 8000
+# Live preview limits (the API enforces the same ones).
+PREVIEW_MAX_FILES = 2000
+PREVIEW_MAX_BYTES = 20 * 1024 * 1024
+PREVIEW_SKIP_DIRS = {".git", "node_modules"}
 
 
 def log(message: str) -> None:
@@ -130,9 +141,12 @@ def checkout(job: dict, into: Path) -> str | None:
     return None
 
 
-def in_container(workdir: Path, command: str, network: bool, timeout: int) -> tuple[int | None, str]:
+def in_container(
+    workdir: Path, command: str, network: bool, timeout: int, env: dict[str, str] | None = None
+) -> tuple[int | None, str]:
     args = [
         "docker", "run", "--rm",
+        *[arg for key, value in (env or {}).items() for arg in ("-e", f"{key}={value}")],
         "--network", INSTALL_NETWORK if network else "none",
         *[arg for dns in (INSTALL_DNS if network else []) for arg in ("--dns", dns)],
         "--memory", "2g", "--cpus", "2", "--pids-limit", "512",
@@ -185,10 +199,54 @@ def verify(job: dict) -> dict:
         tests = parse_results(plan.parser, output)
         outcome, reason = decide(code, tests)
         evidence.update({"exitCode": code, "reason": reason, "logTail": output[-LOG_TAIL:]})
-        return {"outcome": outcome, "tests": tests, "evidence": evidence}
+        result = {"outcome": outcome, "tests": tests, "evidence": evidence}
+        if outcome == "PASS":
+            # Never changes the verdict: a build that can't be previewed is
+            # still a passing build.
+            files, note = build_preview(repo)
+            evidence["preview"] = note
+            if files:
+                result["preview"] = files
+        return result
     finally:
         evidence["durationMs"] = int((time.monotonic() - started) * 1000)
         shutil.rmtree(tmp, ignore_errors=True)
+
+
+def build_preview(repo: Path) -> tuple[list[dict] | None, str]:
+    """The verified checkout as a static site, as upload-ready files."""
+    plan = detect_preview_plan(repo)
+    if plan.build:
+        # Offline, like the tests: dependencies were installed before them.
+        code, output = in_container(repo, plan.build, network=False, timeout=TEST_TIMEOUT, env={"PUBLIC_URL": "."})
+        if code != 0:
+            return None, f"no preview: the site build failed (exit {code}): {output[-300:]}"
+    root = preview_root(repo, plan)
+    if root is None:
+        return None, "no preview: no index.html (not a web app, or no static build output)"
+    files: list[dict] = []
+    total = 0
+    for path in sorted(root.rglob("*")):
+        rel_parts = path.relative_to(root).parts
+        if any(part in PREVIEW_SKIP_DIRS or part.startswith(".") for part in rel_parts):
+            continue
+        if path.is_symlink() or not path.is_file():
+            continue
+        data = path.read_bytes()
+        total += len(data)
+        if len(files) >= PREVIEW_MAX_FILES or total > PREVIEW_MAX_BYTES:
+            return None, "no preview: the site is too large"
+        files.append({"path": "/".join(rel_parts), "content": base64.b64encode(data).decode("ascii")})
+    return files, f"preview built: {len(files)} files, {total} bytes"
+
+
+def publish_preview(job: dict, files: list[dict]) -> None:
+    status, body = api(
+        "POST",
+        f"/internal/verifications/{job['executionId']}/preview",
+        {"verifierId": VERIFIER_ID, "files": files},
+    )
+    log(f"task {job['taskId']}: preview publish -> {status} {body or ''}")
 
 
 def main() -> None:
@@ -214,6 +272,14 @@ def main() -> None:
             result = verify(job)
         except Exception as err:  # noqa: BLE001 - a verifier crash must not pass a build
             result = {"outcome": "FAIL", "tests": [], "evidence": {"reason": f"verifier error: {err!r}"[:500]}}
+        preview = result.pop("preview", None)
+        if preview:
+            # Published while this verifier still holds the lease, before the
+            # verdict makes the build reviewable.
+            try:
+                publish_preview(job, preview)
+            except Exception as err:  # noqa: BLE001 - a preview never blocks the verdict
+                log(f"task {job['taskId']}: preview publish failed: {err!r}")
         status, _ = api(
             "POST",
             f"/internal/verifications/{job['executionId']}/result",

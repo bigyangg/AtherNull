@@ -1,7 +1,14 @@
 import json
 from pathlib import Path
 
-from verifier.checks import NPM_DEFAULT_TEST, decide, detect_test_plan, parse_results
+from verifier.checks import (
+    NPM_DEFAULT_TEST,
+    decide,
+    detect_preview_plan,
+    detect_test_plan,
+    parse_results,
+    preview_root,
+)
 
 
 def write(path: Path, text: str) -> None:
@@ -82,3 +89,37 @@ def test_decision_is_strict() -> None:
     assert decide(1, passing)[0] == "FAIL", "non-zero exit"
     assert decide(0, [{"name": "a", "passed": False}])[0] == "FAIL"
     assert decide(None, passing)[0] == "FAIL", "timeout"
+
+
+def test_static_site_at_root_is_its_own_preview(tmp_path):
+    (tmp_path / "index.html").write_text("<h1>hi</h1>")
+    plan = detect_preview_plan(tmp_path)
+    assert plan.build is None
+    assert preview_root(tmp_path, plan) == tmp_path
+
+
+def test_build_script_runs_and_its_output_is_the_preview(tmp_path):
+    (tmp_path / "package.json").write_text(json.dumps({"scripts": {"build": "vite build", "test": "node --test"}}))
+    (tmp_path / "index.html").write_text("source page, not the built one")
+    (tmp_path / "dist").mkdir()
+    (tmp_path / "dist" / "index.html").write_text("<h1>built</h1>")
+    plan = detect_preview_plan(tmp_path)
+    assert plan.build == "npm run build --silent -- --base=./"
+    assert preview_root(tmp_path, plan) == tmp_path / "dist"
+
+
+def test_cra_build_is_not_given_vite_flags(tmp_path):
+    (tmp_path / "package.json").write_text(json.dumps({"scripts": {"build": "react-scripts build"}}))
+    (tmp_path / "build").mkdir()
+    (tmp_path / "build" / "index.html").write_text("x")
+    plan = detect_preview_plan(tmp_path)
+    assert plan.build == "npm run build --silent"
+    assert preview_root(tmp_path, plan) == tmp_path / "build"
+
+
+def test_no_web_app_means_no_preview(tmp_path):
+    (tmp_path / "package.json").write_text(json.dumps({"scripts": {"test": "node --test"}}))
+    (tmp_path / "src").mkdir()
+    plan = detect_preview_plan(tmp_path)
+    assert plan.build is None
+    assert preview_root(tmp_path, plan) is None

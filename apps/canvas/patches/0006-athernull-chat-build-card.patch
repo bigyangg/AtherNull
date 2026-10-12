@@ -1,60 +1,155 @@
 diff --git a/src/components/features/chat/athernull-build-card.tsx b/src/components/features/chat/athernull-build-card.tsx
 new file mode 100644
-index 0000000..bda26fb
+index 0000000..f4fbdb9
 --- /dev/null
 +++ b/src/components/features/chat/athernull-build-card.tsx
-@@ -0,0 +1,53 @@
+@@ -0,0 +1,148 @@
 +import React from "react";
++import { createPortal } from "react-dom";
 +
-+// AtherNull: the chat-native build card (plan -> approve -> bill -> pay ->
-+// build -> review). The card itself is AtherNull's page /chat-build/<id>,
++// AtherNull: the chat-native build (plan -> approve -> bill -> pay -> build ->
++// review). In the chat it is one fixed-height bar — the current step and its
++// action — so it can never be squeezed or cropped by the scrolling message
++// list. The bar's button opens the whole build in a large panel over the
++// canvas, with its own scrolling. Both are AtherNull's page /chat-build/<id>,
 +// framed from the same origin so the session cookie and every server-side
-+// check apply; it reports its height, and stays hidden for conversations
-+// that aren't AtherNull discussions (it reports no height then).
++// check apply. The bar stays hidden for conversations that aren't AtherNull
++// discussions (its page reports visible: false then).
++const BAR_HEIGHT = 68;
++
++type CardMessage = { type?: string; discussionId?: string; visible?: boolean };
++
 +export function AtherNullBuildCard({
 +  conversationId,
 +}: {
 +  conversationId: string | null | undefined;
 +}) {
-+  const [height, setHeight] = React.useState(0);
++  const [visible, setVisible] = React.useState(false);
++  const [open, setOpen] = React.useState(false);
 +
 +  React.useEffect(() => {
-+    setHeight(0);
++    setVisible(false);
++    setOpen(false);
 +    const onMessage = (event: MessageEvent) => {
 +      if (event.origin !== window.location.origin) return;
-+      const data = event.data as
-+        | { type?: string; discussionId?: string; height?: number }
-+        | undefined;
-+      if (
-+        data?.type === "athernull:chat-build" &&
-+        data.discussionId === conversationId &&
-+        typeof data.height === "number"
-+      ) {
-+        setHeight(data.height);
-+      }
++      const data = event.data as CardMessage | undefined;
++      if (!data || data.discussionId !== conversationId) return;
++      if (data.type === "athernull:chat-build" && typeof data.visible === "boolean") setVisible(data.visible);
++      if (data.type === "athernull:open-build") setOpen(true);
++      if (data.type === "athernull:close-build") setOpen(false);
 +    };
 +    window.addEventListener("message", onMessage);
 +    return () => window.removeEventListener("message", onMessage);
 +  }, [conversationId]);
 +
++  React.useEffect(() => {
++    if (!open) return undefined;
++    const onKey = (event: KeyboardEvent) => {
++      if (event.key === "Escape") setOpen(false);
++    };
++    window.addEventListener("keydown", onKey);
++    return () => window.removeEventListener("keydown", onKey);
++  }, [open]);
++
 +  if (!import.meta.env.VITE_ATHERNULL || !conversationId) return null;
-+  const visible = height > 16;
++  const page = `/chat-build/${encodeURIComponent(conversationId)}`;
++
 +  return (
-+    <iframe
-+      key={conversationId}
-+      title="AtherNull build"
-+      src={`/chat-build/${encodeURIComponent(conversationId)}`}
-+      data-testid="athernull-build-card"
-+      style={{
-+        display: "block",
-+        width: "100%",
-+        height: visible ? height : 0,
-+        border: 0,
-+        background: "transparent",
-+        colorScheme: "normal",
-+      }}
-+      aria-hidden={!visible}
-+    />
++    <>
++      <iframe
++        key={`bar-${conversationId}`}
++        title="AtherNull build"
++        src={`${page}?view=bar`}
++        data-testid="athernull-build-card"
++        aria-hidden={!visible}
++        style={{
++          display: "block",
++          flexShrink: 0,
++          width: "100%",
++          height: visible ? BAR_HEIGHT : 0,
++          minHeight: visible ? BAR_HEIGHT : 0,
++          marginTop: visible ? 8 : 0,
++          border: 0,
++          background: "transparent",
++          colorScheme: "normal",
++        }}
++      />
++      {open &&
++        createPortal(
++          <div
++            role="dialog"
++            aria-modal="true"
++            aria-label="Your AtherNull build"
++            onClick={() => setOpen(false)}
++            style={{
++              position: "fixed",
++              inset: 0,
++              zIndex: 1000,
++              display: "flex",
++              alignItems: "center",
++              justifyContent: "center",
++              padding: 16,
++              background: "rgba(0, 0, 0, 0.62)",
++              backdropFilter: "blur(2px)",
++            }}
++          >
++            <div
++              onClick={(event) => event.stopPropagation()}
++              style={{
++                position: "relative",
++                display: "flex",
++                flexDirection: "column",
++                width: "min(760px, 100%)",
++                height: "min(88vh, 960px)",
++                overflow: "hidden",
++                borderRadius: 16,
++                border: "1px solid rgba(255, 255, 255, 0.1)",
++                background: "var(--oh-color-base, #141414)",
++                boxShadow: "0 24px 80px rgba(0, 0, 0, 0.55)",
++              }}
++            >
++              <div
++                style={{
++                  display: "flex",
++                  alignItems: "center",
++                  justifyContent: "space-between",
++                  gap: 12,
++                  padding: "10px 14px",
++                  borderBottom: "1px solid rgba(255, 255, 255, 0.08)",
++                  fontSize: 14,
++                  fontWeight: 600,
++                }}
++              >
++                <span>Your build</span>
++                <span style={{ display: "flex", alignItems: "center", gap: 14 }}>
++                  <a
++                    href={page}
++                    target="_blank"
++                    rel="noreferrer"
++                    style={{ fontSize: 12, fontWeight: 400, opacity: 0.7 }}
++                  >
++                    Open in a new tab ↗
++                  </a>
++                  <button
++                    type="button"
++                    aria-label="Close"
++                    onClick={() => setOpen(false)}
++                    style={{ fontSize: 18, lineHeight: 1, opacity: 0.8, padding: "2px 6px" }}
++                  >
++                    ✕
++                  </button>
++                </span>
++              </div>
++              <iframe
++                title="Your AtherNull build"
++                src={`${page}?view=full`}
++                style={{ flex: 1, width: "100%", border: 0, display: "block", colorScheme: "normal" }}
++              />
++            </div>
++          </div>,
++          document.body,
++        )}
++    </>
 +  );
 +}
 diff --git a/src/components/features/chat/chat-interface.tsx b/src/components/features/chat/chat-interface.tsx

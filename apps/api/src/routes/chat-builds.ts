@@ -16,6 +16,7 @@ import { db } from "../db.js";
 import { createRepo, repoPath } from "../repos/repos.js";
 import { HttpError, requireOrgSession, sendHttpError } from "../session.js";
 import { createEstimate, reviseEstimate, toEstimateResponse } from "./estimates.js";
+import { hasPreview, PREVIEWABLE_STATUSES } from "./previews.js";
 
 // Chat-native builds: the canvas discussion is where a build is planned,
 // approved, billed and paid. These routes only draft and read; approval,
@@ -97,6 +98,8 @@ async function buildState(conversationId: string, organizationId: string) {
       projectId: task.project_id,
       budgetMinor: Number(task.max_budget_minor),
       currency: task.currency,
+      // The verified app, live (routes/previews.ts); null until published.
+      previewUrl: PREVIEWABLE_STATUSES.has(task.status) && hasPreview(task.id) ? `/preview/${task.id}/` : null,
     },
     defaultBudget: defaultBudget(),
   };

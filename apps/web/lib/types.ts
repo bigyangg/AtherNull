@@ -433,6 +433,14 @@ export interface ChatBuildState {
     currency: string;
     source: BudgetAuthorizationSource;
   } | null;
-  task: { id: string; status: TaskStatus; projectId: string; budgetMinor: number; currency: string } | null;
+  task: {
+    id: string;
+    status: TaskStatus;
+    projectId: string;
+    budgetMinor: number;
+    currency: string;
+    /** The verified build's app, live (sandboxed); null until it is published. */
+    previewUrl: string | null;
+  } | null;
   defaultBudget: { amountMinor: number; currency: string };
 }

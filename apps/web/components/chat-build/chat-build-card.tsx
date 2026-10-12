@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { devnetExplorerTxUrl, formatDevnetSol } from "@athernull/contracts";
+import { devnetExplorerAddressUrl, devnetExplorerTxUrl, formatDevnetSol } from "@athernull/contracts";
 import { ConnectionProvider, WalletProvider, useWallet } from "@solana/wallet-adapter-react";
 import { Connection, Transaction } from "@solana/web3.js";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -9,11 +9,14 @@ import {
   CheckCircle2,
   Circle,
   ClipboardList,
+  Copy,
   ExternalLink,
+  Globe,
   Hammer,
   Loader2,
   Receipt,
   RefreshCw,
+  ShieldCheck,
   Sparkles,
   Wallet,
   XCircle,
@@ -54,18 +57,81 @@ export function useChatBuild(discussionId: string) {
   });
 }
 
-function Step({ icon, title, badge, children }: { icon: ReactNode; title: string; badge?: ReactNode; children: ReactNode }) {
+// The whole journey, shown on every step so the customer always knows where
+// they are and what comes next.
+const JOURNEY = ["Plan", "Bill", "Pay", "Build", "Done"] as const;
+type Stage = 0 | 1 | 2 | 3 | 4;
+
+// What the build agent is allowed per run (ORG_SANDBOX_MAX_RUN_SECONDS in the
+// worker): the honest time figure, unlike the planner's human-hours estimate.
+const AGENT_RUN_CAP = "up to 30 min";
+
+function Journey({ stage }: { stage: Stage }) {
   return (
-    <div className="rounded-xl border border-border bg-panel">
-      <div className="flex items-center gap-2 border-b border-border px-3.5 py-2.5 text-sm font-medium [&_svg]:size-4 [&_svg]:text-muted-foreground">
-        {icon}
-        <span className="flex-1">{title}</span>
-        {badge}
+    <ol className="flex items-center gap-1.5 px-3.5 pb-2.5 text-[11px]">
+      {JOURNEY.map((label, i) => {
+        const done = i < stage;
+        const current = i === stage;
+        return (
+          <li key={label} className="flex items-center gap-1.5">
+            <span
+              className={`flex items-center gap-1 rounded-full px-2 py-0.5 ${
+                current ? "bg-primary/15 font-medium text-foreground" : done ? "text-success" : "text-muted-foreground"
+              }`}
+            >
+              {done ? <CheckCircle2 className="size-3" /> : <Circle className={`size-2 ${current ? "fill-current text-primary" : ""}`} />}
+              {label}
+            </span>
+            {i < JOURNEY.length - 1 && <span className={`h-px w-3 ${done ? "bg-success/60" : "bg-border"}`} />}
+          </li>
+        );
+      })}
+    </ol>
+  );
+}
+
+function Step({
+  icon,
+  title,
+  badge,
+  stage,
+  children,
+  details,
+  detailsLabel = "details",
+  discussionId,
+}: {
+  icon: ReactNode;
+  title: string;
+  badge?: ReactNode;
+  stage: Stage;
+  children: ReactNode;
+  /** Secondary information, folded away in the chat and open on the full page. */
+  details?: ReactNode;
+  detailsLabel?: string;
+  discussionId: string;
+}) {
+  return (
+    <div className="overflow-hidden rounded-xl border border-border bg-panel shadow-sm">
+      <div className="border-b border-border">
+        <div className="flex items-center gap-2 px-4 pt-3.5 pb-2 text-sm font-medium [&>svg]:size-4 [&>svg]:text-muted-foreground">
+          {icon}
+          <span className="min-w-0 flex-1 truncate text-base">{title}</span>
+          {badge}
+        </div>
+        <Journey stage={stage} />
       </div>
-      <div className="flex flex-col gap-3 p-3.5 text-sm">{children}</div>
+      <div className="flex flex-col gap-3.5 p-4 text-sm">{children}</div>
+      {details && (
+        <div className="flex flex-col gap-3 border-t border-border bg-background/30 p-4 text-sm">
+          <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{detailsLabel}</p>
+          {details}
+        </div>
+      )}
     </div>
   );
 }
+
+const short = (s: string) => `${s.slice(0, 4)}…${s.slice(-4)}`;
 
 function Checklist({ items }: { items: string[] }) {
   return (
@@ -126,9 +192,10 @@ function DraftStep({ discussionId }: { discussionId: string }) {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: key(discussionId) }),
   });
   return (
-    <Step icon={<Sparkles />} title="Ready to build?">
+    <Step icon={<Sparkles />} title="Ready to build?" stage={0} discussionId={discussionId}>
       <p className="text-muted-foreground">
-        When the scope looks right, draft a plan from this conversation. You&apos;ll approve it and pay right here.
+        When the scope looks right, turn this conversation into a plan. You&apos;ll review it, see the bill and pay right
+        here.
       </p>
       <div>
         <Button size="sm" disabled={draft.isPending} onClick={() => draft.mutate()}>
@@ -155,23 +222,40 @@ function PlanStep({ state }: { state: ChatBuildState }) {
       icon={<ClipboardList />}
       title={`Plan v${plan.version}`}
       badge={<Badge variant={approved ? "success" : "warning"}>{approved ? "Approved" : "Needs your approval"}</Badge>}
+      stage={approved ? 1 : 0}
+      discussionId={state.discussionId}
+      detailsLabel="The plan"
+      details={
+        <>
+          {out.deliverables.length > 0 && (
+            <div className="flex flex-col gap-1">
+              <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Deliverables</p>
+              <Checklist items={out.deliverables} />
+            </div>
+          )}
+          {out.acceptanceCriteria.length > 0 && (
+            <div className="flex flex-col gap-1">
+              <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Done when</p>
+              <Checklist items={out.acceptanceCriteria} />
+            </div>
+          )}
+          <p className="text-xs text-muted-foreground">
+            Built by the AtherNull agent ({AGENT_RUN_CAP}), then checked by an independent verifier before any payment is
+            released.
+          </p>
+        </>
+      }
     >
       <p className="font-medium text-foreground">{out.goal}</p>
-      {out.deliverables.length > 0 && (
-        <div className="flex flex-col gap-1">
-          <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Deliverables</p>
-          <Checklist items={out.deliverables} />
-        </div>
-      )}
-      {out.acceptanceCriteria.length > 0 && (
-        <div className="flex flex-col gap-1">
-          <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Done when</p>
-          <Checklist items={out.acceptanceCriteria} />
-        </div>
-      )}
-      <p className="text-xs text-muted-foreground">
-        Estimated {out.resourceEstimate.estimatedDurationHours.min}–{out.resourceEstimate.estimatedDurationHours.max} h of agent work
-      </p>
+      <div className="flex flex-wrap gap-2 text-xs">
+        <span className="rounded-md bg-background/60 px-2 py-1 text-muted-foreground">
+          <span className="font-medium text-foreground">{out.deliverables.length}</span> deliverable{out.deliverables.length === 1 ? "" : "s"}
+        </span>
+        <span className="rounded-md bg-background/60 px-2 py-1 text-muted-foreground">
+          <span className="font-medium text-foreground">{out.acceptanceCriteria.length}</span> acceptance check{out.acceptanceCriteria.length === 1 ? "" : "s"}
+        </span>
+        <span className="rounded-md bg-background/60 px-2 py-1 text-muted-foreground">Agent build · {AGENT_RUN_CAP}</span>
+      </div>
       <div className="flex flex-wrap gap-2">
         <Button size="sm" disabled={approve.isPending || update.isPending} onClick={() => approve.mutate()}>
           {approve.isPending ? <Loader2 className="animate-spin" /> : <CheckCircle2 />}
@@ -192,21 +276,30 @@ function PlanStep({ state }: { state: ChatBuildState }) {
   );
 }
 
-function BillRows({ plan, budget }: { plan: ProjectEstimate; budget: { amountMinor: number; currency: string } }) {
-  const hours = plan.plannerOutput.resourceEstimate.estimatedDurationHours;
+function InvoiceLine({ label, detail, value }: { label: string; detail?: string; value: ReactNode }) {
   return (
-    <dl className="grid grid-cols-[1fr_auto] gap-x-6 gap-y-1.5">
-      <dt className="text-muted-foreground">Build: {plan.plannerOutput.goal}</dt>
-      <dd className="text-right">Plan v{plan.version}</dd>
-      <dt className="text-muted-foreground">Agent work (estimated)</dt>
-      <dd className="text-right">
-        {hours.min}–{hours.max} h
-      </dd>
-      <dt className="text-muted-foreground">Independent verification</dt>
-      <dd className="text-right">Included</dd>
-      <dt className="text-muted-foreground">Usage cap (the build stops before going over)</dt>
-      <dd className="text-right">{formatMinor(budget.amountMinor, budget.currency)}</dd>
-    </dl>
+    <div className="flex items-start justify-between gap-4 py-2">
+      <div className="min-w-0">
+        <p className="text-foreground">{label}</p>
+        {detail && <p className="text-xs text-muted-foreground">{detail}</p>}
+      </div>
+      <div className="shrink-0 text-right text-foreground">{value}</div>
+    </div>
+  );
+}
+
+function BillRows({ plan, budget }: { plan: ProjectEstimate; budget: { amountMinor: number; currency: string } }) {
+  return (
+    <div className="divide-y divide-border rounded-lg border border-border bg-background/40 px-3">
+      <InvoiceLine label={plan.plannerOutput.goal} detail={`Approved plan v${plan.version}`} value="Build" />
+      <InvoiceLine label="AI agent build" detail="Runs in your private workspace" value={AGENT_RUN_CAP} />
+      <InvoiceLine label="Independent verification" detail="Tests re-run offline on a clean copy" value="Included" />
+      <InvoiceLine
+        label="Usage cap"
+        detail="The build stops before going over"
+        value={formatMinor(budget.amountMinor, budget.currency)}
+      />
+    </div>
   );
 }
 
@@ -223,11 +316,45 @@ function PayStep({ state }: { state: ChatBuildState }) {
   });
 
   return (
-    <Step icon={<Receipt />} title="Your bill" badge={<Badge variant="warning">Awaiting payment</Badge>}>
-      <BillRows plan={state.plan!} budget={{ amountMinor: task.budgetMinor, currency: task.currency }} />
-      <div className="flex items-center justify-between border-t border-border pt-3 font-medium">
-        <span>Amount due</span>
-        <span>{funding ? `${formatDevnetSol(funding.requiredLamports)} devnet SOL` : "…"}</span>
+    <Step
+      icon={<Receipt />}
+      title={`Invoice ${task.id.slice(0, 8).toUpperCase()}`}
+      badge={<Badge variant="warning">Awaiting payment</Badge>}
+      stage={funding?.status === "FUNDED" ? 3 : 2}
+      discussionId={state.discussionId}
+      detailsLabel="Invoice"
+      details={
+        <>
+          <BillRows plan={state.plan!} budget={{ amountMinor: task.budgetMinor, currency: task.currency }} />
+          {funding && (
+            <div className="flex items-center justify-between gap-3 text-xs text-muted-foreground">
+              <span>Escrow account (Solana Devnet)</span>
+              <a
+                href={devnetExplorerAddressUrl(funding.onchainAccount)}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex items-center gap-1 font-mono hover:text-foreground"
+              >
+                {short(funding.onchainAccount)} <ExternalLink className="size-3" />
+              </a>
+            </div>
+          )}
+        </>
+      }
+    >
+      <div className="flex items-center justify-between gap-4 rounded-lg border border-border bg-background/40 px-3 py-2.5">
+        <div className="min-w-0">
+          <p className="text-xs text-muted-foreground">Total due</p>
+          <p className="text-xl font-semibold tracking-tight text-foreground">
+            {funding ? `${formatDevnetSol(funding.requiredLamports)} SOL` : "…"}
+          </p>
+        </div>
+        <div className="flex flex-col items-end gap-1 text-right">
+          <Badge variant="info">Solana Devnet</Badge>
+          <span className="flex items-center gap-1 text-[11px] text-muted-foreground">
+            <ShieldCheck className="size-3 text-success" /> Held in escrow
+          </span>
+        </div>
       </div>
       {isLoading ? (
         <p className="text-muted-foreground">Loading…</p>
@@ -245,7 +372,9 @@ function PayStep({ state }: { state: ChatBuildState }) {
           </WalletProvider>
         </ConnectionProvider>
       )}
-      <p className="text-xs text-muted-foreground">Solana Devnet — test value only, no real funds. Paid into the project account, released only when you accept the build.</p>
+      <p className="text-xs leading-relaxed text-muted-foreground">
+        Released to AtherNull only when you accept the build; refunded if it fails. Devnet test funds, no real money.
+      </p>
     </Step>
   );
 }
@@ -390,17 +519,7 @@ function PayNow({ discussionId, taskId, funded }: { discussionId: string; taskId
           <Wallet /> Pay now · {wallet?.adapter.name}
         </Button>
       ) : installed.length === 0 ? (
-        <div className="flex flex-col gap-1.5">
-          <p className="text-muted-foreground">No Solana wallet found here. Install Phantom or Solflare (set to Devnet), or pay in a new tab.</p>
-          <a
-            href={`/chat-build/${encodeURIComponent(discussionId)}`}
-            target="_blank"
-            rel="noreferrer"
-            className="inline-flex items-center gap-1 self-start text-primary underline-offset-4 hover:underline"
-          >
-            Pay in a new tab <ExternalLink className="size-3" />
-          </a>
-        </div>
+        <NoWallet discussionId={discussionId} />
       ) : (
         <div className="flex flex-wrap gap-2">
           {installed.map((w) => (
@@ -416,6 +535,44 @@ function PayNow({ discussionId, taskId, funded }: { discussionId: string; taskId
         </a>
       )}
       <ErrorLine error={error} />
+    </div>
+  );
+}
+
+/**
+ * No wallet extension in this browser (e.g. an editor's built-in browser):
+ * the same payment page works in any browser with Phantom or Solflare, after
+ * signing in there.
+ */
+function NoWallet({ discussionId }: { discussionId: string }) {
+  const [copied, setCopied] = useState<"yes" | "failed" | null>(null);
+  const url = typeof window === "undefined" ? "" : `${window.location.origin}/chat-build/${encodeURIComponent(discussionId)}`;
+
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(url);
+      setCopied("yes");
+      setTimeout(() => setCopied(null), 2_000);
+    } catch {
+      setCopied("failed"); // e.g. an editor's built-in browser: show the link to copy by hand
+    }
+  }
+
+  return (
+    <div className="flex flex-col gap-2 rounded-lg border border-dashed border-border px-3 py-2.5">
+      <div className="flex items-start gap-2.5">
+        <Wallet className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
+        <div className="min-w-0 flex-1">
+          <p className="font-medium text-foreground">No wallet in this browser</p>
+          <p className="text-xs leading-relaxed text-muted-foreground">
+            Open the payment page in Chrome or Brave with Phantom or Solflare set to Devnet.
+          </p>
+        </div>
+        <Button size="sm" variant="outline" className="shrink-0" onClick={() => void copy()}>
+          {copied === "yes" ? <CheckCircle2 /> : <Copy />} {copied === "yes" ? "Copied" : "Copy link"}
+        </Button>
+      </div>
+      {copied === "failed" && <p className="select-all break-all font-mono text-[11px] text-muted-foreground">{url}</p>}
     </div>
   );
 }
@@ -438,7 +595,6 @@ function BuildStep({ state }: { state: ChatBuildState }) {
   const accept = useAcceptTask(taskId);
   const reject = useRejectTask(taskId);
   const refund = useRefundTask(taskId);
-  const [showDiff, setShowDiff] = useState(false);
   const run = task?.verificationRuns?.at(-1);
   const failed = status === "FAILED" || status === "CANCELLED" || status === "REJECTED";
   const error = accept.error ?? reject.error ?? refund.error;
@@ -448,6 +604,19 @@ function BuildStep({ state }: { state: ChatBuildState }) {
       icon={<Hammer />}
       title="Your build"
       badge={<Badge variant={display.tone === "default" ? "info" : display.tone}>{display.label}</Badge>}
+      stage={status === "SETTLED" || status === "REFUNDED" ? 4 : 3}
+      discussionId={state.discussionId}
+      detailsLabel="Code changes"
+      details={
+        patch ? (
+          <div className="flex flex-col gap-2">
+            <p className="text-xs text-muted-foreground">
+              {patch.filesChanged} file{patch.filesChanged === 1 ? "" : "s"} changed · +{patch.insertions} −{patch.deletions}
+            </p>
+            <pre className="max-h-80 overflow-auto rounded-lg border border-border bg-background p-3 font-mono text-[11px] leading-relaxed">{patch.patch}</pre>
+          </div>
+        ) : undefined
+      }
     >
       <p className="text-foreground">{state.plan?.plannerOutput.goal}</p>
       <ol className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
@@ -474,15 +643,15 @@ function BuildStep({ state }: { state: ChatBuildState }) {
         </p>
       )}
 
-      {patch && (
-        <div className="flex flex-col gap-2">
-          <button type="button" className="self-start text-xs text-muted-foreground hover:text-foreground" onClick={() => setShowDiff((v) => !v)}>
-            {patch.filesChanged} file{patch.filesChanged === 1 ? "" : "s"} changed · +{patch.insertions} −{patch.deletions} · {showDiff ? "Hide" : "View"} changes
-          </button>
-          {showDiff && (
-            <pre className="max-h-80 overflow-auto rounded-lg border border-border bg-background p-3 font-mono text-[11px] leading-relaxed">{patch.patch}</pre>
-          )}
-        </div>
+      {state.task?.previewUrl && (
+        <a
+          href={state.task.previewUrl}
+          target="_blank"
+          rel="noreferrer"
+          className="inline-flex items-center gap-2 self-start rounded-lg border border-border bg-background px-3 py-1.5 text-sm font-medium text-foreground hover:bg-accent/40"
+        >
+          <Globe className="size-4 text-success" /> Open live app <ExternalLink className="size-3 text-muted-foreground" />
+        </a>
       )}
 
       {reviewing && (
@@ -515,4 +684,112 @@ export function ChatBuildCard({ discussionId }: { discussionId: string }) {
   if (!state.task) return <PlanStep state={state} />;
   if (state.task.status === "AWAITING_FUNDING") return <PayStep state={state} />;
   return <BuildStep state={state} />;
+}
+
+/** The bar's content for each point of the journey. */
+function barContent(state: ChatBuildState, requiredLamports: string | null) {
+  const goal = state.plan?.plannerOutput.goal ?? "";
+  const status = state.task?.status;
+  if (!state.plan) {
+    return { stage: 0 as Stage, icon: <Sparkles />, title: "Ready to build?", note: "Turn this chat into a plan and a bill", action: "Draft plan" };
+  }
+  if (!state.task) {
+    const approved = state.plan.status === "APPROVED";
+    return {
+      stage: (approved ? 1 : 0) as Stage,
+      icon: <ClipboardList />,
+      title: goal,
+      note: approved ? `Plan v${state.plan.version} approved` : `Plan v${state.plan.version} needs your approval`,
+      action: approved ? "View bill" : "Review plan",
+    };
+  }
+  const amount = requiredLamports ? ` · ${formatDevnetSol(requiredLamports)} SOL` : "";
+  if (status === "AWAITING_FUNDING") {
+    return {
+      stage: 2 as Stage,
+      icon: <Receipt />,
+      title: `Invoice ${state.task.id.slice(0, 8).toUpperCase()}${amount}`,
+      note: "Awaiting payment · held in escrow until you accept",
+      action: "Pay now",
+    };
+  }
+  const display = status ? TASK_STATUS_DISPLAY[status] : null;
+  if (status === "AWAITING_ACCEPTANCE") {
+    return { stage: 3 as Stage, icon: <Hammer />, title: goal, note: "Verified · ready for your review", action: "Review & accept" };
+  }
+  if (status === "SETTLED" || status === "REFUNDED") {
+    return {
+      stage: 4 as Stage,
+      icon: <CheckCircle2 />,
+      title: goal,
+      note: status === "SETTLED" ? "Done · payment released" : "Refunded to your wallet",
+      action: "View",
+    };
+  }
+  const working = status === "FUNDED" || status === "QUEUED" || status === "RUNNING" || status === "VERIFYING";
+  return {
+    stage: 3 as Stage,
+    icon: working ? <Loader2 className="animate-spin" /> : <Hammer />,
+    title: goal,
+    note: display?.label ?? "In progress",
+    action: working ? "View progress" : "View",
+  };
+}
+
+/**
+ * The fixed-height bar at the end of a discussion in the canvas: where the
+ * build is and the one thing to do next. Its button opens the whole build in
+ * the canvas's large panel (patch 0006); opened outside the canvas, it links
+ * to the full page instead.
+ */
+export function ChatBuildBar({ discussionId }: { discussionId: string }) {
+  const { data: state, isLoading } = useChatBuild(discussionId);
+  const taskId = state?.task?.id ?? null;
+  const { data: funding } = useQuery({
+    queryKey: ["project-funding", taskId ?? "none"],
+    queryFn: () => dashboardApi.getProjectFunding(taskId!),
+    enabled: taskId !== null && state?.task?.status === "AWAITING_FUNDING",
+  });
+  const visible = !isLoading && !!state && (!!state.plan || state.messageCount > 0);
+
+  useEffect(() => {
+    window.parent.postMessage({ type: "athernull:chat-build", discussionId, visible }, window.location.origin);
+  }, [discussionId, visible]);
+
+  if (!visible || !state) return null;
+  const bar = barContent(state, funding?.requiredLamports ?? null);
+
+  function open() {
+    if (window.self !== window.top) {
+      window.parent.postMessage({ type: "athernull:open-build", discussionId }, window.location.origin);
+    } else {
+      window.location.href = `/chat-build/${encodeURIComponent(discussionId)}`;
+    }
+  }
+
+  return (
+    <div className="flex h-16 items-center gap-3 rounded-xl border border-border bg-panel px-3.5 shadow-sm">
+      <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-primary/15 text-primary [&>svg]:size-4">
+        {bar.icon}
+      </span>
+      <div className="min-w-0 flex-1">
+        <p className="truncate text-sm font-medium text-foreground">{bar.title}</p>
+        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+          <span className="flex items-center gap-1" aria-label={`Step ${bar.stage + 1} of ${JOURNEY.length}`}>
+            {JOURNEY.map((label, i) => (
+              <span
+                key={label}
+                title={label}
+                className={`h-1.5 rounded-full ${i < bar.stage ? "w-3 bg-success" : i === bar.stage ? "w-5 bg-primary" : "w-3 bg-border"}`}
+              />
+            ))}
+          </span>
+          <span className="truncate">{bar.note}</span>
+        </div>
+      </div>
+      <Button size="sm" className="shrink-0" onClick={open}>
+        {bar.action}
+      </Button>
+    </div>
+  );
 }

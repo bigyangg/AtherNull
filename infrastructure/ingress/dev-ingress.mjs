@@ -47,7 +47,15 @@ function serveCanvas(req, res) {
     if (stat.isDirectory()) throw new Error("dir");
   } catch {
     file = join(CANVAS_DIST, "index.html");
-    stat = statSync(file);
+    try {
+      stat = statSync(file);
+    } catch {
+      // The canvas is being rebuilt (its build directory is replaced): answer
+      // "try again", never crash the ingress.
+      res.writeHead(503, { "content-type": "text/plain", "retry-after": "5" });
+      res.end("The canvas is being rebuilt. Reload in a few seconds.");
+      return;
+    }
   }
   const immutable = file.includes(`${sep}assets${sep}`);
   res.writeHead(200, {
@@ -55,12 +63,14 @@ function serveCanvas(req, res) {
     "content-length": stat.size,
     "cache-control": immutable ? "public, max-age=31536000, immutable" : "no-cache",
   });
-  createReadStream(file).pipe(res);
+  createReadStream(file)
+    .on("error", () => res.destroy())
+    .pipe(res);
 }
 
 function targetPort(url = "/") {
   if (url === "/canvas" || url.startsWith("/canvas/") || url.startsWith("/canvas?")) return CANVAS;
-  if (/^\/(oh|v1)(\/|\?|$)/.test(url) || url.startsWith("/api/auth/") || url === "/health") return API;
+  if (/^\/(oh|v1|preview)(\/|\?|$)/.test(url) || url.startsWith("/api/auth/") || url === "/health") return API;
   return WEB;
 }
 

@@ -77,6 +77,47 @@ def parse_results(parser: str, output: str) -> list[dict]:
     return tests
 
 
+@dataclass(frozen=True)
+class PreviewPlan:
+    """How to turn a verified checkout into a static site for its live
+    preview: an optional build command (run offline, after the tests) and
+    the directories, in order, where the finished site may be."""
+
+    build: str | None
+    candidates: tuple[str, ...]
+
+
+# Where common static builds put their output (Vite, CRA, Next export).
+PREVIEW_OUTPUT_DIRS = ("dist", "build", "out")
+
+
+def detect_preview_plan(checkout: Path) -> PreviewPlan:
+    """A package.json "build" script is run (asset paths made relative, so the
+    site works under /preview/<id>/); otherwise the checkout itself is the
+    site if it has an index.html at its root."""
+    package_json = checkout / "package.json"
+    if package_json.is_file():
+        try:
+            pkg = json.loads(package_json.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            pkg = {}
+        build_script = (pkg.get("scripts") or {}).get("build")
+        if isinstance(build_script, str) and build_script.strip():
+            command = "npm run build --silent"
+            if "vite" in build_script:
+                command += " -- --base=./"
+            return PreviewPlan(build=command, candidates=(*PREVIEW_OUTPUT_DIRS, "."))
+    return PreviewPlan(build=None, candidates=(".",))
+
+
+def preview_root(checkout: Path, plan: PreviewPlan) -> Path | None:
+    for candidate in plan.candidates:
+        root = checkout if candidate == "." else checkout / candidate
+        if (root / "index.html").is_file():
+            return root
+    return None
+
+
 def decide(exit_code: int | None, tests: list[dict]) -> tuple[str, str]:
     """PASS only when the suite exited 0 AND ran at least one test AND none
     failed. Anything else — including "no tests ran" — is a FAIL."""
