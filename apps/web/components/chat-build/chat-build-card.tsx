@@ -24,7 +24,9 @@ import {
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { InlineError } from "@/components/error-screen";
 import { dashboardApi } from "@/lib/api";
+import { ApiError } from "@/lib/api/live";
 import { useBuildPatch } from "@/lib/hooks/use-build-patch";
 import { useProjectFunding, useSettlementProgress } from "@/lib/hooks/use-project-funding";
 import { useAcceptTask, useRefundTask, useRejectTask } from "@/lib/hooks/use-tasks";
@@ -738,8 +740,30 @@ function BuildStep({ state }: { state: ChatBuildState }) {
 }
 
 export function ChatBuildCard({ discussionId }: { discussionId: string }) {
-  const { data: state, isLoading } = useChatBuild(discussionId);
-  if (isLoading || !state) return null;
+  const { data: state, isLoading, error, refetch, isRefetching } = useChatBuild(discussionId);
+  if (isLoading) {
+    return (
+      <p className="flex items-center gap-2 px-1 py-2 text-sm text-muted-foreground">
+        <Loader2 className="size-4 animate-spin" /> Loading your build…
+      </p>
+    );
+  }
+  if (error) {
+    // Not one of this organization's discussions: there is no build to show.
+    if (error instanceof ApiError && error.status === 404) return null;
+    return (
+      <InlineError
+        title="Your build couldn't be loaded"
+        message={
+          error instanceof ApiError && error.status === 401
+            ? "Your session has ended. Sign in again to see your build."
+            : "AtherNull couldn't be reached just now. Your payment and progress are safe."
+        }
+        onRetry={isRefetching ? undefined : () => void refetch()}
+      />
+    );
+  }
+  if (!state) return null;
   if (!state.plan) return state.messageCount > 0 ? <DraftStep discussionId={discussionId} /> : null;
   if (!state.task) return <PlanStep state={state} />;
   if (state.task.status === "AWAITING_FUNDING") return <PayStep state={state} />;

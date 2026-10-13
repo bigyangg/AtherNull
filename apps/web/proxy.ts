@@ -12,6 +12,12 @@ const AUTH_PATHS = [
   "/reset-password",
 ];
 
+// The signed-in product's sections. Only these send a signed-out visitor to
+// sign-in; any other unknown address renders the 404 page instead of a
+// misleading sign-in prompt. (Data is protected regardless: every apps/api
+// call checks the session server-side.)
+const PROTECTED_PREFIXES = ["/builds", "/dashboard", "/integrations", "/projects", "/skill-sets", "/usage", "/chat-build"];
+
 // Public marketing routes, reachable with or without a session.
 const PUBLIC_PATHS = ["/", "/docs", "/whitepaper", "/privacy-policy", "/refund-policy", "/contact"];
 
@@ -41,7 +47,9 @@ export function proxy(request: NextRequest) {
   // rule in PLAN.md; this middleware only decides which page to render.
   const sessionCookie = getSessionCookie(request);
 
-  if (!sessionCookie && !isAuthPath && !isPublicPath) {
+  const isProtected = PROTECTED_PREFIXES.some((prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`));
+
+  if (!sessionCookie && isProtected) {
     const url = new URL("/sign-in", request.url);
     url.searchParams.set("callbackURL", pathname);
     return NextResponse.redirect(url);

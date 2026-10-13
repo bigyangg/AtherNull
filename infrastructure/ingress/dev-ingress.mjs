@@ -29,6 +29,37 @@ const WEB = Number(process.env.WEB_PORT ?? 3000);
 const CANVAS = Number(process.env.CANVAS_PORT ?? 3102);
 const CANVAS_DIST = process.env.CANVAS_DIST ? normalize(process.env.CANVAS_DIST) : null;
 
+// While a backend process is restarting (or the canvas is being rebuilt):
+// a branded page for browsers, a JSON error for API callers. Never a crash,
+// never a bare text line. Reloads itself after a few seconds.
+const UNAVAILABLE_HTML = `<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="refresh" content="8">
+<title>Back in a moment | AtherNull</title><style>
+*{box-sizing:border-box}body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;
+background:#fff;color:#131319;font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;padding:24px}
+main{max-width:520px}p.k{margin:0;color:#5143c8;font-size:12px;font-weight:700;letter-spacing:.07em;text-transform:uppercase}
+h1{margin:14px 0 0;font-size:40px;letter-spacing:-.04em;line-height:1.05}p.m{margin:16px 0 0;color:#555560;line-height:1.6}
+a{display:inline-block;margin-top:26px;color:#fff;background:#131319;border-radius:999px;padding:10px 18px;font-weight:600;text-decoration:none}
+@media(prefers-color-scheme:dark){body{background:#141414;color:#ececf1}p.m{color:#a1a1aa}a{background:#ececf1;color:#141414}}
+</style></head><body><main><p class="k">AtherNull</p><h1>We'll be right back.</h1>
+<p class="m">AtherNull is restarting or updating. Your builds, payments and conversations are safe. This page reloads by itself in a few seconds.</p>
+<a href="/">Reload</a></main></body></html>`;
+
+function wantsJson(req) {
+  const url = req.url ?? "/";
+  return /^\/(v1|oh|api|health)(\/|\?|$)/.test(url) || (req.headers.accept ?? "").includes("application/json");
+}
+
+function unavailable(req, res, status = 503) {
+  if (res.headersSent) return res.end();
+  if (wantsJson(req)) {
+    res.writeHead(status, { "content-type": "application/json", "retry-after": "5", "cache-control": "no-store" });
+    return res.end(JSON.stringify({ error: "AtherNull is restarting. Try again in a few seconds." }));
+  }
+  res.writeHead(status, { "content-type": "text/html; charset=utf-8", "retry-after": "5", "cache-control": "no-store" });
+  res.end(UNAVAILABLE_HTML);
+}
+
 const TYPES = {
   ".html": "text/html; charset=utf-8", ".js": "text/javascript", ".mjs": "text/javascript", ".css": "text/css",
   ".json": "application/json", ".svg": "image/svg+xml", ".png": "image/png", ".ico": "image/x-icon",
@@ -52,9 +83,7 @@ function serveCanvas(req, res) {
     } catch {
       // The canvas is being rebuilt (its build directory is replaced): answer
       // "try again", never crash the ingress.
-      res.writeHead(503, { "content-type": "text/plain", "retry-after": "5" });
-      res.end("The canvas is being rebuilt. Reload in a few seconds.");
-      return;
+      return unavailable(req, res, 503);
     }
   }
   const immutable = file.includes(`${sep}assets${sep}`);
@@ -84,10 +113,7 @@ const server = http.createServer((req, res) => {
       up.pipe(res);
     },
   );
-  upstream.on("error", () => {
-    if (!res.headersSent) res.writeHead(502, { "content-type": "text/plain" });
-    res.end(`ingress: upstream :${port} unavailable`);
-  });
+  upstream.on("error", () => unavailable(req, res, 502));
   req.pipe(upstream);
 });
 
