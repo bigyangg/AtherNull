@@ -86,9 +86,15 @@ function parseDns(raw: string | undefined): string[] {
 }
 
 /** `docker run` arguments for one org sandbox (everything after `docker`). */
-export function sandboxRunArgs(policy: SandboxPolicy, opts: { container: string; key: string; hostPort: number | null }): string[] {
+export function sandboxRunArgs(
+  policy: SandboxPolicy,
+  opts: { container: string; key: string; hostPort: number | null; pool?: boolean },
+): string[] {
   const args = ["run", "-d", "--name", opts.container, "--restart", "unless-stopped"];
   args.push("--label", `athernull.sandbox-policy=${policyFingerprint(policy)}`);
+  // Warm-pool sandboxes are labelled so a crashed handout can be found and
+  // removed (provision.ts reconcilePool); the label stays after handout.
+  if (opts.pool) args.push("--label", "athernull.pool=1");
   if (policy.network) {
     args.push("--network", policy.network);
     for (const server of policy.dns) args.push("--dns", server);

@@ -82,6 +82,12 @@ SANDBOX_NETWORK_POLICY=enforced
 SANDBOX_REACH=ip
 SANDBOX_MEMORY=2g
 SANDBOX_CPUS=1
+# Onboarding (docs/architecture/WORKSPACE_ONBOARDING.md): spare pre-booted
+# workspaces, parallel setup, and hard caps. Size to the host (below).
+SANDBOX_WARM_POOL_SIZE=1
+SANDBOX_PROVISIONER_CONCURRENCY=2
+SANDBOX_MAX_RUNNING=12
+SANDBOX_MAX_PER_USER=3
 CHAT_BUILD_DEFAULT_BUDGET_MINOR=2000
 ```
 
@@ -92,7 +98,11 @@ NVIDIA_NIM_API_KEY=<same dedicated key>
 INTERNAL_API_TOKEN=<same as the API's>
 ```
 
-Size check: every active organization can take up to `SANDBOX_MEMORY`. `free -g` minus what your other projects use, divided by 2, is roughly how many judges can work at once.
+Size check (`free -g && nproc`). An idle workspace uses about 0.3-0.5 GB; one running a build can use up to `SANDBOX_MEMORY`. A booting one uses its whole CPU allowance for about a minute.
+
+- `SANDBOX_MAX_RUNNING`: (free GB after your other projects) ÷ 0.5, minus a few for builds. Past it, new users wait in line with a clear message instead of the host running out of memory.
+- `SANDBOX_PROVISIONER_CONCURRENCY`: about cores ÷ 2.
+- `SANDBOX_WARM_POOL_SIZE`: 1, or 2-3 when many people sign up at once (a demo, judging). Each spare costs about 0.5 GB while idle; new users get one in about a second instead of waiting a minute.
 
 ## 5. Start the backend
 

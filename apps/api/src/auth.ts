@@ -201,6 +201,21 @@ export const auth = betterAuth({
           if (!membership) return;
           return { data: { activeOrganizationId: membership.organizationId } };
         },
+        // Start the organization's agent workspace as soon as a user signs
+        // in, so it is booting (or handed over from the warm pool) while the
+        // app loads — not only once the canvas asks. Sessions exist only for
+        // verified users (requireEmailVerification), so unverified sign-ups
+        // never start a sandbox. Never blocks or fails a sign-in.
+        after: async (session) => {
+          const organizationId = (session as { activeOrganizationId?: string | null }).activeOrganizationId;
+          if (!organizationId) return;
+          try {
+            const { requestSandbox } = await import("./sandbox/requests.js");
+            await requestSandbox(organizationId, session.userId, { retryFailed: false });
+          } catch (err) {
+            console.warn(`[sandbox] could not request a workspace at sign-in: ${(err as Error).message}`);
+          }
+        },
       },
     },
   },

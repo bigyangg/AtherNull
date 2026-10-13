@@ -419,6 +419,21 @@ export interface AgentSandboxRequestsTable {
   claimed_at: NullableTimestamp;
   requested_at: Generated<Date>;
   updated_at: Generated<Date>;
+  /** 0023: QUEUED | STARTING | BOOTING | CONFIGURING | READY */
+  phase: string | null;
+  started_at: NullableTimestamp;
+}
+
+// 0023 — warm pool of generic, pre-configured sandboxes.
+export interface SandboxPoolTable {
+  container_name: string;
+  base_url: string;
+  session_api_key: string;
+  policy_fingerprint: string;
+  config_fingerprint: string;
+  status: Generated<string>; // WARMING | READY
+  created_at: Generated<Date>;
+  ready_at: NullableTimestamp;
 }
 
 // 0021 — a customer's request for changes to a verified build.
@@ -457,4 +472,5 @@ export interface Database {
   execution_patches: ExecutionPatchesTable;
   agent_sandbox_requests: AgentSandboxRequestsTable;
   task_change_requests: TaskChangeRequestsTable;
+  sandbox_pool: SandboxPoolTable;
 }

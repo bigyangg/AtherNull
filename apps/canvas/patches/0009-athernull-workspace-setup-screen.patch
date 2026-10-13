@@ -1,0 +1,239 @@
+diff --git a/src/entry.client.tsx b/src/entry.client.tsx
+--- a/src/entry.client.tsx
++++ b/src/entry.client.tsx
+@@ -21,6 +21,8 @@ import { shouldStartMockWorker } from "./mocks/should-start-mock-worker";
+ async function requireAtherNullSession() {
+   const sessionUrl = import.meta.env.VITE_ATHERNULL_SESSION_URL;
+   if (!sessionUrl) return;
++  // Something on screen at once: never a blank page while this checks.
++  const screen = setupScreen();
+   let signedIn = false;
+   try {
+     const res = await fetch(sessionUrl, { credentials: "same-origin" });
+@@ -35,7 +37,7 @@ async function requireAtherNullSession() {
+   }
+   if (import.meta.env.VITE_ATHERNULL_SANDBOX_URL) {
+     await ensureActiveOrganization();
+-    await ensureAgentWorkspace(import.meta.env.VITE_ATHERNULL_SANDBOX_URL);
++    await ensureAgentWorkspace(import.meta.env.VITE_ATHERNULL_SANDBOX_URL, screen);
+   }
+ }
+ 
+@@ -62,17 +64,27 @@ async function ensureActiveOrganization() {
+   await sameOrigin("/api/auth/organization/create", { method: "POST", body: JSON.stringify({ name, slug }) });
+ }
+ 
+-// The organization's agent workspace (sandbox) is created on demand by
+-// AtherNull's provisioner; show a setup screen until it is ready.
+-async function ensureAgentWorkspace(stateUrl: string) {
+-  const read = async () => (await sameOrigin(stateUrl)).json() as Promise<{ status: string; error: string | null }>;
+-  let state = await read().catch(() => ({ status: "NONE", error: null }));
++interface WorkspaceState {
++  status: string;
++  error: string | null;
++  phase?: string | null;
++  queuePosition?: number;
++  quickStart?: boolean;
++  atCapacity?: boolean;
++}
++
++// The organization's agent workspace (sandbox) is created by AtherNull's
++// provisioner — usually already under way, requested at sign-in. Shows its
++// real progress until it is ready, then lets the app load (no reload).
++async function ensureAgentWorkspace(stateUrl: string, screen: SetupScreen) {
++  const read = async () => (await sameOrigin(stateUrl)).json() as Promise<WorkspaceState>;
++  let state: WorkspaceState = await read().catch(() => ({ status: "NONE", error: null }));
+   if (state.status === "READY") return;
+-  const screen = setupScreen();
++  screen.showSetup();
+   for (;;) {
+     if (state.status === "NONE" || state.status === "FAILED") {
+       if (state.status === "FAILED") {
+-        await screen.failed(state.error ?? "Workspace setup failed.");
++        await screen.failed(state.error ?? "Your workspace could not be started.");
+       }
+       const res = await sameOrigin(stateUrl, { method: "POST" }).catch(() => null);
+       const body = res ? await res.json().catch(() => null) : null;
+@@ -80,45 +92,149 @@ async function ensureAgentWorkspace(stateUrl: string) {
+       if (state.status === "FAILED") continue;
+     }
+     if (state.status === "READY") {
+-      window.location.reload();
+-      await new Promise(() => {});
++      await screen.ready();
++      return;
+     }
+-    screen.progress(state.status);
+-    await new Promise((resolve) => setTimeout(resolve, 2000));
++    screen.progress(state);
++    await new Promise((resolve) => setTimeout(resolve, 1500));
+     state = await read().catch(() => state);
+   }
+ }
+ 
++// The setup steps, in order, and the provisioner phases each one covers.
++const SETUP_STEPS: { label: string; phases: string[] }[] = [
++  { label: "Account verified", phases: [] },
++  { label: "Reserving your private workspace", phases: ["QUEUED"] },
++  { label: "Starting your isolated sandbox", phases: ["STARTING", "BOOTING"] },
++  { label: "Installing AtherNull Builds and your AI model", phases: ["CONFIGURING"] },
++  { label: "Ready", phases: ["READY"] },
++];
++
++type SetupScreen = ReturnType<typeof setupScreen>;
++
++const SETUP_SCREEN_ID = "athernull-setup-screen";
++
++function removeSetupScreen() {
++  document.getElementById(SETUP_SCREEN_ID)?.remove();
++}
++
++// Plain DOM, before React: shown while the session is checked, and with the
++// steps while a workspace is set up. Server data only ever goes in as
++// textContent, never as HTML.
+ function setupScreen() {
+   const root = document.createElement("div");
++  root.id = SETUP_SCREEN_ID;
++  root.setAttribute("role", "status");
++  root.setAttribute("aria-live", "polite");
+   root.style.cssText =
+-    "position:fixed;inset:0;z-index:2147483647;display:flex;align-items:center;justify-content:center;background:#0d0d0f;color:#f2f2f0;font:14px/1.5 ui-sans-serif,system-ui,-apple-system,'Segoe UI',sans-serif";
++    "position:fixed;inset:0;z-index:2147483647;display:flex;align-items:center;justify-content:center;padding:16px;background:#0d0d0f;color:#f2f2f0;font:14px/1.5 ui-sans-serif,system-ui,-apple-system,'Segoe UI',sans-serif;transition:opacity 200ms ease-out";
+   root.innerHTML = `
+-    <div style="width:min(420px,calc(100vw - 32px));text-align:center">
+-      <img src="${import.meta.env.BASE_URL}favicon.svg" alt="" width="40" height="40" style="margin:0 auto 20px;display:block" />
+-      <div style="font-size:18px;font-weight:600">Setting up your workspace</div>
+-      <div data-detail style="margin-top:8px;color:#8b8b8f">Starting your private agent sandbox. This takes about a minute the first time.</div>
+-      <div style="margin:24px auto 0;height:3px;width:160px;overflow:hidden;border-radius:3px;background:#232326">
++    <div style="width:min(440px,100%)">
++      <div style="display:flex;justify-content:center"><img src="${import.meta.env.BASE_URL}favicon.svg" alt="" width="40" height="40" /></div>
++      <div data-loading style="margin:20px auto 0;height:3px;width:120px;overflow:hidden;border-radius:3px;background:#232326">
+         <div style="height:100%;width:40%;background:#f2f2f0;border-radius:3px;animation:athernull-slide 1.2s ease-in-out infinite"></div>
+       </div>
+-      <button data-retry style="display:none;margin:20px auto 0;padding:8px 14px;border-radius:8px;border:0;background:#f2f2f0;color:#141414;font-weight:600;cursor:pointer">Try again</button>
++      <div data-setup style="display:none">
++        <div data-title style="margin-top:18px;text-align:center;font-size:18px;font-weight:600">Setting up your workspace</div>
++        <div data-detail style="margin-top:6px;text-align:center;color:#8b8b8f"></div>
++        <ol data-steps style="list-style:none;margin:24px 0 0;padding:16px 18px;border:1px solid #232326;border-radius:12px;background:#141416;display:flex;flex-direction:column;gap:12px"></ol>
++        <div style="margin-top:10px;display:flex;justify-content:space-between;font-size:12px;color:#6f6f73">
++          <span data-queue></span><span data-elapsed></span>
++        </div>
++        <div style="margin-top:22px;padding:14px 16px;border-radius:12px;background:#141416;color:#8b8b8f;font-size:13px">
++          <div style="color:#f2f2f0;font-weight:600;margin-bottom:6px">While you wait: how AtherNull works</div>
++          <div>1. Tell the agent what you want built.</div>
++          <div>2. Approve the plan and fund it. Your payment is held in escrow.</div>
++          <div>3. The agent builds it, independent checks verify it, and you pay only when you accept.</div>
++        </div>
++        <div data-failed style="display:none;margin-top:18px;text-align:center">
++          <button data-retry style="padding:8px 14px;border-radius:8px;border:0;background:#f2f2f0;color:#141414;font-weight:600;cursor:pointer">Try again</button>
++          <div style="margin-top:10px;font-size:12px;color:#6f6f73">Still stuck? Email <a href="mailto:support@athernull.io" style="color:#8b8b8f">support@athernull.io</a></div>
++        </div>
++      </div>
+     </div>
+-    <style>@keyframes athernull-slide{0%{transform:translateX(-100%)}100%{transform:translateX(250%)}}</style>`;
++    <style>
++      @keyframes athernull-slide{0%{transform:translateX(-100%)}100%{transform:translateX(250%)}}
++      @keyframes athernull-spin{to{transform:rotate(360deg)}}
++      #${SETUP_SCREEN_ID} li{display:flex;align-items:center;gap:10px;color:#6f6f73}
++      #${SETUP_SCREEN_ID} li[data-state=done]{color:#c9c9cc}
++      #${SETUP_SCREEN_ID} li[data-state=active]{color:#f2f2f0;font-weight:500}
++      #${SETUP_SCREEN_ID} li i{flex:none;width:16px;height:16px;border-radius:50%;border:1.5px solid #3a3a3e;box-sizing:border-box}
++      #${SETUP_SCREEN_ID} li[data-state=done] i{border:0;background:#22c55e url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M4 8.5l2.5 2.5L12 5.5' fill='none' stroke='%230d0d0f' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center/16px no-repeat}
++      #${SETUP_SCREEN_ID} li[data-state=active] i{border-color:#f2f2f0;border-right-color:transparent;animation:athernull-spin .8s linear infinite}
++    </style>`;
+   document.body.append(root);
+-  const detail = root.querySelector<HTMLElement>("[data-detail]")!;
+-  const retry = root.querySelector<HTMLButtonElement>("[data-retry]")!;
++  const $ = <T extends HTMLElement>(sel: string) => root.querySelector<T>(sel)!;
++  const steps = SETUP_STEPS.map(({ label }) => {
++    const li = document.createElement("li");
++    li.append(document.createElement("i"), document.createTextNode(label));
++    $("[data-steps]").append(li);
++    return li;
++  });
++  let started = 0;
++  let timer: number | undefined;
++
++  const mark = (activeIndex: number) => {
++    steps.forEach((li, i) => li.setAttribute("data-state", i < activeIndex ? "done" : i === activeIndex ? "active" : "todo"));
++  };
++
+   return {
+-    progress(status: string) {
+-      retry.style.display = "none";
+-      detail.textContent =
+-        status === "PROVISIONING"
+-          ? "Starting your private agent sandbox and installing AtherNull Builds…"
+-          : "Starting your private agent sandbox. This takes about a minute the first time.";
++    showSetup() {
++      $("[data-loading]").style.display = "none";
++      $("[data-setup]").style.display = "block";
++      mark(1);
++      started = Date.now();
++      const tick = () => {
++        const s = Math.floor((Date.now() - started) / 1000);
++        $("[data-elapsed]").textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
++      };
++      tick();
++      timer = window.setInterval(tick, 1000);
++    },
++    progress(state: WorkspaceState) {
++      $("[data-failed]").style.display = "none";
++      const phase = state.phase ?? (state.status === "PROVISIONING" ? "STARTING" : "QUEUED");
++      const index = Math.max(1, SETUP_STEPS.findIndex((s) => s.phases.includes(phase)));
++      mark(index);
++      $("[data-detail]").textContent = state.atCapacity
++        ? "We're at capacity right now. You're in line, and setup starts automatically."
++        : state.quickStart || index >= 3
++          ? "Almost there. This takes a few seconds."
++          : "This takes about a minute, and only the first time.";
++      const ahead = state.queuePosition ?? 0;
++      $("[data-queue]").textContent =
++        phase === "QUEUED" ? (ahead > 0 ? `${ahead} ${ahead === 1 ? "workspace" : "workspaces"} ahead of you` : "You're next") : "";
++    },
++    async ready() {
++      mark(SETUP_STEPS.length);
++      $("[data-detail]").textContent = "Your workspace is ready.";
++      $("[data-queue]").textContent = "";
++      window.clearInterval(timer);
++      await new Promise((resolve) => setTimeout(resolve, 500));
+     },
+     failed(message: string) {
+-      detail.textContent = `Setup failed: ${message}`;
+-      retry.style.display = "block";
+-      return new Promise<void>((resolve) => retry.addEventListener("click", () => resolve(), { once: true }));
++      window.clearInterval(timer);
++      $("[data-title]").textContent = "Your workspace didn't start";
++      $("[data-detail]").textContent = message;
++      $("[data-queue]").textContent = "";
++      $("[data-failed]").style.display = "block";
++      const retry = $<HTMLButtonElement>("[data-retry]");
++      return new Promise<void>((resolve) =>
++        retry.addEventListener(
++          "click",
++          () => {
++            $("[data-title]").textContent = "Setting up your workspace";
++            $("[data-failed]").style.display = "none";
++            started = Date.now();
++            timer = window.setInterval(() => {
++              const s = Math.floor((Date.now() - started) / 1000);
++              $("[data-elapsed]").textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
++            }, 1000);
++            resolve();
++          },
++          { once: true },
++        ),
++      );
+     },
+   };
+ }
+@@ -126,6 +242,9 @@ function setupScreen() {
+ async function prepareApp() {
+   await requireAtherNullSession();
+   await waitForI18n();
++  // The app takes over the whole document when it hydrates: the setup
++  // screen must be gone by then.
++  removeSetupScreen();
+ 
+   if (shouldStartMockWorker()) {
+     const { worker } = await import("./mocks/browser");
