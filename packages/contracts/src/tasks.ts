@@ -62,7 +62,9 @@ export const TASK_TRANSITIONS: Record<TaskStatus, TaskStatus[]> = {
   RUNNING: ["VERIFYING", "FAILED", "PAUSED_USAGE_LIMIT"],
   PAUSED_USAGE_LIMIT: ["RUNNING", "QUEUED"],
   VERIFYING: ["AWAITING_ACCEPTANCE", "FAILED"],
-  AWAITING_ACCEPTANCE: ["ACCEPTED", "REJECTED"],
+  // QUEUED: the customer requested changes (routes/change-requests.ts); the
+  // next attempt continues from the delivered version on the same funding.
+  AWAITING_ACCEPTANCE: ["ACCEPTED", "REJECTED", "QUEUED"],
   ACCEPTED: ["SETTLING"],
   SETTLING: ["SETTLED", "FAILED"],
   SETTLED: [],

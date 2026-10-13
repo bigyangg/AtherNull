@@ -17,6 +17,7 @@ import { agentSandboxRoutes } from "./routes/agent-sandbox.js";
 import { buildRoutes } from "./routes/builds.js";
 import { chatBuildRoutes } from "./routes/chat-builds.js";
 import { discussionRoutes } from "./routes/discussions.js";
+import { changeRequestRoutes } from "./routes/change-requests.js";
 import { previewRoutes } from "./routes/previews.js";
 import { repoTransferRoutes } from "./routes/repo-transfer.js";
 import { verificationRoutes } from "./routes/verification.js";
@@ -82,6 +83,8 @@ export async function buildApp(opts: { logger?: boolean } = {}): Promise<Fastify
   await app.register(repoTransferRoutes);
   // Live previews of verified builds (sandboxed, see routes/previews.ts).
   await app.register(previewRoutes);
+  // Request changes on a verified build (routes/change-requests.ts).
+  await app.register(changeRequestRoutes);
   // ADR-0007 Phase 3B — worker -> apps/api outbound relay tunnel.
   // @fastify/websocket must be registered before relayRoutes (it decorates
   // the fastify instance with the `websocket: true` route option and the

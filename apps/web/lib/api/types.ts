@@ -111,6 +111,8 @@ export interface TaskDashboardApi {
   verifyTask(taskId: string, outcome: "PASS" | "FAIL"): Promise<Task>;
   acceptTask(taskId: string): Promise<Task>;
   rejectTask(taskId: string, reason?: string): Promise<Task>;
+  /** Sends a verified build back to the agent with feedback (same funding). */
+  requestChanges(taskId: string, feedback: string): Promise<{ taskId: string; status: string; round: number; roundsLeft: number }>;
   // Phase 4E.2 — on-chain payout. accept settles and reject refunds the
   // task's devnet funding; refundTask refunds a FAILED/CANCELLED funded
   // build; verifySettlement drives an already-decided payout and reports

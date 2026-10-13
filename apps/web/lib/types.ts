@@ -444,5 +444,8 @@ export interface ChatBuildState {
     /** The verified build's app, live (sandboxed); null until it is published. */
     previewUrl: string | null;
   } | null;
+  /** Changes the customer requested on this build, oldest first. */
+  changeRequests: { round: number; feedback: string; createdAt: string }[];
+  maxChangeRounds: number;
   defaultBudget: { amountMinor: number; currency: string };
 }

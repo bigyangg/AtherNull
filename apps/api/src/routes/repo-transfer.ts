@@ -70,7 +70,16 @@ export async function repoTransferRoutes(app: FastifyInstance) {
     const { workerId } = WorkerQuery.parse(request.query);
     const execution = await leasedExecution(id, workerId, reply);
     if (!execution) return;
-    sendBundle(reply, await bundleOf(execution.repo, execution.base_commit));
+    // A change round continues from the delivered version; its history
+    // includes the base, so the worker can still squash onto the base.
+    const latestChange = await db
+      .selectFrom("task_change_requests")
+      .select("from_commit")
+      .where("task_id", "=", execution.task_id)
+      .orderBy("round", "desc")
+      .limit(1)
+      .executeTakeFirst();
+    sendBundle(reply, await bundleOf(execution.repo, latestChange?.from_commit ?? execution.base_commit));
   });
 
   // The build's result: one commit on builds/<task id> on top of its base.

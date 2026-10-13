@@ -169,6 +169,15 @@ export async function internalRoutes(app: FastifyInstance) {
     // ADR-0019: the commit the build starts from in the project's hosted
     // repository; the worker fetches it as a bundle (repo-bundle route).
     const baseCommit = await pinBaseCommit(task, request.log);
+    // Request changes (routes/change-requests.ts): the customer's feedback so
+    // far, and the delivered version the latest round continues from.
+    const changeRequests = await db
+      .selectFrom("task_change_requests")
+      .select(["round", "feedback", "from_commit"])
+      .where("task_id", "=", task.id)
+      .orderBy("round", "asc")
+      .execute();
+    const startCommit = (baseCommit && changeRequests.at(-1)?.from_commit) || baseCommit;
 
     // Phase 4D.2A — correction 2/19: only present when an ACTIVE
     // task_usage_policies row genuinely exists for this task; a task with no
@@ -205,6 +214,8 @@ export async function internalRoutes(app: FastifyInstance) {
       organizationId: task.organization_id,
       repositorySnapshot: `${project?.permitted_repository ?? "unknown"}@${task.repository_revision}`,
       baseCommit,
+      startCommit,
+      changeRequests: changeRequests.map((c) => ({ round: c.round, feedback: c.feedback })),
       objective: task.requirements,
       acceptanceCriteria: Array.isArray(task.acceptance_criteria) ? task.acceptance_criteria : [],
       agentProfileVersion: task.agent_profile_config_revision,
@@ -693,11 +704,21 @@ export async function internalRoutes(app: FastifyInstance) {
     // which flags this as the natural extension of the lease/claim design.
     assertTransition("RUNNING", "FAILED");
 
-    const { count } = await db
+    // Attempts since the latest change request: each round the customer asks
+    // for gets the full retry allowance, not what earlier rounds left over.
+    const latestChange = await db
+      .selectFrom("task_change_requests")
+      .select("created_at")
+      .where("task_id", "=", task.id)
+      .orderBy("round", "desc")
+      .limit(1)
+      .executeTakeFirst();
+    let attempts = db
       .selectFrom("executions")
       .select(({ fn }) => [fn.countAll<string>().as("count")])
-      .where("task_id", "=", task.id)
-      .executeTakeFirstOrThrow();
+      .where("task_id", "=", task.id);
+    if (latestChange) attempts = attempts.where("created_at", ">", latestChange.created_at);
+    const { count } = await attempts.executeTakeFirstOrThrow();
 
     const willRetry = reason !== "USAGE_ENFORCEMENT_FAILED" && Number(count) < MAX_EXECUTION_ATTEMPTS;
     if (willRetry) {

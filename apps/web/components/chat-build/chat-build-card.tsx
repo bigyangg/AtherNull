@@ -14,6 +14,7 @@ import {
   Globe,
   Hammer,
   Loader2,
+  PencilLine,
   Receipt,
   RefreshCw,
   ShieldCheck,
@@ -24,12 +25,13 @@ import {
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Textarea } from "@/components/ui/textarea";
 import { InlineError } from "@/components/error-screen";
 import { dashboardApi } from "@/lib/api";
 import { ApiError } from "@/lib/api/live";
 import { useBuildPatch } from "@/lib/hooks/use-build-patch";
 import { useProjectFunding, useSettlementProgress } from "@/lib/hooks/use-project-funding";
-import { useAcceptTask, useRefundTask, useRejectTask } from "@/lib/hooks/use-tasks";
+import { useAcceptTask, useRefundTask, useRejectTask, useRequestChanges } from "@/lib/hooks/use-tasks";
 import { useTask } from "@/lib/hooks/use-task";
 import { formatMinor, TASK_STATUS_DISPLAY, type ChatBuildState, type ProjectEstimate, type TaskStatus } from "@/lib/types";
 
@@ -592,6 +594,96 @@ function NoWallet({ discussionId }: { discussionId: string }) {
   );
 }
 
+/**
+ * Accept, request changes, or reject a verified build. Requesting changes
+ * sends it back to the agent with the feedback, on the same payment, a
+ * limited number of times (routes/change-requests.ts).
+ */
+function ReviewActions({
+  taskId,
+  roundsLeft,
+  busy,
+  onAccept,
+  onReject,
+  accepting,
+  rejecting,
+}: {
+  taskId: string;
+  roundsLeft: number;
+  busy: boolean;
+  onAccept: () => void;
+  onReject: () => void;
+  accepting: boolean;
+  rejecting: boolean;
+}) {
+  const queryClient = useQueryClient();
+  const requestChanges = useRequestChanges(taskId);
+  const [open, setOpen] = useState(false);
+  const [feedback, setFeedback] = useState("");
+  const disabled = busy || requestChanges.isPending;
+
+  async function send() {
+    await requestChanges.mutateAsync(feedback.trim());
+    setOpen(false);
+    setFeedback("");
+    queryClient.invalidateQueries({ queryKey: ["chat-build"] });
+  }
+
+  return (
+    <div className="flex flex-col gap-2.5">
+      <div className="flex flex-wrap gap-2">
+        <Button size="sm" disabled={disabled} onClick={onAccept}>
+          <CheckCircle2 /> {accepting ? "Accepting…" : "Accept & release payment"}
+        </Button>
+        {roundsLeft > 0 && (
+          <Button size="sm" variant="outline" disabled={disabled} onClick={() => setOpen((v) => !v)}>
+            <PencilLine /> Request changes
+          </Button>
+        )}
+        <Button size="sm" variant="ghost" disabled={disabled} onClick={onReject}>
+          <XCircle /> {rejecting ? "Rejecting…" : "Reject & refund"}
+        </Button>
+      </div>
+
+      {open && (
+        <div className="flex flex-col gap-2 rounded-lg border border-border bg-background/40 p-3">
+          <label htmlFor={`changes-${taskId}`} className="text-sm font-medium text-foreground">
+            What should change?
+          </label>
+          <Textarea
+            id={`changes-${taskId}`}
+            rows={3}
+            autoFocus
+            maxLength={4000}
+            value={feedback}
+            onChange={(e) => setFeedback(e.target.value)}
+            placeholder="e.g. The buttons and keyboard don't respond; the display should show the full expression."
+            disabled={requestChanges.isPending}
+          />
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="text-xs text-muted-foreground">
+              The agent continues from this version, on the same payment. {roundsLeft} change round{roundsLeft === 1 ? "" : "s"} left.
+            </p>
+            <div className="flex gap-2">
+              <Button size="sm" variant="ghost" disabled={requestChanges.isPending} onClick={() => setOpen(false)}>
+                Cancel
+              </Button>
+              <Button size="sm" disabled={feedback.trim().length < 3 || requestChanges.isPending} onClick={() => void send()}>
+                {requestChanges.isPending ? <Loader2 className="animate-spin" /> : <PencilLine />}
+                {requestChanges.isPending ? "Sending…" : "Send to the agent"}
+              </Button>
+            </div>
+          </div>
+          <ErrorLine error={requestChanges.error ? message(requestChanges.error) : null} />
+        </div>
+      )}
+      {roundsLeft === 0 && (
+        <p className="text-xs text-muted-foreground">All change rounds used: accept this version, or reject it for a refund.</p>
+      )}
+    </div>
+  );
+}
+
 /** A worker failure reason in plain words (anything unrecognised is shown as reported). */
 function friendlyFailure(reason: string): string {
   if (/wall time/i.test(reason)) return "it ran out of time (each build may run for up to 30 minutes)";
@@ -679,7 +771,13 @@ function BuildStep({ state }: { state: ChatBuildState }) {
       {(status === "QUEUED" || status === "RUNNING" || status === "VERIFYING") && (
         <p className="flex items-center gap-2 text-muted-foreground">
           <Loader2 className="size-4 animate-spin" />
-          {status === "QUEUED" ? "Waiting for an agent…" : status === "RUNNING" ? "The agent is building it…" : "Running the checks independently…"}
+          {state.changeRequests.length > 0 && status !== "VERIFYING"
+            ? `Applying your changes (round ${state.changeRequests.length})…`
+            : status === "QUEUED"
+              ? "Waiting for an agent…"
+              : status === "RUNNING"
+                ? "The agent is building it…"
+                : "Running the checks independently…"}
         </p>
       )}
 
@@ -700,15 +798,29 @@ function BuildStep({ state }: { state: ChatBuildState }) {
         </a>
       )}
 
-      {reviewing && (
-        <div className="flex flex-wrap gap-2">
-          <Button size="sm" disabled={accept.isPending || reject.isPending} onClick={() => accept.mutate()}>
-            <CheckCircle2 /> {accept.isPending ? "Accepting…" : "Accept & release payment"}
-          </Button>
-          <Button size="sm" variant="outline" disabled={accept.isPending || reject.isPending} onClick={() => reject.mutate(undefined)}>
-            <XCircle /> {reject.isPending ? "Rejecting…" : "Reject & refund"}
-          </Button>
+      {state.changeRequests.length > 0 && (
+        <div className="flex flex-col gap-1.5 rounded-lg bg-background/40 px-3 py-2.5">
+          <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Changes you asked for</p>
+          <ul className="flex flex-col gap-1 text-xs text-muted-foreground">
+            {state.changeRequests.map((c) => (
+              <li key={c.round}>
+                <span className="font-medium text-foreground">Round {c.round}:</span> {c.feedback}
+              </li>
+            ))}
+          </ul>
         </div>
+      )}
+
+      {reviewing && (
+        <ReviewActions
+          taskId={taskId}
+          roundsLeft={Math.max(0, state.maxChangeRounds - state.changeRequests.length)}
+          busy={accept.isPending || reject.isPending}
+          onAccept={() => accept.mutate()}
+          onReject={() => reject.mutate(undefined)}
+          accepting={accept.isPending}
+          rejecting={reject.isPending}
+        />
       )}
       {status === "FAILED" && (
         <Button size="sm" variant="outline" className="self-start" disabled={refund.isPending} onClick={() => refund.mutate()}>
@@ -805,7 +917,7 @@ function barContent(state: ChatBuildState, requiredLamports: string | null) {
   }
   const display = status ? TASK_STATUS_DISPLAY[status] : null;
   if (status === "AWAITING_ACCEPTANCE") {
-    return { stage: 3 as Stage, icon: <Hammer />, title: goal, note: "Verified · ready for your review", action: "Review & accept" };
+    return { stage: 3 as Stage, icon: <Hammer />, title: goal, note: "Verified · ready for your review", action: "Review" };
   }
   if (status === "SETTLED") {
     return { stage: 4 as Stage, icon: <CheckCircle2 />, title: goal, note: "Done · payment released", action: "View" };
@@ -828,7 +940,10 @@ function barContent(state: ChatBuildState, requiredLamports: string | null) {
     stage: 3 as Stage,
     icon: working ? <Loader2 className="animate-spin" /> : <Hammer />,
     title: goal,
-    note: display?.label ?? "In progress",
+    note:
+      working && state.changeRequests.length > 0 && status !== "VERIFYING"
+        ? `Applying your changes (round ${state.changeRequests.length})`
+        : (display?.label ?? "In progress"),
     action: working ? "View progress" : "View",
   };
 }

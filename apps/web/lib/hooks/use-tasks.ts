@@ -158,6 +158,19 @@ export function useRejectTask(taskId: string) {
   });
 }
 
+// Request changes: a verified build goes back to the agent with feedback.
+export function useRequestChanges(taskId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (feedback: string) => dashboardApi.requestChanges(taskId, feedback),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["task", taskId] });
+      queryClient.invalidateQueries({ queryKey: ["tasks"] });
+      queryClient.invalidateQueries({ queryKey: ["chat-build"] });
+    },
+  });
+}
+
 // Phase 4E.2 — refunds a FAILED/CANCELLED funded build's devnet deposit.
 export function useRefundTask(taskId: string) {
   const queryClient = useQueryClient();

@@ -405,6 +405,13 @@ export const liveApi: TaskDashboardApi = {
     return toTask(raw);
   },
 
+  requestChanges(taskId: string, feedback: string) {
+    return apiFetch<{ taskId: string; status: string; round: number; roundsLeft: number }>(`/v1/jobs/${taskId}/request-changes`, {
+      method: "POST",
+      body: JSON.stringify({ feedback }),
+    });
+  },
+
   async rejectTask(taskId: string, reason?: string) {
     const raw = await apiFetch<RawTask>(`/v1/jobs/${taskId}/reject`, {
       method: "POST",

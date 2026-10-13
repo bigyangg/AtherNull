@@ -131,11 +131,21 @@ DELIVERY_RULES = """How this build is checked and delivered:
 - Commit nothing secret, and keep the change to what was asked."""
 
 
-def build_task_message(objective: str, acceptance_criteria: list[str]) -> str:
+def build_task_message(objective: str, acceptance_criteria: list[str], change_requests: list[dict] | None = None) -> str:
     message = objective.strip()
     if acceptance_criteria:
         bullets = "\n".join(f"- {c}" for c in acceptance_criteria)
         message += f"\n\nAcceptance criteria:\n{bullets}"
+    if change_requests:
+        # Request changes: the delivered version is already in the working
+        # tree; fix it rather than starting over.
+        rounds = "\n".join(f"- Round {c.get('round')}: {str(c.get('feedback', '')).strip()}" for c in change_requests)
+        message += (
+            "\n\nThis build was already delivered once and the customer reviewed it. The delivered version is "
+            "already in the working directory: change it, do not start over. Keep everything that already works, "
+            "keep the tests passing, and add tests for what you fix.\n"
+            f"The customer asked for these changes (the latest round matters most):\n{rounds}"
+        )
     return f"{message}\n\n{DELIVERY_RULES}"
 
 

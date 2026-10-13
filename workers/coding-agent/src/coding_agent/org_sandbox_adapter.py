@@ -284,10 +284,14 @@ def _capture_patch(client: httpx.Client, sandbox: _Sandbox, execution_id: str, w
     log(f"captured patch for {execution_id}: {post.json()}")
 
 
-def _prepare_hosted_repository(client: httpx.Client, sandbox: _Sandbox, execution_id: str, task_id: str, base: str, workdir: str) -> None:
-    """ADR-0019: the build's base commit comes from AtherNull's hosted
-    repository as a bundle; the sandbox works on builds/<task id>. The
-    sandbox never holds a repository credential."""
+def _prepare_hosted_repository(
+    client: httpx.Client, sandbox: _Sandbox, execution_id: str, task_id: str, start: str, workdir: str
+) -> None:
+    """ADR-0019: the build's code comes from AtherNull's hosted repository as
+    a bundle; the sandbox works on builds/<task id>, starting from `start`:
+    the base commit, or for a requested change the version delivered last
+    (its history includes the base, so the result still squashes onto it).
+    The sandbox never holds a repository credential."""
     res = client.get(
         f"{API_URL}/internal/executions/{execution_id}/repo-bundle",
         params={"workerId": WORKER_ID},
@@ -305,7 +309,7 @@ def _prepare_hosted_repository(client: httpx.Client, sandbox: _Sandbox, executio
         sandbox.upload(local, remote_bundle)
     code, output = sandbox.bash(
         f"rm -rf {q(workdir)} && git -c core.autocrlf=false clone --quiet --config core.autocrlf=false {q(remote_bundle)} {q(workdir)} "
-        f"&& git -C {q(workdir)} checkout --quiet -B {q('builds/' + task_id)} {q(base)}"
+        f"&& git -C {q(workdir)} checkout --quiet -B {q('builds/' + task_id)} {q(start)}"
     )
     if code != 0:
         raise RuntimeError(f"preparing the project's code failed (exit {code}): {output[-500:]}")
@@ -368,13 +372,16 @@ def run_dispatch_via_org_sandbox(client: httpx.Client, dispatch: dict) -> tuple[
     try:
         base = dispatch.get("baseCommit")
         if base:
-            _prepare_hosted_repository(client, sandbox, execution_id, task_id, base, workdir)
+            start = dispatch.get("startCommit") or base
+            _prepare_hosted_repository(client, sandbox, execution_id, task_id, start, workdir)
         else:
             # A project AtherNull cannot host yet: clone it directly (ADR-0017 path).
             _prepare_repository(sandbox, dispatch["repositorySnapshot"], workdir)
         model = dispatch["resolvedModel"]
         api_key = require_api_key(model)
-        message = build_task_message(dispatch["objective"], dispatch["acceptanceCriteria"])
+        message = build_task_message(
+            dispatch["objective"], dispatch["acceptanceCriteria"], dispatch.get("changeRequests") or []
+        )
         mcp_config, agent_context, plugins = workspace_agent_setup(sandbox.http)
         res = sandbox.http.post(
             "/api/conversations",

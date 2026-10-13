@@ -16,6 +16,7 @@ import { db } from "../db.js";
 import { createRepo, repoPath } from "../repos/repos.js";
 import { HttpError, requireOrgSession, sendHttpError } from "../session.js";
 import { createEstimate, reviseEstimate, toEstimateResponse } from "./estimates.js";
+import { listChangeRequests, MAX_CHANGE_ROUNDS } from "./change-requests.js";
 import { hasPreview, PREVIEWABLE_STATUSES } from "./previews.js";
 
 // Chat-native builds: the canvas discussion is where a build is planned,
@@ -101,6 +102,9 @@ async function buildState(conversationId: string, organizationId: string) {
       // The verified app, live (routes/previews.ts); null until published.
       previewUrl: PREVIEWABLE_STATUSES.has(task.status) && hasPreview(task.id) ? `/preview/${task.id}/` : null,
     },
+    // Request changes: what the customer asked for so far, and the cap.
+    changeRequests: task ? await listChangeRequests(task.id) : [],
+    maxChangeRounds: MAX_CHANGE_ROUNDS,
     defaultBudget: defaultBudget(),
   };
 }

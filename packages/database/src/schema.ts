@@ -421,6 +421,18 @@ export interface AgentSandboxRequestsTable {
   updated_at: Generated<Date>;
 }
 
+// 0021 — a customer's request for changes to a verified build.
+export interface TaskChangeRequestsTable {
+  id: Generated<string>;
+  task_id: string;
+  organization_id: string;
+  round: number;
+  feedback: string;
+  from_commit: string | null;
+  requested_by: string;
+  created_at: Generated<Date>;
+}
+
 export interface Database {
   projects: ProjectsTable;
   agent_profiles: AgentProfilesTable;
@@ -442,4 +454,5 @@ export interface Database {
   discussion_conversations: DiscussionConversationsTable;
   execution_patches: ExecutionPatchesTable;
   agent_sandbox_requests: AgentSandboxRequestsTable;
+  task_change_requests: TaskChangeRequestsTable;
 }
