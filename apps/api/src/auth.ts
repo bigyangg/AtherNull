@@ -3,6 +3,7 @@ import { haveIBeenPwned, magicLink, organization } from "better-auth/plugins";
 import { Pool } from "pg";
 
 import { db } from "./db.js";
+import { deploymentAgentModel } from "./routing.js";
 import {
   sendMagicLinkEmail,
   sendPasswordResetEmail,
@@ -13,11 +14,21 @@ import {
 // below) so a task can always be created without a profile-management UI.
 // Cheapest -> most capable, matching agent_profiles.model_tiers' documented
 // shape (packages/database/migrations/0002_platform_tables.sql) and ADR-0003.
-const DEFAULT_MODEL_TIERS = [
+const ANTHROPIC_MODEL_TIERS = [
   { tier: "fast", model: "anthropic/claude-haiku-4-5-20251001", maxComplexity: 0.33, costCeilingMinor: 50 },
   { tier: "standard", model: "anthropic/claude-sonnet-5", maxComplexity: 0.75 },
   { tier: "advanced", model: "anthropic/claude-opus-5", maxComplexity: 1 },
 ];
+
+/**
+ * The tiers a new organization's agent profile starts with: the same three
+ * tiers, each on the model this deployment can actually run (see
+ * routing.ts's deploymentAgentModel), or Anthropic's when it has a key.
+ */
+function defaultModelTiers() {
+  const model = deploymentAgentModel();
+  return model ? ANTHROPIC_MODEL_TIERS.map((tier) => ({ ...tier, model })) : ANTHROPIC_MODEL_TIERS;
+}
 
 // The web app's own origin — where the user actually resets their password,
 // as opposed to `BETTER_AUTH_URL` (this API's origin, used for verification
@@ -160,7 +171,7 @@ export const auth = betterAuth({
             .insertInto("agent_profiles")
             .values({
               organization_id: org.id,
-              model_tiers: JSON.stringify(DEFAULT_MODEL_TIERS),
+              model_tiers: JSON.stringify(defaultModelTiers()),
               policy_version: "v1",
             })
             .execute();

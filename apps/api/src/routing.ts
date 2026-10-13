@@ -10,18 +10,27 @@ export interface RoutingResult {
   routingReason: string;
 }
 
-// Glue between packages/model-router (pure logic, no I/O) and the DB —
-// loads the agent profile's *current* model ladder and calls chooseTier()
-// (ADR-0003: routing is computed "at dispatch time", i.e. live, not
-// snapshotted). Remaps {tier, model, score, reason} onto
-// InternalWorkDispatchSchema's field names — the two shapes are allowed to
-// differ, this is the seam.
-//
-// agentProfileVersion/policyVersion are NOT sourced here — those are
-// snapshotted on the task itself at job-creation time
-// (0004_task_reproducibility_snapshot.sql) precisely because the live
-// agent_profiles row can drift after a task references it. Callers read
-// those two off the task row, not off this function.
+/** The NVIDIA NIM model this platform uses when NIM is its only provider. */
+export const DEFAULT_NIM_MODEL = "nvidia_nim/nvidia/nemotron-3-super-120b-a12b";
+
+/**
+ * The model every build on this deployment runs with, or null to route by
+ * the organization's agent profile.
+ *
+ * - AGENT_MODEL, when set (any LiteLLM model string, e.g. an `openrouter/…`
+ *   model): the deployment decides, whatever the profile says.
+ * - Otherwise, a deployment with an NVIDIA NIM key and no Anthropic key uses
+ *   its NIM model: a profile naming Anthropic models could never run there
+ *   (the worker has no credential for them), and every build would fail with
+ *   "No credential found for provider 'anthropic'".
+ */
+export function deploymentAgentModel(env: NodeJS.ProcessEnv = process.env): string | null {
+  const explicit = env.AGENT_MODEL?.trim();
+  if (explicit) return explicit;
+  if (env.NVIDIA_NIM_API_KEY && !env.ANTHROPIC_API_KEY) return env.SANDBOX_LLM_MODEL?.trim() || DEFAULT_NIM_MODEL;
+  return null;
+}
+
 export async function resolveRouting(
   agentProfileId: string,
   organizationId: string,
@@ -41,10 +50,13 @@ export async function resolveRouting(
   const tiers = ModelTierSchema.array().min(1).parse(profile.model_tiers);
   const decision = chooseTier(signals, tiers);
 
+  // The tier is still chosen (it is recorded with the execution for usage
+  // and routing analysis); only the model behind it is the deployment's.
+  const deploymentModel = deploymentAgentModel();
   return {
-    resolvedModel: decision.model,
+    resolvedModel: deploymentModel ?? decision.model,
     routingTier: decision.tier,
     routingScore: decision.score,
-    routingReason: decision.reason,
+    routingReason: deploymentModel ? `${decision.reason}; model set by this deployment (${deploymentModel})` : decision.reason,
   };
 }
