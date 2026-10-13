@@ -137,15 +137,24 @@ def build_task_message(objective: str, acceptance_criteria: list[str], change_re
         bullets = "\n".join(f"- {c}" for c in acceptance_criteria)
         message += f"\n\nAcceptance criteria:\n{bullets}"
     if change_requests:
-        # Request changes: the delivered version is already in the working
-        # tree; fix it rather than starting over.
-        rounds = "\n".join(f"- Round {c.get('round')}: {str(c.get('feedback', '')).strip()}" for c in change_requests)
+        # Request changes, or an automatic fix round after failed checks: the
+        # previous version is already in the working tree; fix it rather than
+        # starting over.
+        customer = [c for c in change_requests if c.get("source") != "verifier"]
+        latest = change_requests[-1]
         message += (
-            "\n\nThis build was already delivered once and the customer reviewed it. The delivered version is "
-            "already in the working directory: change it, do not start over. Keep everything that already works, "
-            "keep the tests passing, and add tests for what you fix.\n"
-            f"The customer asked for these changes (the latest round matters most):\n{rounds}"
+            "\n\nA previous version of this build is already in the working directory: change it, do not start "
+            "over. Keep everything that already works, keep the tests passing, and add tests for what you fix."
         )
+        if customer:
+            rounds = "\n".join(f"- Round {i}: {str(c.get('feedback', '')).strip()}" for i, c in enumerate(customer, 1))
+            message += f"\nThe customer reviewed it and asked for these changes (the latest round matters most):\n{rounds}"
+        if latest.get("source") == "verifier":
+            message += (
+                "\n\nThe independent checks then rejected the latest version. Fix exactly what they found, and "
+                "check it yourself the same way before you finish (run the tests, and load the page in headless "
+                f"Chromium for a web app):\n{str(latest.get('feedback', '')).strip()}"
+            )
     return f"{message}\n\n{DELIVERY_RULES}"
 
 

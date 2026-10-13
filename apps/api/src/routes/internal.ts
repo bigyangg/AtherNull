@@ -173,7 +173,7 @@ export async function internalRoutes(app: FastifyInstance) {
     // far, and the delivered version the latest round continues from.
     const changeRequests = await db
       .selectFrom("task_change_requests")
-      .select(["round", "feedback", "from_commit"])
+      .select(["round", "feedback", "from_commit", "source"])
       .where("task_id", "=", task.id)
       .orderBy("round", "asc")
       .execute();
@@ -215,7 +215,7 @@ export async function internalRoutes(app: FastifyInstance) {
       repositorySnapshot: `${project?.permitted_repository ?? "unknown"}@${task.repository_revision}`,
       baseCommit,
       startCommit,
-      changeRequests: changeRequests.map((c) => ({ round: c.round, feedback: c.feedback })),
+      changeRequests: changeRequests.map((c) => ({ round: c.round, feedback: c.feedback, source: c.source })),
       objective: task.requirements,
       acceptanceCriteria: Array.isArray(task.acceptance_criteria) ? task.acceptance_criteria : [],
       agentProfileVersion: task.agent_profile_config_revision,

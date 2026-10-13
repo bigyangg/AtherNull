@@ -155,6 +155,67 @@ describe("independent verification", () => {
     assert.equal(task.status, "FAILED");
   });
 
+  test("a failed hosted build goes back to the agent with the findings, then fails after the fix rounds", async () => {
+    const b = await verifyingBuild(`worker-${randomUUID()}`);
+    const commits = ["a", "b", "c"].map((c) => c.repeat(40));
+    try {
+      let executionId = b.executionId;
+      for (const [i, commit] of commits.entries()) {
+        if (i > 0) {
+          // The fix round ran and is back for verification.
+          const workerId = `worker-${randomUUID()}`;
+          executionId = (
+            await db
+              .insertInto("executions")
+              .values({ task_id: b.taskId, status: "SUCCEEDED", lease_owner: workerId, started_at: new Date(), ended_at: new Date() })
+              .returning("id")
+              .executeTakeFirstOrThrow()
+          ).id;
+          await db.updateTable("tasks").set({ status: "VERIFYING" }).where("id", "=", b.taskId).execute();
+          assert.equal((await submitPatch(executionId, workerId)).statusCode, 201);
+        } else {
+          const lease = await db.selectFrom("executions").select("lease_owner").where("id", "=", executionId).executeTakeFirstOrThrow();
+          await submitPatch(executionId, lease.lease_owner!);
+        }
+        await db.updateTable("execution_patches").set({ result_commit: commit }).where("execution_id", "=", executionId).execute();
+        assert.ok(await claimMine(executionId, "verifier-fix"));
+        const res = await app.inject({
+          method: "POST",
+          url: `/internal/verifications/${executionId}/result`,
+          headers: VERIFIER,
+          payload: {
+            verifierId: "verifier-fix",
+            outcome: "FAIL",
+            tests: [{ name: "adds", passed: true }, { name: "browser", passed: false }],
+            evidence: { reason: "the page has errors in a browser: SyntaxError", logTail: "ok 1 adds" },
+          },
+        });
+        assert.equal(res.statusCode, 200, res.body);
+        const task = await db.selectFrom("tasks").select("status").where("id", "=", b.taskId).executeTakeFirstOrThrow();
+        assert.equal(task.status, i < 2 ? "QUEUED" : "FAILED", `round ${i + 1}`);
+      }
+
+      const rounds = await db
+        .selectFrom("task_change_requests")
+        .select(["round", "source", "from_commit", "feedback", "requested_by"])
+        .where("task_id", "=", b.taskId)
+        .orderBy("round")
+        .execute();
+      assert.equal(rounds.length, 2, "two automatic fix rounds");
+      assert.deepEqual(
+        rounds.map((r) => [r.round, r.source, r.from_commit, r.requested_by]),
+        [
+          [1, "verifier", commits[0], null],
+          [2, "verifier", commits[1], null],
+        ],
+      );
+      assert.match(rounds[0]!.feedback, /SyntaxError/);
+      assert.match(rounds[0]!.feedback, /Failed checks: browser/);
+    } finally {
+      await db.updateTable("tasks").set({ status: "CANCELLED" }).where("id", "=", b.taskId).where("status", "=", "QUEUED").execute();
+    }
+  });
+
   test("a worker can never act as the verifier", async () => {
     const asWorker = await app.inject({ method: "POST", url: "/internal/verifications/claim", headers: WORKER, payload: { verifierId: "x" } });
     assert.equal(asWorker.statusCode, 401);

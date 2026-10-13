@@ -22,6 +22,8 @@ const Body = z.object({ feedback: z.string().trim().min(3, "Describe what should
 export interface ChangeRequestView {
   round: number;
   feedback: string;
+  /** customer: requested on review; verifier: an automatic fix round. */
+  source: "customer" | "verifier";
   createdAt: string;
 }
 
@@ -29,11 +31,11 @@ export interface ChangeRequestView {
 export async function listChangeRequests(taskId: string): Promise<ChangeRequestView[]> {
   const rows = await db
     .selectFrom("task_change_requests")
-    .select(["round", "feedback", "created_at"])
+    .select(["round", "feedback", "source", "created_at"])
     .where("task_id", "=", taskId)
     .orderBy("round", "asc")
     .execute();
-  return rows.map((r) => ({ round: r.round, feedback: r.feedback, createdAt: r.created_at.toISOString() }));
+  return rows.map((r) => ({ round: r.round, feedback: r.feedback, source: r.source, createdAt: r.created_at.toISOString() }));
 }
 
 export async function changeRequestRoutes(app: FastifyInstance) {
@@ -58,12 +60,10 @@ export async function changeRequestRoutes(app: FastifyInstance) {
         }
         assertTransition(task.status as TaskStatus, "QUEUED");
 
-        const { rounds } = await trx
-          .selectFrom("task_change_requests")
-          .select((eb) => eb.fn.countAll<string>().as("rounds"))
-          .where("task_id", "=", task.id)
-          .executeTakeFirstOrThrow();
-        const used = Number(rounds);
+        // Only the customer's own rounds count against the cap; the
+        // verifier's automatic fix rounds share the numbering.
+        const rounds = await trx.selectFrom("task_change_requests").select(["round", "source"]).where("task_id", "=", task.id).execute();
+        const used = rounds.filter((r) => r.source === "customer").length;
         if (used >= MAX_CHANGE_ROUNDS) {
           throw new HttpError(409, `This build has used all ${MAX_CHANGE_ROUNDS} change rounds. Accept it, or reject it for a refund.`);
         }
@@ -73,10 +73,11 @@ export async function changeRequestRoutes(app: FastifyInstance) {
           .values({
             task_id: task.id,
             organization_id: organizationId,
-            round: used + 1,
+            round: Math.max(0, ...rounds.map((r) => r.round)) + 1,
             feedback,
             from_commit: task.result_commit,
             requested_by: userId,
+            source: "customer",
           })
           .execute();
 

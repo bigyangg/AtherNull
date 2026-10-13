@@ -815,6 +815,13 @@ function BuildStep({ state }: { state: ChatBuildState }) {
     return false;
   };
   const error = accept.error ?? reject.error ?? refund.error;
+  const working = status === "QUEUED" || status === "RUNNING" || status === "VERIFYING";
+  const customerRounds = state.changeRequests.filter((c) => c.source !== "verifier");
+  const latestRound = state.changeRequests.at(-1);
+  // An automatic fix round is under way: the checks failed the last version
+  // and the agent is fixing what they found.
+  const autoFixing = working && latestRound?.source === "verifier";
+  const autoFixAttempt = state.changeRequests.filter((c) => c.source === "verifier").length + 1;
 
   return (
     <Step
@@ -848,20 +855,28 @@ function BuildStep({ state }: { state: ChatBuildState }) {
           );
         })}
       </ol>
-      {(status === "QUEUED" || status === "RUNNING" || status === "VERIFYING") && (
+      {working && (
         <p className="flex items-center gap-2 text-muted-foreground">
           <Loader2 className="size-4 animate-spin" />
-          {state.changeRequests.length > 0 && status !== "VERIFYING"
-            ? `Applying your changes (round ${state.changeRequests.length})…`
-            : status === "QUEUED"
-              ? "Waiting for an agent…"
-              : status === "RUNNING"
-                ? "The agent is building it…"
-                : "Running the checks independently…"}
+          {status === "VERIFYING"
+            ? "Running the checks independently…"
+            : autoFixing
+              ? `The checks found a problem. The agent is fixing it (attempt ${autoFixAttempt})…`
+              : latestRound
+                ? `Applying your changes (round ${customerRounds.length})…`
+                : status === "QUEUED"
+                  ? "Waiting for an agent…"
+                  : "The agent is building it…"}
+        </p>
+      )}
+      {autoFixing && latestRound && (
+        <p className="rounded-lg bg-background/40 px-3 py-2.5 text-xs text-muted-foreground">
+          {latestRound.feedback.split("\n").find((l) => l.startsWith("Reason: "))?.slice(8) ?? "Some checks did not pass."} You
+          are not charged for fix attempts.
         </p>
       )}
 
-      {run && status !== "SETTLED" && (
+      {run && !working && status !== "SETTLED" && (
         <p className={run.outcome === "PASS" ? "text-success" : "text-destructive"}>
           Verification {run.outcome === "PASS" ? "passed" : "failed"}: {run.tests.filter((t) => t.passed).length}/{run.tests.length} checks
         </p>
@@ -878,13 +893,13 @@ function BuildStep({ state }: { state: ChatBuildState }) {
         </a>
       )}
 
-      {state.changeRequests.length > 0 && (
+      {customerRounds.length > 0 && (
         <div className="flex flex-col gap-1.5 rounded-lg bg-background/40 px-3 py-2.5">
           <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Changes you asked for</p>
           <ul className="flex flex-col gap-1 text-xs text-muted-foreground">
-            {state.changeRequests.map((c) => (
+            {customerRounds.map((c, i) => (
               <li key={c.round}>
-                <span className="font-medium text-foreground">Round {c.round}:</span> {c.feedback}
+                <span className="font-medium text-foreground">Round {i + 1}:</span> {c.feedback}
               </li>
             ))}
           </ul>
@@ -894,18 +909,13 @@ function BuildStep({ state }: { state: ChatBuildState }) {
       {reviewing && (
         <ReviewActions
           taskId={taskId}
-          roundsLeft={Math.max(0, state.maxChangeRounds - state.changeRequests.length)}
+          roundsLeft={Math.max(0, state.maxChangeRounds - customerRounds.length)}
           busy={accept.isPending || reject.isPending}
           onAccept={() => accept.mutate()}
           onReject={() => reject.mutate(undefined)}
           accepting={accept.isPending}
           rejecting={reject.isPending}
         />
-      )}
-      {status === "FAILED" && (
-        <Button size="sm" variant="outline" className="self-start" disabled={refund.isPending} onClick={() => refund.mutate()}>
-          {refund.isPending ? "Refunding…" : "Refund my payment"}
-        </Button>
       )}
       {(status === "ACCEPTED" || status === "SETTLING") && (
         <p className="flex items-center gap-2 text-muted-foreground">
@@ -935,6 +945,22 @@ function BuildStep({ state }: { state: ChatBuildState }) {
                   ? "You have not been charged. Get your payment back with the button below."
                   : "You were not charged for this build."}
           </p>
+          {status === "FAILED" && (
+            <div className="mt-1 flex flex-wrap items-center gap-3">
+              <Button size="sm" disabled={refund.isPending} onClick={() => refund.mutate()}>
+                {refund.isPending ? (
+                  <>
+                    <Loader2 className="size-4 animate-spin" /> Refunding…
+                  </>
+                ) : (
+                  "Refund my payment"
+                )}
+              </Button>
+              {refund.isPending && (
+                <span className="text-xs text-muted-foreground">Confirming on Solana. This takes about 30 seconds.</span>
+              )}
+            </div>
+          )}
         </div>
       )}
       <ErrorLine error={error ? message(error) : null} />
@@ -1027,13 +1053,16 @@ function barContent(state: ChatBuildState, requiredLamports: string | null) {
     };
   }
   const working = status === "FUNDED" || status === "QUEUED" || status === "RUNNING" || status === "VERIFYING";
+  const latestRound = state.changeRequests.at(-1);
   return {
     stage: 3 as Stage,
     icon: working ? <Loader2 className="animate-spin" /> : <Hammer />,
     title: goal,
     note:
-      working && state.changeRequests.length > 0 && status !== "VERIFYING"
-        ? `Applying your changes (round ${state.changeRequests.length})`
+      working && latestRound && status !== "VERIFYING"
+        ? latestRound.source === "verifier"
+          ? "Fixing a problem the checks found"
+          : `Applying your changes (round ${state.changeRequests.filter((c) => c.source !== "verifier").length})`
         : (display?.label ?? "In progress"),
     action: working ? "View progress" : "View",
   };

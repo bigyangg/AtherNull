@@ -61,7 +61,9 @@ export const TASK_TRANSITIONS: Record<TaskStatus, TaskStatus[]> = {
   QUEUED: ["RUNNING", "CANCELLED"],
   RUNNING: ["VERIFYING", "FAILED", "PAUSED_USAGE_LIMIT"],
   PAUSED_USAGE_LIMIT: ["RUNNING", "QUEUED"],
-  VERIFYING: ["AWAITING_ACCEPTANCE", "FAILED"],
+  // QUEUED: an automatic fix round (routes/verification.ts) — the verifier's
+  // findings go back to the agent before the build is declared failed.
+  VERIFYING: ["AWAITING_ACCEPTANCE", "FAILED", "QUEUED"],
   // QUEUED: the customer requested changes (routes/change-requests.ts); the
   // next attempt continues from the delivered version on the same funding.
   AWAITING_ACCEPTANCE: ["ACCEPTED", "REJECTED", "QUEUED"],

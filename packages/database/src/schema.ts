@@ -429,7 +429,9 @@ export interface TaskChangeRequestsTable {
   round: number;
   feedback: string;
   from_commit: string | null;
-  requested_by: string;
+  /** null for the verifier's automatic fix rounds. */
+  requested_by: string | null;
+  source: Generated<"customer" | "verifier">;
   created_at: Generated<Date>;
 }
 

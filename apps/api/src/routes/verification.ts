@@ -62,6 +62,22 @@ const ResultBody = z.object({
   evidence: z.record(z.string(), z.unknown()),
 });
 
+/** Automatic fix rounds per build after a failed verification. */
+export const MAX_AUTO_FIX_ROUNDS = Number(process.env.MAX_AUTO_FIX_ROUNDS ?? 2);
+
+/** What the agent is told to fix: the verifier's reason, the failed checks
+ *  and the end of the test output — never more than the column allows. */
+export function verifierFeedback(body: z.infer<typeof ResultBody>): string {
+  const lines = ["The independent checks rejected the previous version."];
+  if (typeof body.evidence.reason === "string") lines.push(`Reason: ${body.evidence.reason}`);
+  const failed = body.tests.filter((t) => !t.passed).map((t) => t.name);
+  if (failed.length) lines.push(`Failed checks: ${failed.slice(0, 20).join("; ")}`);
+  if (typeof body.evidence.logTail === "string" && body.evidence.logTail.trim()) {
+    lines.push(`End of the test output:\n${body.evidence.logTail.trim().slice(-1500)}`);
+  }
+  return lines.join("\n").slice(0, 4000);
+}
+
 export async function verificationRoutes(app: FastifyInstance) {
   // The exact change under review for a build (its latest captured patch):
   // what the verifier tested and what the customer is accepting.
@@ -222,12 +238,13 @@ export async function verificationRoutes(app: FastifyInstance) {
   });
 
   // The verifier's verdict: records the run and moves the task out of
-  // VERIFYING (PASS -> AWAITING_ACCEPTANCE, FAIL -> FAILED), exactly once.
+  // VERIFYING, exactly once. PASS -> AWAITING_ACCEPTANCE. FAIL -> QUEUED for
+  // an automatic fix round while any are left (the verifier's findings go
+  // back to the agent, continuing from the failed version), else FAILED.
   app.post("/internal/verifications/:executionId/result", async (request, reply) => {
     if (!requireVerifierToken(request, reply)) return;
     const { executionId } = z.object({ executionId: z.string() }).parse(request.params);
     const body = ResultBody.parse(request.body);
-    const next: TaskStatus = body.outcome === "PASS" ? "AWAITING_ACCEPTANCE" : "FAILED";
 
     const result = await db.transaction().execute(async (trx) => {
       const patch = await trx
@@ -241,6 +258,31 @@ export async function verificationRoutes(app: FastifyInstance) {
 
       const task = await trx.selectFrom("tasks").selectAll().where("id", "=", patch.task_id).forUpdate().executeTakeFirstOrThrow();
       if (task.status !== "VERIFYING") return { status: 409 as const, error: "Task is not awaiting verification" };
+
+      let next: TaskStatus = body.outcome === "PASS" ? "AWAITING_ACCEPTANCE" : "FAILED";
+      if (body.outcome === "FAIL" && patch.result_commit) {
+        const rounds = await trx
+          .selectFrom("task_change_requests")
+          .select(["round", "source"])
+          .where("task_id", "=", task.id)
+          .execute();
+        const autoFixes = rounds.filter((r) => r.source === "verifier").length;
+        if (autoFixes < MAX_AUTO_FIX_ROUNDS) {
+          await trx
+            .insertInto("task_change_requests")
+            .values({
+              task_id: task.id,
+              organization_id: task.organization_id,
+              round: Math.max(0, ...rounds.map((r) => r.round)) + 1,
+              feedback: verifierFeedback(body),
+              from_commit: patch.result_commit,
+              requested_by: null,
+              source: "verifier",
+            })
+            .execute();
+          next = "QUEUED";
+        }
+      }
       assertTransition("VERIFYING", next);
 
       await trx
