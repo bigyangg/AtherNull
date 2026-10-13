@@ -1,0 +1,221 @@
+diff --git a/src/components/features/conversation-panel/conversation-panel.tsx b/src/components/features/conversation-panel/conversation-panel.tsx
+--- a/src/components/features/conversation-panel/conversation-panel.tsx
++++ b/src/components/features/conversation-panel/conversation-panel.tsx
+@@ -1117,7 +1117,26 @@ export function ConversationPanel({
+       >
+         {showInitialSkeleton && <ConversationCardSkeleton compact={compact} />}
+ 
+-        {!compact && showEmptyState && (
++        {!compact &&
++          showEmptyState &&
++          import.meta.env.VITE_ATHERNULL &&
++          !emptyDueToAutomationFilter &&
++          !emptyDueToTagFilter && (
++            // AtherNull: a first-run hint at the top of the list, not a
++            // lone line floating in the middle of the sidebar.
++            <div
++              data-testid="conversation-panel-empty-state"
++              className="mx-1 mt-2 flex flex-col gap-1 rounded-lg border border-dashed border-border px-3 py-3"
++            >
++              <p className="text-xs font-medium text-content">No chats yet</p>
++              <p className="text-xs leading-relaxed text-muted">
++                Describe what you want built. Your chats and builds will show up here.
++              </p>
++            </div>
++          )}
++        {!compact &&
++          showEmptyState &&
++          !(import.meta.env.VITE_ATHERNULL && !emptyDueToAutomationFilter && !emptyDueToTagFilter) && (
+           <div
+             data-testid="conversation-panel-empty-state"
+             className="flex min-h-0 flex-1 flex-col items-center justify-center px-4 py-8"
+diff --git a/src/components/features/sidebar/athernull-workspace-tile.tsx b/src/components/features/sidebar/athernull-workspace-tile.tsx
+--- a/src/components/features/sidebar/athernull-workspace-tile.tsx
++++ b/src/components/features/sidebar/athernull-workspace-tile.tsx
+@@ -1,9 +1,12 @@
++import React from "react";
+ import { useQuery } from "@tanstack/react-query";
++import { LogOut } from "lucide-react";
+ import { BackendStatusDot } from "#/components/features/backends/backend-status-dot";
+ 
+ // AtherNull: the canvas always talks to the organization's own workspace
+ // through AtherNull's gateway, so there is no backend to pick or add — the
+-// footer just names the workspace and shows whether it is reachable.
++// footer names the workspace, shows whether it is reachable, and shows who
++// is signed in, with sign-out.
+ export function AtherNullWorkspaceTile({ isConnected }: { isConnected: boolean | null }) {
+   const { data: name } = useQuery({
+     queryKey: ["athernull", "workspace-name"],
+@@ -15,17 +18,60 @@ export function AtherNullWorkspaceTile({ isConnected }: { isConnected: boolean |
+     staleTime: Infinity,
+     meta: { disableToast: true },
+   });
++  const { data: email } = useQuery({
++    queryKey: ["athernull", "session-email"],
++    queryFn: async () => {
++      const res = await fetch("/api/auth/get-session", { credentials: "same-origin" });
++      const session = res.ok ? await res.json() : null;
++      return (session?.user?.email as string | undefined) ?? null;
++    },
++    staleTime: Infinity,
++    meta: { disableToast: true },
++  });
++  const [signingOut, setSigningOut] = React.useState(false);
++
++  const signOut = async () => {
++    setSigningOut(true);
++    try {
++      await fetch("/api/auth/sign-out", {
++        method: "POST",
++        credentials: "same-origin",
++        headers: { "content-type": "application/json" },
++        body: "{}",
++      });
++    } finally {
++      window.location.assign("/sign-in");
++    }
++  };
+ 
+   return (
+-    <div
+-      data-testid="athernull-workspace-tile"
+-      title={isConnected === false ? "Workspace unreachable" : "Workspace ready"}
+-      className="flex min-w-0 items-center gap-2.5 rounded-md px-2.5 py-2 text-sm text-content"
+-    >
+-      <span className="relative inline-flex size-2 shrink-0">
+-        <BackendStatusDot isConnected={isConnected} className="static" />
+-      </span>
+-      <span className="min-w-0 flex-1 truncate">{name ?? "Your workspace"}</span>
++    <div data-testid="athernull-workspace-tile" className="flex min-w-0 flex-col">
++      <div
++        title={isConnected === false ? "Workspace unreachable" : "Workspace ready"}
++        className="flex min-w-0 items-center gap-2.5 rounded-md px-2.5 pt-2 pb-1 text-sm text-content"
++      >
++        <span className="relative inline-flex size-2 shrink-0">
++          <BackendStatusDot isConnected={isConnected} className="static" />
++        </span>
++        <span className="min-w-0 flex-1 truncate font-medium">{name ?? "Your workspace"}</span>
++      </div>
++      <div className="flex min-w-0 items-center gap-2 rounded-md pl-[1.6rem] pr-1 pb-1.5">
++        <span className="min-w-0 flex-1 truncate text-xs text-muted" title={email ?? undefined}>
++          {email ?? "Signed in"}
++        </span>
++        <button
++          type="button"
++          onClick={signOut}
++          disabled={signingOut}
++          aria-label="Sign out"
++          title="Sign out"
++          data-testid="athernull-sign-out"
++          className="inline-flex shrink-0 items-center gap-1.5 rounded-md px-2 py-1 text-xs text-muted transition-colors hover:bg-tertiary hover:text-content disabled:opacity-50"
++        >
++          <LogOut className="size-3.5" aria-hidden="true" />
++          {signingOut ? "Signing out…" : "Sign out"}
++        </button>
++      </div>
+     </div>
+   );
+ }
+diff --git a/src/routes/root-layout.tsx b/src/routes/root-layout.tsx
+--- a/src/routes/root-layout.tsx
++++ b/src/routes/root-layout.tsx
+@@ -4,6 +4,7 @@ import {
+   isRouteErrorResponse,
+   Outlet,
+   useLocation,
++  Navigate,
+ } from "react-router";
+ import { useTranslation } from "react-i18next";
+ import { I18nKey } from "#/i18n/declaration";
+@@ -40,10 +41,51 @@ const CommandMenu = React.lazy(() =>
+   })),
+ );
+ 
++// AtherNull: a designed page for a missing page or a crash, never raw
++// error text — with a way back.
++function AtherNullErrorScreen({ notFound }: { notFound: boolean }) {
++  return (
++    <div className="flex min-h-screen items-center justify-center bg-base px-6">
++      <div className="flex max-w-md flex-col items-center gap-3 text-center">
++        <img src={`${import.meta.env.BASE_URL}favicon.svg`} alt="" width={40} height={40} className="mb-1 rounded-lg" />
++        <h1 className="text-lg font-semibold text-content">
++          {notFound ? "This page doesn't exist" : "Something went wrong"}
++        </h1>
++        <p className="text-sm leading-relaxed text-muted">
++          {notFound
++            ? "The link may be old or mistyped. Your chats and builds are safe."
++            : "This screen hit an unexpected error. Your chats and builds are safe. Reload to try again."}
++        </p>
++        <div className="mt-2 flex gap-2">
++          {!notFound && (
++            <button
++              type="button"
++              onClick={() => window.location.reload()}
++              className="rounded-lg border border-border px-3 py-1.5 text-sm text-content hover:bg-tertiary"
++            >
++              Reload
++            </button>
++          )}
++          <a href={import.meta.env.BASE_URL} className="rounded-lg bg-white px-3 py-1.5 text-sm font-medium text-black hover:opacity-90">
++            Back to your chats
++          </a>
++        </div>
++        <p className="mt-3 text-xs text-muted">
++          Still stuck? Email <a className="underline" href="mailto:support@athernull.io">support@athernull.io</a>
++        </p>
++      </div>
++    </div>
++  );
++}
++
+ export function ErrorBoundary() {
+   const error = useRouteError();
+   const { t } = useTranslation("openhands");
+ 
++  if (import.meta.env.VITE_ATHERNULL) {
++    return <AtherNullErrorScreen notFound={isRouteErrorResponse(error) && error.status === 404} />;
++  }
++
+   if (isRouteErrorResponse(error)) {
+     return (
+       <div>
+@@ -94,6 +136,13 @@ export default function MainApp() {
+     }
+   }, [settings?.language]);
+ 
++  // AtherNull: automations run agents outside a funded build, which
++  // AtherNull does not allow; their pages lead back home (their entry points
++  // are already hidden — see showAutomationSurfaces).
++  if (import.meta.env.VITE_ATHERNULL && /^\/automations(\/|$)/.test(location.pathname)) {
++    return <Navigate to="/" replace />;
++  }
++
+   if (config.isLoading) {
+     return (
+       <div className="min-h-screen flex items-center justify-center bg-base">
+diff --git a/src/routes.ts b/src/routes.ts
+--- a/src/routes.ts
++++ b/src/routes.ts
+@@ -38,6 +38,7 @@ export default [
+     route("automations/templates", "routes/automation-templates.tsx"),
+     route("automations/new/:automationId", "routes/automation-setup-route.tsx"),
+     route("automations/:automationId", "routes/automation-detail.tsx"),
++    route("*", "routes/athernull-not-found.tsx"),
+   ]),
+   route(
+     "shared/conversations/:conversationId",
+diff --git a/src/routes/athernull-not-found.tsx b/src/routes/athernull-not-found.tsx
+new file mode 100644
+--- /dev/null
++++ b/src/routes/athernull-not-found.tsx
+@@ -0,0 +1,10 @@
++// AtherNull: any address the canvas has no page for. Throwing a 404 hands it
++// to the layout's error boundary, which shows the designed "This page doesn't
++// exist" screen with a way back (routes/root-layout.tsx).
++export async function clientLoader(): Promise<never> {
++  throw new Response("Not Found", { status: 404 });
++}
++
++export default function NotFound() {
++  return null;
++}

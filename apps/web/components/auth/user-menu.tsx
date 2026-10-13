@@ -27,13 +27,13 @@ export function UserMenu() {
       </span>
       <Button
         variant="ghost"
-        size="icon"
-        className="size-7 shrink-0"
+        size="sm"
+        className="h-7 shrink-0 gap-1.5 px-2 text-xs text-muted-foreground hover:text-foreground"
         disabled={signingOut}
         onClick={handleSignOut}
-        aria-label="Sign out"
       >
         <LogOut className="size-3.5" />
+        {signingOut ? "Signing out…" : "Sign out"}
       </Button>
     </div>
   );

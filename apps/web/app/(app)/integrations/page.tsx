@@ -44,6 +44,11 @@ const INTEGRATIONS: { name: string; icon: SimpleIcon | null; description: string
   },
 ] as const;
 
+function isDark(hex: string): boolean {
+  const [r, g, b] = [0, 2, 4].map((i) => parseInt(hex.slice(i, i + 2), 16));
+  return 0.299 * r! + 0.587 * g! + 0.114 * b! < 60;
+}
+
 export default function IntegrationsPage() {
   return (
     <main className="mx-auto max-w-3xl px-6 py-10">
@@ -60,7 +65,9 @@ export default function IntegrationsPage() {
               <div className="flex items-center gap-3">
                 <div
                   className="flex size-11 items-center justify-center rounded-xl border border-border"
-                  style={icon ? { background: `#${icon.hex}14` } : undefined}
+                  // Near-black marks (GitHub, Notion) sit on a white tile so
+                  // they stay visible on the dark theme.
+                  style={icon ? { background: isDark(icon.hex) ? "#ffffff" : `#${icon.hex}14` } : undefined}
                 >
                   {icon ? (
                     <svg viewBox="0 0 24 24" role="img" aria-label={`${name} logo`} className="size-5" style={{ color: `#${icon.hex}` }}>

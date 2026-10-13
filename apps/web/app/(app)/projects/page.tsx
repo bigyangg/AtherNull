@@ -49,7 +49,7 @@ export default function ProjectsPage() {
         <EmptyState
           icon={<FolderPlus />}
           title="No projects yet"
-          description="Import a repository to get started."
+          description="A project is created for you when you turn a chat into a build. You can also import an existing repository."
           action={
             <Button asChild className="mt-1">
               <Link href="/projects/new/import">

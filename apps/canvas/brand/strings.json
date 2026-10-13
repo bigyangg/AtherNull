@@ -33,5 +33,7 @@
   "ONBOARDING$AGENT_OPENHANDS_DESCRIPTION": "The AtherNull Agent. Plans, builds and tests changes in your workspace.",
   "SETTINGS$SKILLS_ADD_MODAL_INTRO": "Extend what your agent can do by installing skills from community repositories or your own GitHub repos.",
   "SETTINGS$SKILLS_ADD_MODAL_URL_FORMATS": "Full GitHub tree links, repository paths, and short forms such as owner/repo/skills/name all work.",
-  "SETTINGS$BACKEND_SYNCED_BADGE": "These settings are saved in your AtherNull workspace."
+  "SETTINGS$BACKEND_SYNCED_BADGE": "These settings are saved in your AtherNull workspace.",
+  "HOME$LETS_START_BUILDING": "What should we build?",
+  "CONVERSATION$NO_CONVERSATIONS": "No chats yet"
 }
