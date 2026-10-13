@@ -85,7 +85,10 @@ const PLANNER_MAX_TOKENS = 4096;
 // rather than implemented blind.
 const MAX_PLANNER_ATTEMPTS = 2;
 const TRANSIENT_RETRY_DELAY_MS = 300;
-const REQUEST_TIMEOUT_MS = 30_000;
+// A plan is up to PLANNER_MAX_TOKENS of JSON from a large model; on a shared
+// endpoint (NIM's free tier queues) that regularly took 25-40s, past the old
+// 30s limit. Measured 2026-10-13: ~19-24s for a short conversation.
+const REQUEST_TIMEOUT_MS = Number(process.env.PLANNER_TIMEOUT_MS ?? 90_000);
 
 const TRANSIENT_HTTP_STATUS_CODES = new Set([429, 500, 502, 503, 504]);
 
@@ -256,6 +259,11 @@ export const callNimPlanner: PlannerClient = async (sourcePrompt, repair) => {
         model: NIM_PLANNER_MODEL,
         max_tokens: PLANNER_MAX_TOKENS,
         temperature: 0.2,
+        // Nemotron reasons before answering by default. A plan is a fixed
+        // JSON shape validated by our own schema, so the reasoning pass only
+        // costs time: off, it measured ~25% faster with half the tokens and
+        // still-valid plans (2026-10-13).
+        chat_template_kwargs: { enable_thinking: false },
         messages: [
           { role: "system", content: buildSystemPrompt() },
           { role: "user", content: withRepairNote(sourcePrompt, repair) },

@@ -218,8 +218,8 @@ function DraftStep({ discussionId }: { discussionId: string }) {
       </p>
       <div>
         <Button size="sm" disabled={draft.isPending} onClick={() => draft.mutate()}>
-          {draft.isPending ? <Loader2 className="animate-spin" /> : <ClipboardList />}
-          {draft.isPending ? "Drafting the plan… (up to a minute)" : "Draft plan"}
+          {draft.isPending ? <Loader2 className="animate-spin" /> : draft.error ? <RefreshCw /> : <ClipboardList />}
+          {draft.isPending ? "Drafting the plan… (up to a minute)" : draft.error ? "Try again" : "Draft plan"}
         </Button>
       </div>
       <ErrorLine error={draft.error ? message(draft.error) : null} />

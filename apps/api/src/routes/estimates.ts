@@ -133,14 +133,23 @@ function isUniqueViolation(err: unknown): boolean {
   );
 }
 
-// Planner + pricing for one prompt. Planner trouble is a 502 for the caller.
+// Planner + pricing for one prompt. Planner trouble is a 502 for the caller,
+// with a plain message; the provider detail goes to the server log only.
 async function planAndPrice(sourcePrompt: string) {
   let result;
   try {
     result = await generatePlannerOutput(sourcePrompt);
   } catch (err) {
-    if (err instanceof PlannerError) throw new HttpError(502, err.message);
-    if (err instanceof z.ZodError) throw new HttpError(502, `Planner produced invalid output: ${err.message}`);
+    if (err instanceof PlannerError || err instanceof z.ZodError) {
+      console.warn(`[planner] ${err instanceof PlannerError ? err.message : `invalid output: ${err.message.slice(0, 300)}`}`);
+      const busy = err instanceof PlannerError && err.kind === "transient_provider";
+      throw new HttpError(
+        502,
+        busy
+          ? "Drafting the plan is taking longer than usual because the AI service is busy. Please try again in a minute."
+          : "The plan couldn't be drafted this time. Please try again.",
+      );
+    }
     throw err;
   }
   return { ...result, pricing: priceEstimate(result.plannerOutput.resourceEstimate, RATE_CONFIG) };
