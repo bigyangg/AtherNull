@@ -66,20 +66,30 @@ type Stage = 0 | 1 | 2 | 3 | 4;
 // worker): the honest time figure, unlike the planner's human-hours estimate.
 const AGENT_RUN_CAP = "up to 30 min";
 
-function Journey({ stage }: { stage: Stage }) {
+function Journey({ stage, failedAt }: { stage: Stage; failedAt?: number }) {
   return (
     <ol className="flex items-center gap-1.5 px-3.5 pb-2.5 text-[11px]">
       {JOURNEY.map((label, i) => {
-        const done = i < stage;
-        const current = i === stage;
+        const failed = failedAt !== undefined && i === failedAt;
+        const done = !failed && i < (failedAt ?? stage);
+        const current = failedAt === undefined && i === stage;
+        const tone = failed
+          ? "bg-destructive/15 font-medium text-destructive"
+          : current
+            ? "bg-primary/15 font-medium text-foreground"
+            : done
+              ? "text-success"
+              : "text-muted-foreground";
         return (
           <li key={label} className="flex items-center gap-1.5">
-            <span
-              className={`flex items-center gap-1 rounded-full px-2 py-0.5 ${
-                current ? "bg-primary/15 font-medium text-foreground" : done ? "text-success" : "text-muted-foreground"
-              }`}
-            >
-              {done ? <CheckCircle2 className="size-3" /> : <Circle className={`size-2 ${current ? "fill-current text-primary" : ""}`} />}
+            <span className={`flex items-center gap-1 rounded-full px-2 py-0.5 ${tone}`}>
+              {failed ? (
+                <XCircle className="size-3" />
+              ) : done ? (
+                <CheckCircle2 className="size-3" />
+              ) : (
+                <Circle className={`size-2 ${current ? "fill-current text-primary" : ""}`} />
+              )}
               {label}
             </span>
             {i < JOURNEY.length - 1 && <span className={`h-px w-3 ${done ? "bg-success/60" : "bg-border"}`} />}
@@ -95,6 +105,7 @@ function Step({
   title,
   badge,
   stage,
+  failedAt,
   children,
   details,
   detailsLabel = "details",
@@ -104,6 +115,8 @@ function Step({
   title: string;
   badge?: ReactNode;
   stage: Stage;
+  /** The journey step that failed (shown with a cross), if any. */
+  failedAt?: number;
   children: ReactNode;
   /** Secondary information, folded away in the chat and open on the full page. */
   details?: ReactNode;
@@ -118,7 +131,7 @@ function Step({
           <span className="min-w-0 flex-1 truncate text-base">{title}</span>
           {badge}
         </div>
-        <Journey stage={stage} />
+        <Journey stage={stage} failedAt={failedAt} />
       </div>
       <div className="flex flex-col gap-3.5 p-4 text-sm">{children}</div>
       {details && (
@@ -577,6 +590,18 @@ function NoWallet({ discussionId }: { discussionId: string }) {
   );
 }
 
+/** A worker failure reason in plain words (anything unrecognised is shown as reported). */
+function friendlyFailure(reason: string): string {
+  if (/wall time/i.test(reason)) return "it ran out of time (each build may run for up to 30 minutes)";
+  if (/ended in status/i.test(reason)) return "the agent hit an error and stopped before finishing";
+  if (/starting the conversation failed/i.test(reason)) return "the build agent could not be started in your workspace";
+  if (/no agent sandbox/i.test(reason)) return "your workspace was not ready";
+  if (/USAGE_ENFORCEMENT_FAILED/.test(reason)) return "it reached its usage limit";
+  return reason.length > 220 ? `${reason.slice(0, 220)}…` : reason;
+}
+
+const STOPPED = new Set<TaskStatus>(["FAILED", "CANCELLED", "REJECTED", "REFUNDING", "REFUNDED"]);
+
 const PROGRESS: { label: string; reached: TaskStatus[] }[] = [
   { label: "Paid", reached: ["FUNDED", "QUEUED", "RUNNING", "VERIFYING", "AWAITING_ACCEPTANCE", "ACCEPTED", "SETTLING", "SETTLED"] },
   { label: "Building", reached: ["RUNNING", "VERIFYING", "AWAITING_ACCEPTANCE", "ACCEPTED", "SETTLING", "SETTLED"] },
@@ -595,8 +620,26 @@ function BuildStep({ state }: { state: ChatBuildState }) {
   const accept = useAcceptTask(taskId);
   const reject = useRejectTask(taskId);
   const refund = useRefundTask(taskId);
-  const run = task?.verificationRuns?.at(-1);
-  const failed = status === "FAILED" || status === "CANCELLED" || status === "REJECTED";
+  // Newest first: a retried build's latest attempt and checks are what count.
+  const run = [...(task?.verificationRuns ?? [])].sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
+  const lastAttempt = [...(task?.executions ?? [])].sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
+  const stopped = STOPPED.has(status);
+  // Verified and then turned down (directly, or refunded after a reject).
+  const rejected = status === "REJECTED" || (stopped && status !== "FAILED" && run?.outcome === "PASS");
+  let why: string | null = null;
+  if (stopped) {
+    if (run?.outcome === "FAIL") why = `The independent checks failed: ${String(run.evidence?.reason ?? "the tests did not pass")}.`;
+    else if (lastAttempt?.failureReason) why = `The build did not finish: ${friendlyFailure(lastAttempt.failureReason)}.`;
+    else if (rejected) why = "You rejected the result after it was verified.";
+  }
+  // What actually happened, not the success path.
+  const progressReached = (label: string, reached: TaskStatus[]) => {
+    if (!stopped) return reached.includes(status);
+    if (label === "Paid") return true;
+    if (label === "Building") return Boolean(lastAttempt);
+    if (label === "Verified") return run?.outcome === "PASS";
+    return false;
+  };
   const error = accept.error ?? reject.error ?? refund.error;
 
   return (
@@ -605,6 +648,7 @@ function BuildStep({ state }: { state: ChatBuildState }) {
       title="Your build"
       badge={<Badge variant={display.tone === "default" ? "info" : display.tone}>{display.label}</Badge>}
       stage={status === "SETTLED" || status === "REFUNDED" ? 4 : 3}
+      failedAt={stopped ? (run?.outcome === "PASS" ? 4 : 3) : undefined}
       discussionId={state.discussionId}
       detailsLabel="Code changes"
       details={
@@ -621,7 +665,7 @@ function BuildStep({ state }: { state: ChatBuildState }) {
       <p className="text-foreground">{state.plan?.plannerOutput.goal}</p>
       <ol className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
         {PROGRESS.map((p) => {
-          const done = p.reached.includes(status);
+          const done = progressReached(p.label, p.reached);
           return (
             <li key={p.label} className={`flex items-center gap-1.5 ${done ? "text-foreground" : "text-muted-foreground"}`}>
               {done ? <CheckCircle2 className="size-3.5 text-success" /> : <Circle className="size-3.5" />}
@@ -670,8 +714,24 @@ function BuildStep({ state }: { state: ChatBuildState }) {
         </Button>
       )}
       {status === "SETTLED" && <p className="text-success">Done. The payment was released and the code is yours.</p>}
-      {status === "REFUNDED" && <p className="text-muted-foreground">Refunded to your wallet.</p>}
-      {failed && status !== "FAILED" && <p className="text-muted-foreground">This build was stopped.</p>}
+      {stopped && (
+        <div className="flex flex-col gap-1.5 rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2.5">
+          <p className="flex items-center gap-2 font-medium text-foreground">
+            <XCircle className="size-4 text-destructive" />
+            {rejected ? "You rejected this build" : "This build didn't succeed"}
+          </p>
+          {why && <p className="text-xs leading-relaxed text-muted-foreground">{why}</p>}
+          <p className="text-xs leading-relaxed text-muted-foreground">
+            {status === "REFUNDED"
+              ? "Your payment was refunded to your wallet on Solana Devnet. You were not charged."
+              : status === "REFUNDING"
+                ? "Your refund is on its way back to your wallet…"
+                : status === "FAILED"
+                  ? "You have not been charged. Get your payment back with the button below."
+                  : "You were not charged for this build."}
+          </p>
+        </div>
+      )}
       <ErrorLine error={error ? message(error) : null} />
     </Step>
   );
@@ -684,6 +744,12 @@ export function ChatBuildCard({ discussionId }: { discussionId: string }) {
   if (!state.task) return <PlanStep state={state} />;
   if (state.task.status === "AWAITING_FUNDING") return <PayStep state={state} />;
   return <BuildStep state={state} />;
+}
+
+/** One progress dot in the bar: done, current, failed (red) or not yet. */
+function dotTone(i: number, stage: number, failedAt: number | undefined): string {
+  if (failedAt !== undefined) return i === failedAt ? "w-5 bg-destructive" : i < failedAt ? "w-3 bg-success" : "w-3 bg-border";
+  return i < stage ? "w-3 bg-success" : i === stage ? "w-5 bg-primary" : "w-3 bg-border";
 }
 
 /** The bar's content for each point of the journey. */
@@ -717,13 +783,20 @@ function barContent(state: ChatBuildState, requiredLamports: string | null) {
   if (status === "AWAITING_ACCEPTANCE") {
     return { stage: 3 as Stage, icon: <Hammer />, title: goal, note: "Verified · ready for your review", action: "Review & accept" };
   }
-  if (status === "SETTLED" || status === "REFUNDED") {
+  if (status === "SETTLED") {
+    return { stage: 4 as Stage, icon: <CheckCircle2 />, title: goal, note: "Done · payment released", action: "View" };
+  }
+  if (status === "FAILED") {
+    return { stage: 3 as Stage, icon: <XCircle />, title: goal, note: "Build didn't succeed · you can get your payment back", action: "See why", failedAt: 3 };
+  }
+  if (status === "REFUNDING" || status === "REFUNDED") {
     return {
       stage: 4 as Stage,
-      icon: <CheckCircle2 />,
+      icon: <XCircle />,
       title: goal,
-      note: status === "SETTLED" ? "Done · payment released" : "Refunded to your wallet",
-      action: "View",
+      note: status === "REFUNDING" ? "Refund on its way to your wallet" : "Refunded to your wallet · not charged",
+      failedAt: 3,
+      action: "See why",
     };
   }
   const working = status === "FUNDED" || status === "QUEUED" || status === "RUNNING" || status === "VERIFYING";
@@ -780,7 +853,7 @@ export function ChatBuildBar({ discussionId }: { discussionId: string }) {
               <span
                 key={label}
                 title={label}
-                className={`h-1.5 rounded-full ${i < bar.stage ? "w-3 bg-success" : i === bar.stage ? "w-5 bg-primary" : "w-3 bg-border"}`}
+                className={`h-1.5 rounded-full ${dotTone(i, bar.stage, "failedAt" in bar ? bar.failedAt : undefined)}`}
               />
             ))}
           </span>

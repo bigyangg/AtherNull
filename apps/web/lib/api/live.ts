@@ -115,6 +115,7 @@ interface RawExecution {
   started_at: string | null;
   ended_at: string | null;
   created_at: string;
+  failure_reason?: string | null;
 }
 
 interface RawTask {
@@ -247,6 +248,7 @@ function toExecution(raw: RawExecution): Execution {
     startedAt: raw.started_at,
     endedAt: raw.ended_at,
     createdAt: raw.created_at,
+    failureReason: raw.failure_reason ?? null,
   };
 }
 

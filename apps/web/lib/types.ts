@@ -130,6 +130,8 @@ export interface Execution {
   startedAt: string | null;
   endedAt: string | null;
   createdAt: string;
+  /** Why this attempt failed, as the worker reported it (null when it didn't). */
+  failureReason: string | null;
 }
 
 export interface Task {
