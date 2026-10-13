@@ -118,6 +118,27 @@ def preview_root(checkout: Path, plan: PreviewPlan) -> Path | None:
     return None
 
 
+def decide_browser(result: dict | None) -> tuple[str, str]:
+    """The browser smoke check's verdict on a verified web app.
+
+    FAIL when the page throws errors or fails to load its own files, or has
+    buttons and clicking them changes nothing on the page. INCONCLUSIVE when
+    the check itself could not run (an infrastructure problem must not fail
+    the customer's build). PASS otherwise."""
+    if not result:
+        return "INCONCLUSIVE", "the browser check produced no result"
+    errors = [str(e) for e in result.get("errors") or []]
+    infra = [e for e in errors if e.startswith(("the browser check could not run", "the browser check timed out"))]
+    if infra and len(infra) == len(errors):
+        return "INCONCLUSIVE", infra[0]
+    if errors:
+        more = f" (and {len(errors) - 1} more)" if len(errors) > 1 else ""
+        return "FAIL", f"the page has errors in a browser: {errors[0]}{more}"
+    if (result.get("buttons") or 0) > 0 and result.get("interactive") is False:
+        return "FAIL", "the page's buttons do nothing when clicked"
+    return "PASS", "the page loads without errors and responds to clicks"
+
+
 def decide(exit_code: int | None, tests: list[dict]) -> tuple[str, str]:
     """PASS only when the suite exited 0 AND ran at least one test AND none
     failed. Anything else — including "no tests ran" — is a FAIL."""

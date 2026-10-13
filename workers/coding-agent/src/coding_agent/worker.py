@@ -126,6 +126,8 @@ DELIVERY_RULES = """How this build is checked and delivered:
 - Put the logic in plain modules the tests import; test real behaviour, not just that files exist.
 - If this is a web app, it gets a public live link. Unless the request names a framework, build it as a static site with plain HTML, CSS and JavaScript: index.html at the repository root, relative paths for every asset (./app.js, never /app.js), no build step, no server. If a framework is required, use Vite with `base: './'` so `npm run build` writes a static site to dist/.
 - The live page runs sandboxed: it cannot use localStorage, cookies or call back to AtherNull; keep state in memory.
+- The verifier also opens index.html in a real browser: the build fails if the page throws any error or its buttons do nothing. Make the browser code and the tested code work together: either load your scripts with <script type="module"> and use import/export everywhere, or use plain scripts with no import/export at all (expose the logic for Node with `if (typeof module !== "undefined") module.exports = ...`). Never put `export` in a file loaded by a plain <script> tag.
+- Before you finish, check the page in a real browser from the terminal (headless Chromium is installed: serve the folder with `python3 -m http.server` and run `chromium --headless=new --no-sandbox --enable-logging=stderr --v=0 --dump-dom http://127.0.0.1:8000/`), and fix any "Uncaught" error it prints.
 - Commit nothing secret, and keep the change to what was asked."""
 
 

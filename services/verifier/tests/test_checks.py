@@ -4,6 +4,7 @@ from pathlib import Path
 from verifier.checks import (
     NPM_DEFAULT_TEST,
     decide,
+    decide_browser,
     detect_preview_plan,
     detect_test_plan,
     parse_results,
@@ -123,3 +124,23 @@ def test_no_web_app_means_no_preview(tmp_path):
     plan = detect_preview_plan(tmp_path)
     assert plan.build is None
     assert preview_root(tmp_path, plan) is None
+
+
+def test_browser_errors_fail_the_build():
+    verdict, reason = decide_browser({"errors": ["SyntaxError: Unexpected token 'export'", "ReferenceError: x"], "buttons": 17, "interactive": None})
+    assert verdict == "FAIL"
+    assert "SyntaxError" in reason and "1 more" in reason
+
+
+def test_buttons_that_do_nothing_fail_the_build():
+    assert decide_browser({"errors": [], "buttons": 2, "interactive": False})[0] == "FAIL"
+
+
+def test_a_working_page_passes():
+    assert decide_browser({"errors": [], "buttons": 17, "interactive": True})[0] == "PASS"
+    assert decide_browser({"errors": [], "buttons": 0, "interactive": None})[0] == "PASS"
+
+
+def test_a_check_that_could_not_run_does_not_fail_the_customer():
+    assert decide_browser(None)[0] == "INCONCLUSIVE"
+    assert decide_browser({"errors": ["the browser check timed out"], "buttons": 0, "interactive": None})[0] == "INCONCLUSIVE"

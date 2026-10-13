@@ -28,6 +28,7 @@ from pathlib import Path
 
 from verifier.checks import (
     decide,
+    decide_browser,
     detect_preview_plan,
     detect_test_plan,
     parse_results,
@@ -201,29 +202,72 @@ def verify(job: dict) -> dict:
         evidence.update({"exitCode": code, "reason": reason, "logTail": output[-LOG_TAIL:]})
         result = {"outcome": outcome, "tests": tests, "evidence": evidence}
         if outcome == "PASS":
-            # Never changes the verdict: a build that can't be previewed is
-            # still a passing build.
-            files, note = build_preview(repo)
+            root, note = preview_site(repo)
             evidence["preview"] = note
-            if files:
-                result["preview"] = files
+            if root is not None:
+                # A web app must also work in a browser: passing unit tests
+                # with a page that throws on load, or whose buttons do
+                # nothing, is not a working build.
+                browser = browser_check(repo, root)
+                verdict, why = decide_browser(browser)
+                evidence["browserCheck"] = {"verdict": verdict, "reason": why, **(browser or {})}
+                tests.append({"name": "web page loads without errors and responds in a browser", "passed": verdict != "FAIL"})
+                if verdict == "FAIL":
+                    result["outcome"] = "FAIL"
+                    evidence["reason"] = f"the app does not work in a browser: {why}"
+                    evidence["preview"] = "no preview: the app failed the browser check"
+                    return result
+                files, note = collect_preview(root)
+                evidence["preview"] = note
+                if files:
+                    result["preview"] = files
         return result
     finally:
         evidence["durationMs"] = int((time.monotonic() - started) * 1000)
         shutil.rmtree(tmp, ignore_errors=True)
 
 
-def build_preview(repo: Path) -> tuple[list[dict] | None, str]:
-    """The verified checkout as a static site, as upload-ready files."""
+BROWSER_SMOKE = Path(__file__).with_name("browser_smoke.mjs")
+SMOKE_PORT = 8123
+
+
+def preview_site(repo: Path) -> tuple[Path | None, str]:
+    """Where the verified checkout's static site is, building it first if the
+    project has a build step (offline, like the tests)."""
     plan = detect_preview_plan(repo)
     if plan.build:
-        # Offline, like the tests: dependencies were installed before them.
         code, output = in_container(repo, plan.build, network=False, timeout=TEST_TIMEOUT, env={"PUBLIC_URL": "."})
         if code != 0:
             return None, f"no preview: the site build failed (exit {code}): {output[-300:]}"
     root = preview_root(repo, plan)
     if root is None:
         return None, "no preview: no index.html (not a web app, or no static build output)"
+    return root, "web app found"
+
+
+def browser_check(repo: Path, root: Path) -> dict | None:
+    """Opens the site in headless Chromium inside the verifier's container,
+    still with no network: the page is served from the checkout itself."""
+    shutil.copyfile(BROWSER_SMOKE, repo / ".athernull-smoke.mjs")
+    rel = root.relative_to(repo).as_posix()
+    site = "/work" if rel in ("", ".") else f"/work/{rel}"
+    command = (
+        f"cd {site} && (python3 -m http.server {SMOKE_PORT} --bind 127.0.0.1 >/dev/null 2>&1 &) "
+        f"&& sleep 1 && node /work/.athernull-smoke.mjs http://127.0.0.1:{SMOKE_PORT}/"
+    )
+    _code, output = in_container(repo, command, network=False, timeout=150)
+    for line in reversed(output.strip().splitlines()):
+        line = line.strip()
+        if line.startswith("{"):
+            try:
+                return json.loads(line)
+            except ValueError:
+                return None
+    return None
+
+
+def collect_preview(root: Path) -> tuple[list[dict] | None, str]:
+    """The site's files, upload-ready."""
     files: list[dict] = []
     total = 0
     for path in sorted(root.rglob("*")):
