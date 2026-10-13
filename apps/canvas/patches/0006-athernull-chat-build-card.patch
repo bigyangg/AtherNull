@@ -1,20 +1,24 @@
 diff --git a/src/components/features/chat/athernull-build-card.tsx b/src/components/features/chat/athernull-build-card.tsx
 new file mode 100644
-index 0000000..f4fbdb9
+index 0000000..6e4935d
 --- /dev/null
 +++ b/src/components/features/chat/athernull-build-card.tsx
-@@ -0,0 +1,148 @@
+@@ -0,0 +1,199 @@
 +import React from "react";
 +import { createPortal } from "react-dom";
 +
 +// AtherNull: the chat-native build (plan -> approve -> bill -> pay -> build ->
-+// review). In the chat it is one fixed-height bar — the current step and its
-+// action — so it can never be squeezed or cropped by the scrolling message
-+// list. The bar's button opens the whole build in a large panel over the
-+// canvas, with its own scrolling. Both are AtherNull's page /chat-build/<id>,
-+// framed from the same origin so the session cookie and every server-side
-+// check apply. The bar stays hidden for conversations that aren't AtherNull
-+// discussions (its page reports visible: false then).
++// review -> delivered). In the chat it is one fixed-height bar — the current
++// step and its action — so it can never be squeezed or cropped by the
++// scrolling message list. The bar's button opens the whole build in a large
++// panel over the canvas, with its own scrolling.
++//
++// The panel is preloaded in the background as soon as the bar appears, so
++// opening it is instant; opening asks it to refresh its data. Both are
++// AtherNull's page /chat-build/<id>, framed from the same origin so the
++// session cookie and every server-side check apply. The bar stays hidden for
++// conversations that aren't AtherNull discussions (its page reports
++// visible: false then).
 +const BAR_HEIGHT = 68;
 +
 +type CardMessage = { type?: string; discussionId?: string; visible?: boolean };
@@ -26,10 +30,13 @@ index 0000000..f4fbdb9
 +}) {
 +  const [visible, setVisible] = React.useState(false);
 +  const [open, setOpen] = React.useState(false);
++  const [panelReady, setPanelReady] = React.useState(false);
++  const panelRef = React.useRef<HTMLIFrameElement>(null);
 +
 +  React.useEffect(() => {
 +    setVisible(false);
 +    setOpen(false);
++    setPanelReady(false);
 +    const onMessage = (event: MessageEvent) => {
 +      if (event.origin !== window.location.origin) return;
 +      const data = event.data as CardMessage | undefined;
@@ -37,19 +44,25 @@ index 0000000..f4fbdb9
 +      if (data.type === "athernull:chat-build" && typeof data.visible === "boolean") setVisible(data.visible);
 +      if (data.type === "athernull:open-build") setOpen(true);
 +      if (data.type === "athernull:close-build") setOpen(false);
++      if (data.type === "athernull:build-ready") setPanelReady(true);
 +    };
 +    window.addEventListener("message", onMessage);
 +    return () => window.removeEventListener("message", onMessage);
 +  }, [conversationId]);
 +
++  // Opening: show the preloaded panel and have it refresh what it shows.
 +  React.useEffect(() => {
-+    if (!open) return undefined;
++    if (!open || !conversationId) return undefined;
++    panelRef.current?.contentWindow?.postMessage(
++      { type: "athernull:refresh-build", discussionId: conversationId },
++      window.location.origin,
++    );
 +    const onKey = (event: KeyboardEvent) => {
 +      if (event.key === "Escape") setOpen(false);
 +    };
 +    window.addEventListener("keydown", onKey);
 +    return () => window.removeEventListener("keydown", onKey);
-+  }, [open]);
++  }, [open, conversationId]);
 +
 +  if (!import.meta.env.VITE_ATHERNULL || !conversationId) return null;
 +  const page = `/chat-build/${encodeURIComponent(conversationId)}`;
@@ -72,14 +85,17 @@ index 0000000..f4fbdb9
 +          border: 0,
 +          background: "transparent",
 +          colorScheme: "normal",
++          opacity: visible ? 1 : 0,
++          transition: "opacity 160ms ease-out",
 +        }}
 +      />
-+      {open &&
++      {visible &&
 +        createPortal(
 +          <div
 +            role="dialog"
 +            aria-modal="true"
 +            aria-label="Your AtherNull build"
++            aria-hidden={!open}
 +            onClick={() => setOpen(false)}
 +            style={{
 +              position: "fixed",
@@ -91,6 +107,11 @@ index 0000000..f4fbdb9
 +              padding: 16,
 +              background: "rgba(0, 0, 0, 0.62)",
 +              backdropFilter: "blur(2px)",
++              // Preloaded while closed: present but invisible and inert.
++              visibility: open ? "visible" : "hidden",
++              opacity: open ? 1 : 0,
++              pointerEvents: open ? "auto" : "none",
++              transition: "opacity 140ms ease-out",
 +            }}
 +          >
 +            <div
@@ -140,11 +161,41 @@ index 0000000..f4fbdb9
 +                  </button>
 +                </span>
 +              </div>
-+              <iframe
-+                title="Your AtherNull build"
-+                src={`${page}?view=full`}
-+                style={{ flex: 1, width: "100%", border: 0, display: "block", colorScheme: "normal" }}
-+              />
++              <div style={{ position: "relative", flex: 1 }}>
++                {!panelReady && (
++                  <div
++                    style={{
++                      position: "absolute",
++                      inset: 0,
++                      display: "flex",
++                      alignItems: "center",
++                      justifyContent: "center",
++                      fontSize: 13,
++                      opacity: 0.7,
++                    }}
++                  >
++                    Loading your build…
++                  </div>
++                )}
++                <iframe
++                  ref={panelRef}
++                  key={`panel-${conversationId}`}
++                  title="Your AtherNull build"
++                  src={`${page}?view=full`}
++                  onLoad={() => setPanelReady(true)}
++                  style={{
++                    position: "absolute",
++                    inset: 0,
++                    width: "100%",
++                    height: "100%",
++                    border: 0,
++                    display: "block",
++                    colorScheme: "normal",
++                    opacity: panelReady ? 1 : 0,
++                    transition: "opacity 140ms ease-out",
++                  }}
++                />
++              </div>
 +            </div>
 +          </div>,
 +          document.body,

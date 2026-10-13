@@ -2,6 +2,7 @@
 
 import { Suspense, useEffect } from "react";
 import { useParams, useSearchParams } from "next/navigation";
+import { useQueryClient } from "@tanstack/react-query";
 
 import { ChatBuildBar, ChatBuildCard } from "@/components/chat-build/chat-build-card";
 import { useEmbeddedInCanvas } from "@/lib/use-embedded";
@@ -15,6 +16,22 @@ function ChatBuildView() {
   const { discussionId } = useParams<{ discussionId: string }>();
   const view = useSearchParams().get("view");
   const framed = useEmbeddedInCanvas();
+  const queryClient = useQueryClient();
+
+  // The canvas preloads the full view in the background and asks it to
+  // refresh when it is opened, so it opens instantly and never shows stale
+  // status (patch 0006). It is also told when the view is ready.
+  useEffect(() => {
+    if (!framed || view === "bar") return;
+    const onMessage = (event: MessageEvent) => {
+      if (event.origin !== window.location.origin) return;
+      const data = event.data as { type?: string; discussionId?: string } | undefined;
+      if (data?.type === "athernull:refresh-build" && data.discussionId === discussionId) void queryClient.invalidateQueries();
+    };
+    window.addEventListener("message", onMessage);
+    window.parent.postMessage({ type: "athernull:build-ready", discussionId }, window.location.origin);
+    return () => window.removeEventListener("message", onMessage);
+  }, [framed, view, discussionId, queryClient]);
 
   useEffect(() => {
     if (!framed || view === "bar") return;

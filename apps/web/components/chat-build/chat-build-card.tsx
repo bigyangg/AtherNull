@@ -7,6 +7,7 @@ import { Connection, Transaction } from "@solana/web3.js";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   CheckCircle2,
+  Download,
   Circle,
   ClipboardList,
   Copy,
@@ -64,7 +65,8 @@ export function useChatBuild(discussionId: string) {
 // The whole journey, shown on every step so the customer always knows where
 // they are and what comes next.
 const JOURNEY = ["Plan", "Bill", "Pay", "Build", "Done"] as const;
-type Stage = 0 | 1 | 2 | 3 | 4;
+// 5 = the whole journey is complete (every step done).
+type Stage = 0 | 1 | 2 | 3 | 4 | 5;
 
 // What the build agent is allowed per run (ORG_SANDBOX_MAX_RUN_SECONDS in the
 // worker): the honest time figure, unlike the planner's human-hours estimate.
@@ -684,6 +686,84 @@ function ReviewActions({
   );
 }
 
+/** One labelled row of the Delivered summary. */
+function DeliveredRow({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div className="flex items-center justify-between gap-4 py-2.5">
+      <span className="text-muted-foreground">{label}</span>
+      <span className="flex min-w-0 items-center gap-2 text-right text-foreground">{children}</span>
+    </div>
+  );
+}
+
+const rowLink = "inline-flex items-center gap-1.5 rounded-md border border-border bg-background px-2.5 py-1 text-xs font-medium text-foreground hover:bg-accent/40";
+
+/**
+ * The end of the journey: what was delivered and where everything is.
+ * The code downloads only now that the build is accepted (routes/delivery.ts).
+ */
+function Delivered({
+  taskId,
+  previewUrl,
+  checks,
+}: {
+  taskId: string;
+  previewUrl: string | null;
+  checks: { passed: number; total: number } | null;
+}) {
+  const { data: funding } = useProjectFunding(taskId);
+  const settlement = funding?.settlement ?? null;
+  return (
+    <div className="flex flex-col rounded-lg border border-success/30 bg-success/5 px-3.5 py-3">
+      <p className="flex items-center gap-2 font-medium text-foreground">
+        <CheckCircle2 className="size-4 text-success" /> Delivered
+      </p>
+      <p className="mt-0.5 text-xs text-muted-foreground">Built by the agent, verified independently, and paid out. The code is yours.</p>
+      <div className="mt-2 divide-y divide-border text-sm">
+        {previewUrl && (
+          <DeliveredRow label="Live app">
+            <a href={previewUrl} target="_blank" rel="noreferrer" className={rowLink}>
+              <Globe className="size-3.5 text-success" /> Open <ExternalLink className="size-3 text-muted-foreground" />
+            </a>
+          </DeliveredRow>
+        )}
+        <DeliveredRow label="Code">
+          <a href={`/v1/jobs/${encodeURIComponent(taskId)}/download`} download className={rowLink}>
+            <Download className="size-3.5" /> Download .zip
+          </a>
+        </DeliveredRow>
+        {checks && (
+          <DeliveredRow label="Verification">
+            <span className="text-success">
+              {checks.passed}/{checks.total} checks passed
+            </span>
+          </DeliveredRow>
+        )}
+        <DeliveredRow label="Payment">
+          {settlement ? (
+            <>
+              <span>{formatDevnetSol(settlement.releaseLamports)} SOL released</span>
+              {settlement.signature && (
+                <a href={devnetExplorerTxUrl(settlement.signature)} target="_blank" rel="noreferrer" className={rowLink}>
+                  Transaction <ExternalLink className="size-3 text-muted-foreground" />
+                </a>
+              )}
+            </>
+          ) : (
+            <span>Released</span>
+          )}
+        </DeliveredRow>
+        {settlement && BigInt(settlement.refundLamports) > BigInt(0) && (
+          <DeliveredRow label="Returned to you">
+            <span>{formatDevnetSol(settlement.refundLamports)} SOL</span>
+          </DeliveredRow>
+        )}
+      </div>
+      <p className="mt-2 text-xs text-muted-foreground">Want something else built? Start a new chat in the canvas.</p>
+    </div>
+  );
+}
+
 /** A worker failure reason in plain words (anything unrecognised is shown as reported). */
 function friendlyFailure(reason: string): string {
   if (/wall time/i.test(reason)) return "it ran out of time (each build may run for up to 30 minutes)";
@@ -741,7 +821,7 @@ function BuildStep({ state }: { state: ChatBuildState }) {
       icon={<Hammer />}
       title="Your build"
       badge={<Badge variant={display.tone === "default" ? "info" : display.tone}>{display.label}</Badge>}
-      stage={status === "SETTLED" || status === "REFUNDED" ? 4 : 3}
+      stage={status === "SETTLED" ? 5 : status === "REFUNDED" ? 4 : 3}
       failedAt={stopped ? (run?.outcome === "PASS" ? 4 : 3) : undefined}
       discussionId={state.discussionId}
       detailsLabel="Code changes"
@@ -781,13 +861,13 @@ function BuildStep({ state }: { state: ChatBuildState }) {
         </p>
       )}
 
-      {run && (
+      {run && status !== "SETTLED" && (
         <p className={run.outcome === "PASS" ? "text-success" : "text-destructive"}>
           Verification {run.outcome === "PASS" ? "passed" : "failed"}: {run.tests.filter((t) => t.passed).length}/{run.tests.length} checks
         </p>
       )}
 
-      {state.task?.previewUrl && (
+      {state.task?.previewUrl && status !== "SETTLED" && (
         <a
           href={state.task.previewUrl}
           target="_blank"
@@ -827,7 +907,18 @@ function BuildStep({ state }: { state: ChatBuildState }) {
           {refund.isPending ? "Refunding…" : "Refund my payment"}
         </Button>
       )}
-      {status === "SETTLED" && <p className="text-success">Done. The payment was released and the code is yours.</p>}
+      {(status === "ACCEPTED" || status === "SETTLING") && (
+        <p className="flex items-center gap-2 text-muted-foreground">
+          <Loader2 className="size-4 animate-spin" /> Accepted. Releasing the payment on Solana…
+        </p>
+      )}
+      {status === "SETTLED" && (
+        <Delivered
+          taskId={taskId}
+          previewUrl={state.task?.previewUrl ?? null}
+          checks={run ? { passed: run.tests.filter((t) => t.passed).length, total: run.tests.length } : null}
+        />
+      )}
       {stopped && (
         <div className="flex flex-col gap-1.5 rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2.5">
           <p className="flex items-center gap-2 font-medium text-foreground">
@@ -920,7 +1011,7 @@ function barContent(state: ChatBuildState, requiredLamports: string | null) {
     return { stage: 3 as Stage, icon: <Hammer />, title: goal, note: "Verified · ready for your review", action: "Review" };
   }
   if (status === "SETTLED") {
-    return { stage: 4 as Stage, icon: <CheckCircle2 />, title: goal, note: "Done · payment released", action: "View" };
+    return { stage: 5 as Stage, icon: <CheckCircle2 />, title: goal, note: "Delivered · verified and paid out", action: "View" };
   }
   if (status === "FAILED") {
     return { stage: 3 as Stage, icon: <XCircle />, title: goal, note: "Build didn't succeed · you can get your payment back", action: "See why", failedAt: 3 };
