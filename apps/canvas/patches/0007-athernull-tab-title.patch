@@ -1,0 +1,14 @@
+diff --git a/src/hooks/use-app-title.ts b/src/hooks/use-app-title.ts
+--- a/src/hooks/use-app-title.ts
++++ b/src/hooks/use-app-title.ts
+@@ -14,6 +14,10 @@
+       : null,
+   );
+ 
++  // AtherNull: the browser tab shows the product name only (no status emoji,
++  // no conversation title). Hooks above still run, so their order is stable.
++  if (import.meta.env.VITE_ATHERNULL) return APP_TITLE;
++
+   const conversationTitle = conversation?.title;
+   const baseTitle =
+     conversationId && conversationTitle
