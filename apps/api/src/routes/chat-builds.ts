@@ -82,6 +82,19 @@ async function buildState(conversationId: string, organizationId: string) {
         .executeTakeFirst()) ?? null;
   }
 
+  // A queued build: how many builds the workers take before it (claim order
+  // is oldest first). An aggregate count only — nothing about whose they are.
+  let queuePosition: number | null = null;
+  if (task?.status === "QUEUED") {
+    const { ahead } = await db
+      .selectFrom("tasks")
+      .select((eb) => eb.fn.countAll<string>().as("ahead"))
+      .where("status", "=", "QUEUED")
+      .where("created_at", "<", (await db.selectFrom("tasks").select("created_at").where("id", "=", task.id).executeTakeFirstOrThrow()).created_at)
+      .executeTakeFirstOrThrow();
+    queuePosition = Number(ahead);
+  }
+
   return {
     discussionId: discussion.conversation_id,
     messageCount: discussion.message_count,
@@ -101,6 +114,7 @@ async function buildState(conversationId: string, organizationId: string) {
       currency: task.currency,
       // The verified app, live (routes/previews.ts); null until published.
       previewUrl: PREVIEWABLE_STATUSES.has(task.status) && hasPreview(task.id) ? `/preview/${task.id}/` : null,
+      queuePosition,
     },
     // Request changes: what the customer asked for so far, and the cap.
     changeRequests: task ? await listChangeRequests(task.id) : [],

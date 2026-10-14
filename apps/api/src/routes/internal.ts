@@ -68,7 +68,17 @@ export async function internalRoutes(app: FastifyInstance) {
           ORDER BY e.created_at DESC
           LIMIT 1
         ) latest ON true
-        WHERE t.status = 'QUEUED'
+        -- Several workers run side by side; at most one build per
+        -- organization runs at a time, so one customer's queue cannot take
+        -- every worker, and two builds never edit one workspace at once.
+        -- (Best effort: two claims racing for the same organization within
+        -- one commit can both win; the next claim sees the RUNNING row.)
+        WHERE (t.status = 'QUEUED'
+               AND NOT EXISTS (
+                 SELECT 1 FROM tasks r
+                  WHERE r.organization_id = t.organization_id
+                    AND r.status = 'RUNNING'
+                    AND r.id <> t.id))
            OR (t.status = 'RUNNING' AND latest.lease_expires_at < now())
         ORDER BY t.created_at
         LIMIT 1

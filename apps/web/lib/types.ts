@@ -443,6 +443,8 @@ export interface ChatBuildState {
     currency: string;
     /** The verified build's app, live (sandboxed); null until it is published. */
     previewUrl: string | null;
+    /** While QUEUED: builds the workers take before this one. */
+    queuePosition: number | null;
   } | null;
   /** Changes the customer requested on this build, oldest first. */
   /** source "verifier": an automatic fix round after failed checks. */

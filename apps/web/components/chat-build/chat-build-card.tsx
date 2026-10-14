@@ -865,7 +865,7 @@ function BuildStep({ state }: { state: ChatBuildState }) {
               : latestRound
                 ? `Applying your changes (round ${customerRounds.length})…`
                 : status === "QUEUED"
-                  ? "Waiting for an agent…"
+                  ? queueText(state.task?.queuePosition ?? null)
                   : "The agent is building it…"}
         </p>
       )}
@@ -1063,9 +1063,17 @@ function barContent(state: ChatBuildState, requiredLamports: string | null) {
         ? latestRound.source === "verifier"
           ? "Fixing a problem the checks found"
           : `Applying your changes (round ${state.changeRequests.filter((c) => c.source !== "verifier").length})`
-        : (display?.label ?? "In progress"),
+        : status === "QUEUED"
+          ? queueText(state.task?.queuePosition ?? null).replace(/…$/, "")
+          : (display?.label ?? "In progress"),
     action: working ? "View progress" : "View",
   };
+}
+
+/** A queued build's wait, in words. */
+function queueText(ahead: number | null): string {
+  if (!ahead) return "Next in line. An agent picks it up shortly…";
+  return `Waiting for an agent: ${ahead} ${ahead === 1 ? "build" : "builds"} ahead of yours…`;
 }
 
 /**

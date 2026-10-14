@@ -241,6 +241,13 @@ const demoRepo = PROD ? null : ensureDemoRepo();
 
 const worker = parseEnv(join(root, "workers/coding-agent/.env"));
 const python = join(root, "workers/coding-agent", isWin ? ".venv/Scripts/python.exe" : ".venv/bin/python");
+const apiEnv = parseEnv(join(root, "apps/api/.env"));
+// Builds and verifications run side by side (each process claims with SKIP
+// LOCKED; at most one build per organization runs at a time). Set in
+// apps/api/.env or the environment.
+const count = (name, fallback) => Math.max(1, Number(process.env[name] ?? apiEnv[name] ?? fallback) || fallback);
+const WORKERS = count("WORKER_CONCURRENCY", 1);
+const VERIFIERS = count("VERIFIER_CONCURRENCY", 1);
 
 if (PROD) {
   start("api", "32", "pnpm", ["--filter", "@athernull/api", "exec", "tsx", "--env-file-if-exists=.env", "src/index.ts"], {
@@ -254,18 +261,20 @@ start("ingress", "34", process.execPath, ["infrastructure/ingress/dev-ingress.mj
   env: { ...process.env, CANVAS_DIST: join(root, "apps/canvas/upstream/build") },
 });
 if (existsSync(python)) {
-  start("worker", "33", python, ["-u", "-m", "coding_agent.worker"], {
-    cwd: join(root, "workers/coding-agent"),
-    shell: false,
-    env: {
-      ...process.env,
-      ...worker,
-      ATHERNULL_API_URL: "http://localhost:3001",
-      EXECUTION_ADAPTER: "org_sandbox",
-      OPENHANDS_SUPPRESS_BANNER: "1",
-      PYTHONPATH: "src",
-    },
-  });
+  for (let i = 1; i <= WORKERS; i++) {
+    start(WORKERS > 1 ? `worker${i}` : "worker", "33", python, ["-u", "-m", "coding_agent.worker"], {
+      cwd: join(root, "workers/coding-agent"),
+      shell: false,
+      env: {
+        ...process.env,
+        ...worker,
+        ATHERNULL_API_URL: "http://localhost:3001",
+        EXECUTION_ADAPTER: "org_sandbox",
+        OPENHANDS_SUPPRESS_BANNER: "1",
+        PYTHONPATH: "src",
+      },
+    });
+  }
 } else {
   log("worker venv not found (workers/coding-agent/.venv); builds will stay queued");
 }
@@ -274,17 +283,19 @@ if (existsSync(python)) {
 start("provisioner", "36", "pnpm", ["--filter", "@athernull/api", "sandbox:provisioner"]);
 
 // Independent verifier (ADR-0017): stdlib-only Python, its own token.
-const apiEnv = parseEnv(join(root, "apps/api/.env"));
-start("verifier", "31", existsSync(python) ? python : "python", ["-u", "-m", "verifier.service"], {
-  cwd: join(root, "services/verifier"),
-  shell: false,
-  env: {
-    ...process.env,
-    PYTHONPATH: "src",
-    ATHERNULL_API_URL: "http://localhost:3001",
-    VERIFIER_API_TOKEN: apiEnv.VERIFIER_API_TOKEN,
-  },
-});
+for (let i = 1; i <= VERIFIERS; i++) {
+  start(VERIFIERS > 1 ? `verifier${i}` : "verifier", "31", existsSync(python) ? python : "python", ["-u", "-m", "verifier.service"], {
+    cwd: join(root, "services/verifier"),
+    shell: false,
+    env: {
+      ...process.env,
+      PYTHONPATH: "src",
+      ATHERNULL_API_URL: "http://localhost:3001",
+      VERIFIER_API_TOKEN: apiEnv.VERIFIER_API_TOKEN,
+    },
+  });
+}
+log(`${WORKERS} build worker(s), ${VERIFIERS} verifier(s)`);
 
 log(`AtherNull on ${ORIGIN}  (sign in, then provision your org's sandbox once)`);
 if (demoRepo) log(`demo repository for projects: ${demoRepo}`);
