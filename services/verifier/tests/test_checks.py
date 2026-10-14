@@ -41,6 +41,27 @@ def test_python_project_uses_pytest(tmp_path: Path) -> None:
     assert plan.parser == "pytest" and "-r requirements.txt" in plan.install
 
 
+def test_node_tests_without_package_json_still_run(tmp_path: Path) -> None:
+    # The Lumen build (2026-10-14): tests written, package.json forgotten.
+    write(tmp_path / "index.html", "<html></html>")
+    write(tmp_path / "utils.js", "export const fee = (a) => a * 0.005;\n")
+    write(tmp_path / "test" / "utils.test.js", "import test from 'node:test';\n")
+    plan = detect_test_plan(tmp_path)
+    assert plan is not None and plan.install is None and plan.parser == "tap"
+    assert plan.test == "node --test test/utils.test.js"
+
+
+def test_node_test_files_are_found_by_name_and_folder_only(tmp_path: Path) -> None:
+    for name in ["app.js", "contest.js", "latest.mjs", "test-helpers/x.js"]:
+        write(tmp_path / name, "")
+    assert detect_test_plan(tmp_path) is None
+    for name in ["a.test.js", "b.spec.mjs", "test-c.cjs", "tests/d.js", "node_modules/e.test.js"]:
+        write(tmp_path / name, "")
+    plan = detect_test_plan(tmp_path)
+    assert plan is not None
+    assert plan.test == "node --test a.test.js b.spec.mjs test-c.cjs tests/d.js"
+
+
 def test_no_tests_means_no_plan(tmp_path: Path) -> None:
     write(tmp_path / "README.md", "hi")
     assert detect_test_plan(tmp_path) is None

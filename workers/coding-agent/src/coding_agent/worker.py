@@ -122,7 +122,7 @@ def clone_repository(repository_snapshot: str, dest: Path) -> None:
 # correct build is also a verifiable, previewable one.
 DELIVERY_RULES = """How this build is checked and delivered:
 - An independent verifier checks out your final commit on its own, installs dependencies, then runs the tests with NO network. Only passing tests count.
-- JavaScript/TypeScript: `npm test` must run the tests with Node's built-in runner (`node --test`, using `node:test` and `node:assert`). Do not use Jest, Vitest or Mocha. Python: pytest.
+- JavaScript/TypeScript: `npm test` must run the tests with Node's built-in runner (`node --test`, using `node:test` and `node:assert`). Do not use Jest, Vitest or Mocha. Always commit a `package.json` at the project root with `"scripts": { "test": "node --test" }`, even for a plain HTML/CSS/JS site, and run `npm test` yourself before finishing. Python: pytest.
 - Put the logic in plain modules the tests import; test real behaviour, not just that files exist.
 - If this is a web app, it gets a public live link. Unless the request names a framework, build it as a static site with plain HTML, CSS and JavaScript: index.html at the repository root, relative paths for every asset (./app.js, never /app.js), no build step, no server. If a framework is required, use Vite with `base: './'` so `npm run build` writes a static site to dist/.
 - The live page runs sandboxed: it cannot use localStorage, cookies or call back to AtherNull; keep state in memory.

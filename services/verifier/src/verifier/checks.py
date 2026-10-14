@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import re
+import shlex
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -21,22 +22,46 @@ class TestPlan:
     parser: str  # "tap" | "pytest"
 
 
+_NODE_TEST_FILE = re.compile(r"(^|[._-])(test|spec)s?\.(c|m)?js$")
+
+
+def node_test_files(checkout: Path) -> list[str]:
+    """JavaScript test files, as Node's test runner names them: *.test.js,
+    *.spec.js, test-*.js, and anything under a test/ or tests/ directory."""
+    found = []
+    for path in sorted(checkout.rglob("*.*js")):
+        rel = path.relative_to(checkout)
+        if "node_modules" in rel.parts or not path.is_file() or path.suffix not in (".js", ".mjs", ".cjs"):
+            continue
+        if _NODE_TEST_FILE.search(path.name) or path.name.startswith("test-") or any(p in ("test", "tests") for p in rel.parts[:-1]):
+            found.append(rel.as_posix())
+    return found[:200]
+
+
 def detect_test_plan(checkout: Path) -> TestPlan | None:
     package_json = checkout / "package.json"
+    pkg: dict = {}
     if package_json.is_file():
         try:
             pkg = json.loads(package_json.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             pkg = {}
-        test_script = (pkg.get("scripts") or {}).get("test")
-        if test_script and test_script.strip() != NPM_DEFAULT_TEST:
-            has_deps = bool(pkg.get("dependencies") or pkg.get("devDependencies"))
-            install = None
-            if has_deps:
-                lock = (checkout / "package-lock.json").is_file()
-                install = "npm ci --ignore-scripts --no-audit --no-fund" if lock else "npm install --ignore-scripts --no-audit --no-fund"
-            # node --test (and most JS runners) print TAP when stdout is not a TTY.
-            return TestPlan(install=install, test="npm test --silent", parser="tap")
+    has_deps = bool(pkg.get("dependencies") or pkg.get("devDependencies"))
+    install = None
+    if has_deps:
+        lock = (checkout / "package-lock.json").is_file()
+        install = "npm ci --ignore-scripts --no-audit --no-fund" if lock else "npm install --ignore-scripts --no-audit --no-fund"
+    test_script = (pkg.get("scripts") or {}).get("test")
+    if test_script and test_script.strip() != NPM_DEFAULT_TEST:
+        # node --test (and most JS runners) print TAP when stdout is not a TTY.
+        return TestPlan(install=install, test="npm test --silent", parser="tap")
+
+    # Tests written for Node's built-in runner but no `npm test` script (the
+    # agent forgot package.json): run them directly rather than fail a build
+    # whose tests exist.
+    files = node_test_files(checkout)
+    if files:
+        return TestPlan(install=install, test=shlex.join(["node", "--test", *files]), parser="tap")
 
     python_markers = ["pytest.ini", "pyproject.toml", "setup.cfg", "tox.ini"]
     has_python_tests = any((checkout / m).is_file() for m in python_markers) or any(
