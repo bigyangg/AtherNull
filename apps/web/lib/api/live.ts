@@ -12,6 +12,7 @@ import type {
   Discussion,
   BudgetAuthorization,
   ChatBuildState,
+  ConversationOwner,
   EstimateResult,
   Execution,
   ExecutionEvent,
@@ -476,6 +477,19 @@ export const liveApi: TaskDashboardApi = {
 
   updateChatPlan(discussionId: string) {
     return apiFetch<ProjectEstimate>(`/v1/discussions/${encodeURIComponent(discussionId)}/plan/update`, { method: "POST" });
+  },
+
+  retryChatBuild(discussionId: string) {
+    return apiFetch<ProjectEstimate>(`/v1/discussions/${encodeURIComponent(discussionId)}/build/retry`, { method: "POST" });
+  },
+
+  async getConversationOwner(conversationId: string) {
+    try {
+      return await apiFetch<ConversationOwner>(`/v1/conversations/${encodeURIComponent(conversationId)}/owner`);
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 404) return null;
+      throw err;
+    }
   },
 
   listBuilds() {

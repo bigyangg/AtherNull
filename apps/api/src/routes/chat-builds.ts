@@ -68,7 +68,10 @@ async function buildState(conversationId: string, organizationId: string) {
         .selectFrom("tasks")
         .innerJoin("project_estimates as e", "e.id", "tasks.source_estimate_id")
         .select(["tasks.id", "tasks.status", "tasks.project_id", "tasks.max_budget_minor", "tasks.currency"])
-        .where("e.lineage_id", "=", head.lineage_id)
+        // The current attempt: the build made from the current plan version.
+        // "Try again" (below) starts a new version, so earlier attempts stay
+        // on older ones and are only counted.
+        .where("tasks.source_estimate_id", "=", head.id)
         .where("tasks.organization_id", "=", organizationId)
         .orderBy("tasks.created_at", "desc")
         .executeTakeFirst()) ?? null;
@@ -80,6 +83,33 @@ async function buildState(conversationId: string, organizationId: string) {
         .where("status", "in", ["ACTIVE", "CONSUMED"])
         .orderBy("created_at", "desc")
         .executeTakeFirst()) ?? null;
+  }
+
+  let previousAttempts = 0;
+  let agentConversationId: string | null = null;
+  if (head) {
+    const { n } = await db
+      .selectFrom("tasks")
+      .innerJoin("project_estimates as e", "e.id", "tasks.source_estimate_id")
+      .select((eb) => eb.fn.countAll<string>().as("n"))
+      .where("e.lineage_id", "=", head.lineage_id)
+      .where("e.id", "<>", head.id)
+      .where("tasks.organization_id", "=", organizationId)
+      .executeTakeFirstOrThrow();
+    previousAttempts = Number(n);
+  }
+  if (task) {
+    // Where the agent is working on this build right now (its latest
+    // attempt): the build panel links to it as "Watch the agent work".
+    const latest = await db
+      .selectFrom("executions")
+      .select("conversation_id")
+      .where("task_id", "=", task.id)
+      .where("conversation_id", "is not", null)
+      .orderBy("created_at", "desc")
+      .limit(1)
+      .executeTakeFirst();
+    agentConversationId = latest?.conversation_id ?? null;
   }
 
   // A queued build: how many builds the workers take before it (claim order
@@ -115,7 +145,10 @@ async function buildState(conversationId: string, organizationId: string) {
       // The verified app, live (routes/previews.ts); null until published.
       previewUrl: PREVIEWABLE_STATUSES.has(task.status) && hasPreview(task.id) ? `/preview/${task.id}/` : null,
       queuePosition,
+      agentConversationId,
     },
+    /** Earlier attempts in this chat that ended without a delivery. */
+    previousAttempts,
     // Request changes: what the customer asked for so far, and the cap.
     changeRequests: task ? await listChangeRequests(task.id) : [],
     maxChangeRounds: MAX_CHANGE_ROUNDS,
@@ -230,4 +263,113 @@ export async function chatBuildRoutes(app: FastifyInstance) {
       throw err;
     }
   });
+
+  // "Try again" in the chat, after a build ended without a delivery and its
+  // money is back (refunded or cancelled): the same plan as a new version,
+  // ready for review, so the chat goes through approve -> bill -> pay again
+  // instead of the customer starting a new chat. The new version has no
+  // budget, task or funding of its own yet; nothing is charged here.
+  app.post("/v1/discussions/:id/build/retry", async (request, reply) => {
+    try {
+      const { organizationId, userId } = await requireOrgSession(request);
+      const { id } = params.parse(request.params);
+      const state = await buildState(id, organizationId);
+      if (!state.plan || !state.task) throw new HttpError(409, "There is no build to try again");
+      if (!RETRYABLE_STATUSES.has(state.task.status)) {
+        throw new HttpError(
+          409,
+          state.task.status === "FAILED" ? "Get your refund first, then try again" : "This build can't be tried again",
+        );
+      }
+      reply.status(201).send(await copyPlanAsNewVersion(state.plan.id, organizationId, userId));
+    } catch (err) {
+      if (sendHttpError(reply, err)) return;
+      throw err;
+    }
+  });
+
+  // What a canvas conversation is to AtherNull: a customer's discussion, or
+  // the agent's workspace for one of its builds (each build attempt runs in
+  // its own conversation). The canvas hides build conversations from the
+  // sidebar and, when one is opened, points back to its discussion.
+  app.get("/v1/conversations/:id/owner", async (request, reply) => {
+    try {
+      const { organizationId } = await requireOrgSession(request);
+      const { id } = params.parse(request.params);
+      const discussion = await findDiscussion(id, organizationId);
+      if (discussion) return reply.send({ kind: "discussion", discussionId: discussion.conversation_id });
+      const plain = id.replace(/-/g, "").toLowerCase();
+      if (!/^[0-9a-f]{32}$/.test(plain)) throw new HttpError(404, "Not found");
+      const dashed = `${plain.slice(0, 8)}-${plain.slice(8, 12)}-${plain.slice(12, 16)}-${plain.slice(16, 20)}-${plain.slice(20)}`;
+      const build = await db
+        .selectFrom("executions")
+        .innerJoin("tasks", "tasks.id", "executions.task_id")
+        .innerJoin("project_estimates as e", "e.id", "tasks.source_estimate_id")
+        .innerJoin("discussion_conversations as d", (join) =>
+          join.onRef("d.planned_lineage_id", "=", "e.lineage_id").onRef("d.organization_id", "=", "tasks.organization_id"),
+        )
+        .select(["d.conversation_id", "tasks.id as task_id"])
+        .where("executions.conversation_id", "in", [plain, dashed])
+        .where("tasks.organization_id", "=", organizationId)
+        .executeTakeFirst();
+      if (!build) throw new HttpError(404, "Not found");
+      reply.send({ kind: "build", discussionId: build.conversation_id, taskId: build.task_id });
+    } catch (err) {
+      if (sendHttpError(reply, err)) return;
+      throw err;
+    }
+  });
+}
+
+/** Builds that ended without a delivery and whose money is back. */
+const RETRYABLE_STATUSES = new Set(["REFUNDED", "CANCELLED"]);
+
+/** The plan again, as the lineage's new head version, ready for review. */
+async function copyPlanAsNewVersion(estimateId: string, organizationId: string, userId: string): Promise<EstimateResponse> {
+  try {
+    const row = await db.transaction().execute(async (trx) => {
+      const current = await trx
+        .selectFrom("project_estimates")
+        .selectAll()
+        .where("id", "=", estimateId)
+        .where("organization_id", "=", organizationId)
+        .forUpdate()
+        .executeTakeFirstOrThrow();
+      const head = await trx
+        .selectFrom("project_estimates")
+        .select("id")
+        .where("lineage_id", "=", current.lineage_id)
+        .orderBy("version", "desc")
+        .limit(1)
+        .executeTakeFirstOrThrow();
+      if (head.id !== current.id) throw new HttpError(409, "The plan changed meanwhile; reload and try again");
+      await trx.updateTable("project_estimates").set({ status: "SUPERSEDED" }).where("id", "=", current.id).execute();
+      return trx
+        .insertInto("project_estimates")
+        .values({
+          lineage_id: current.lineage_id,
+          version: current.version + 1,
+          status: "READY_FOR_REVIEW",
+          organization_id: current.organization_id,
+          project_id: current.project_id,
+          source_prompt: current.source_prompt,
+          planner_output: JSON.stringify(current.planner_output),
+          planner_model: current.planner_model,
+          pricing_status: current.pricing_status,
+          currency: current.currency,
+          estimated_min_minor: current.estimated_min_minor,
+          estimated_max_minor: current.estimated_max_minor,
+          proposed_budget_cap_minor: current.proposed_budget_cap_minor,
+          pricing_breakdown: current.pricing_breakdown === null ? null : JSON.stringify(current.pricing_breakdown),
+          rate_version: current.rate_version,
+          created_by: userId,
+        })
+        .returningAll()
+        .executeTakeFirstOrThrow();
+    });
+    return toEstimateResponse(row);
+  } catch (err) {
+    if ((err as { code?: string }).code === "23505") throw new HttpError(409, "Already being tried again");
+    throw err;
+  }
 }

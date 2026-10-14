@@ -10,6 +10,7 @@ import type {
   BuildListItem,
   BuildPatch,
   ChatBuildState,
+  ConversationOwner,
   Discussion,
   BudgetAuthorization,
   BudgetAuthorizationSource,
@@ -136,6 +137,10 @@ export interface TaskDashboardApi {
   getChatBuild(discussionId: string): Promise<ChatBuildState | null>;
   draftChatPlan(discussionId: string): Promise<ProjectEstimate>;
   updateChatPlan(discussionId: string): Promise<ProjectEstimate>;
+  /** After a refunded or cancelled build: the same plan again, to approve and pay. */
+  retryChatBuild(discussionId: string): Promise<ProjectEstimate>;
+  /** A canvas conversation is a discussion or a build's agent workspace (null: neither). */
+  getConversationOwner(conversationId: string): Promise<ConversationOwner | null>;
   // ADR-0017 — the build's captured change; null until one exists.
   getBuildPatch(taskId: string): Promise<BuildPatch | null>;
   listBuilds(): Promise<BuildListItem[]>;

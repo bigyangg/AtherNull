@@ -424,6 +424,13 @@ export interface BuildListItem {
 
 // Chat-native builds — GET /v1/discussions/:id/build: where one canvas
 // discussion is in plan -> approve -> bill -> pay -> build.
+/** What a canvas conversation is to AtherNull. */
+export interface ConversationOwner {
+  kind: "discussion" | "build";
+  discussionId: string;
+  taskId?: string;
+}
+
 export interface ChatBuildState {
   discussionId: string;
   messageCount: number;
@@ -445,7 +452,11 @@ export interface ChatBuildState {
     previewUrl: string | null;
     /** While QUEUED: builds the workers take before this one. */
     queuePosition: number | null;
+    /** The canvas conversation where the agent works on its latest attempt. */
+    agentConversationId: string | null;
   } | null;
+  /** Earlier attempts in this chat that ended without a delivery. */
+  previousAttempts: number;
   /** Changes the customer requested on this build, oldest first. */
   /** source "verifier": an automatic fix round after failed checks. */
   changeRequests: { round: number; feedback: string; source: "customer" | "verifier"; createdAt: string }[];

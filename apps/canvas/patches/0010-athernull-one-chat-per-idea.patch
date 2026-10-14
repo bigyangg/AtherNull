@@ -1,0 +1,26 @@
+diff --git a/src/components/features/conversation-panel/conversation-panel.tsx b/src/components/features/conversation-panel/conversation-panel.tsx
+--- a/src/components/features/conversation-panel/conversation-panel.tsx
++++ b/src/components/features/conversation-panel/conversation-panel.tsx
+@@ -298,10 +298,20 @@ export function ConversationPanel({
+   // Display collection: same loaded pages, with archived rows filtered out
+   // unless the user has opted into "Show archived".
+   const conversations = React.useMemo(() => {
++    // AtherNull: one idea is one chat. Each build attempt runs in a
++    // conversation of its own (tagged athernulltask by the worker); those
++    // stay reachable from the chat's build panel ("Watch the agent work")
++    // but are not listed beside the customer's chats.
++    const listed = import.meta.env.VITE_ATHERNULL
++      ? allLoadedConversations.filter(
++          (conversation) =>
++            !(conversation.tags as Record<string, string> | null | undefined)?.athernulltask,
++        )
++      : allLoadedConversations;
+     if (showArchivedConversations) {
+-      return allLoadedConversations;
++      return listed;
+     }
+-    return allLoadedConversations.filter(
++    return listed.filter(
+       (conversation) => !archivedIdSet.has(conversation.id),
+     );
+   }, [allLoadedConversations, archivedIdSet, showArchivedConversations]);

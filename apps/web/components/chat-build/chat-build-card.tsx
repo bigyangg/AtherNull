@@ -265,6 +265,12 @@ function PlanStep({ state }: { state: ChatBuildState }) {
         </>
       }
     >
+      {state.previousAttempts > 0 && (
+        <p className="rounded-lg border border-border bg-background/40 px-3 py-2 text-xs text-muted-foreground">
+          <span className="font-medium text-foreground">Attempt {state.previousAttempts + 1}.</span> The last attempt was refunded,
+          so nothing was charged. Same plan: approve it and pay to build again, or keep chatting and update the plan first.
+        </p>
+      )}
       <p className="font-medium text-foreground">{out.goal}</p>
       <div className="flex flex-wrap gap-2 text-xs">
         <span className="rounded-md bg-background/60 px-2 py-1 text-muted-foreground">
@@ -794,6 +800,11 @@ function BuildStep({ state }: { state: ChatBuildState }) {
   const accept = useAcceptTask(taskId);
   const reject = useRejectTask(taskId);
   const refund = useRefundTask(taskId);
+  const queryClient = useQueryClient();
+  const retry = useMutation({
+    mutationFn: () => dashboardApi.retryChatBuild(state.discussionId),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: key(state.discussionId) }),
+  });
   // Newest first: a retried build's latest attempt and checks are what count.
   const run = [...(task?.verificationRuns ?? [])].sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
   const lastAttempt = [...(task?.executions ?? [])].sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
@@ -814,7 +825,7 @@ function BuildStep({ state }: { state: ChatBuildState }) {
     if (label === "Verified") return run?.outcome === "PASS";
     return false;
   };
-  const error = accept.error ?? reject.error ?? refund.error;
+  const error = accept.error ?? reject.error ?? refund.error ?? retry.error;
   const working = status === "QUEUED" || status === "RUNNING" || status === "VERIFYING";
   const customerRounds = state.changeRequests.filter((c) => c.source !== "verifier");
   const latestRound = state.changeRequests.at(-1);
@@ -868,6 +879,15 @@ function BuildStep({ state }: { state: ChatBuildState }) {
                   ? queueText(state.task?.queuePosition ?? null)
                   : "The agent is building it…"}
         </p>
+      )}
+      {working && status !== "QUEUED" && state.task?.agentConversationId && (
+        <a
+          href={canvasChatHref(state.task.agentConversationId)}
+          target="_top"
+          className="inline-flex items-center gap-1.5 self-start text-xs text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
+        >
+          Watch the agent work <ExternalLink className="size-3" />
+        </a>
       )}
       {autoFixing && latestRound && (
         <p className="rounded-lg bg-background/40 px-3 py-2.5 text-xs text-muted-foreground">
@@ -961,6 +981,15 @@ function BuildStep({ state }: { state: ChatBuildState }) {
               )}
             </div>
           )}
+          {(status === "REFUNDED" || status === "CANCELLED") && (
+            <div className="mt-1 flex flex-wrap items-center gap-3">
+              <Button size="sm" disabled={retry.isPending} onClick={() => retry.mutate()}>
+                {retry.isPending ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw />}
+                {retry.isPending ? "Starting over…" : "Try again"}
+              </Button>
+              <span className="text-xs text-muted-foreground">Same plan, right here in this chat. You approve and pay again.</span>
+            </div>
+          )}
         </div>
       )}
       <ErrorLine error={error ? message(error) : null} />
@@ -1047,7 +1076,7 @@ function barContent(state: ChatBuildState, requiredLamports: string | null) {
       stage: 4 as Stage,
       icon: <XCircle />,
       title: goal,
-      note: status === "REFUNDING" ? "Refund on its way to your wallet" : "Refunded to your wallet · not charged",
+      note: status === "REFUNDING" ? "Refund on its way to your wallet" : "Refunded · not charged · you can try again",
       failedAt: 3,
       action: "See why",
     };
@@ -1070,6 +1099,35 @@ function barContent(state: ChatBuildState, requiredLamports: string | null) {
   };
 }
 
+/** A canvas chat, by its conversation id (the canvas is a separate app on this origin). */
+export function canvasChatHref(conversationId: string): string {
+  return `/canvas/conversations/${encodeURIComponent(conversationId)}`;
+}
+
+/**
+ * Shown at the end of a build's agent workspace (each build attempt runs in
+ * a conversation of its own, hidden from the sidebar): what this is, and the
+ * way back to the chat where the plan, payment and result live.
+ */
+function BuildWorkspaceBar({ discussionId }: { discussionId: string }) {
+  return (
+    <div className="flex h-16 items-center gap-3 rounded-xl border border-border bg-panel px-3.5 shadow-sm">
+      <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-primary/15 text-primary [&>svg]:size-4">
+        <Hammer />
+      </span>
+      <div className="min-w-0 flex-1">
+        <p className="truncate text-sm font-medium text-foreground">The agent&apos;s workspace for your build</p>
+        <p className="truncate text-xs text-muted-foreground">Your plan, payment, checks and result are in your chat.</p>
+      </div>
+      <Button size="sm" className="shrink-0" asChild>
+        <a href={canvasChatHref(discussionId)} target="_top">
+          Back to your chat
+        </a>
+      </Button>
+    </div>
+  );
+}
+
 /** A queued build's wait, in words. */
 function queueText(ahead: number | null): string {
   if (!ahead) return "Next in line. An agent picks it up shortly…";
@@ -1090,12 +1148,22 @@ export function ChatBuildBar({ discussionId }: { discussionId: string }) {
     queryFn: () => dashboardApi.getProjectFunding(taskId!),
     enabled: taskId !== null && state?.task?.status === "AWAITING_FUNDING",
   });
-  const visible = !isLoading && !!state && (!!state.plan || state.messageCount > 0);
+  // Not a discussion: maybe the agent's workspace for one of its builds,
+  // opened from a link. It then points back to the customer's chat.
+  const { data: owner } = useQuery({
+    queryKey: ["conversation-owner", discussionId],
+    queryFn: () => dashboardApi.getConversationOwner(discussionId),
+    enabled: !isLoading && state === null,
+    staleTime: Infinity,
+  });
+  const buildWorkspace = owner?.kind === "build" ? owner : null;
+  const visible = (!isLoading && !!state && (!!state.plan || state.messageCount > 0)) || !!buildWorkspace;
 
   useEffect(() => {
     window.parent.postMessage({ type: "athernull:chat-build", discussionId, visible }, window.location.origin);
   }, [discussionId, visible]);
 
+  if (buildWorkspace) return <BuildWorkspaceBar discussionId={buildWorkspace.discussionId} />;
   if (!visible || !state) return null;
   const bar = barContent(state, funding?.requiredLamports ?? null);
 

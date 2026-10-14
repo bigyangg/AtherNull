@@ -179,4 +179,77 @@ describe("chat-native builds", () => {
     assert.equal((await req(org, "POST", `/v1/discussions/${id}/plan/update`)).statusCode, 409);
     assert.equal((await req(other, "POST", `/v1/discussions/${id}/plan`)).statusCode, 404);
   });
+
+  /** The chat's current plan approved, budgeted and turned into a task (AWAITING_FUNDING). */
+  async function bill(id: string, planId: string, projectId: string): Promise<string> {
+    assert.equal((await req(org, "POST", `/v1/projects/${projectId}/estimates/${planId}/approve`)).statusCode, 200);
+    const auth = await req(org, "POST", `/v1/projects/${projectId}/estimates/${planId}/budget-authorization`, {
+      source: "USER_SET",
+      amountMinor: 2000,
+      currency: "USD",
+    });
+    assert.equal(auth.statusCode, 201, auth.body);
+    const profile = await db.selectFrom("agent_profiles").select("id").where("organization_id", "=", org.organizationId).executeTakeFirstOrThrow();
+    const task = await req(org, "POST", `/v1/projects/${projectId}/tasks/from-budget-authorization`, {
+      budgetAuthorizationId: JSON.parse(auth.body).id,
+      agentProfileId: profile.id,
+      repositoryRevision: "main",
+    });
+    assert.equal(task.statusCode, 201, task.body);
+    return JSON.parse(task.body).id;
+  }
+
+  test("Try again: only once the money is back, in the same chat, with the same plan to approve and pay", async () => {
+    const id = await newDiscussion(org);
+    const plan = JSON.parse((await req(org, "POST", `/v1/discussions/${id}/plan`)).body);
+    const first = await bill(id, plan.id, plan.projectId);
+    const retry = () => req(org, "POST", `/v1/discussions/${id}/build/retry`);
+
+    assert.equal((await retry()).statusCode, 409, "not while the build is under way");
+    await db.updateTable("tasks").set({ status: "FAILED" }).where("id", "=", first).execute();
+    const failed = await retry();
+    assert.equal(failed.statusCode, 409, "not while the payment is still in escrow");
+    assert.match(JSON.parse(failed.body).error, /refund/i);
+
+    await db.updateTable("tasks").set({ status: "REFUNDED" }).where("id", "=", first).execute();
+    const again = await retry();
+    assert.equal(again.statusCode, 201, again.body);
+    const v2 = JSON.parse(again.body);
+    assert.equal(v2.lineageId, plan.lineageId);
+    assert.equal(v2.version, plan.version + 1);
+    assert.equal(v2.status, "READY_FOR_REVIEW");
+    assert.deepEqual(v2.plannerOutput, plan.plannerOutput, "the same plan, no new planning");
+
+    let state = JSON.parse((await req(org, "GET", `/v1/discussions/${id}/build`)).body);
+    assert.equal(state.plan.id, v2.id);
+    assert.equal(state.task, null, "a fresh attempt: back to approve -> bill -> pay");
+    assert.equal(state.authorization, null);
+    assert.equal(state.previousAttempts, 1);
+    assert.equal((await retry()).statusCode, 409, "nothing to retry until the new attempt has a build");
+
+    const second = await bill(id, v2.id, v2.projectId);
+    state = JSON.parse((await req(org, "GET", `/v1/discussions/${id}/build`)).body);
+    assert.equal(state.task.id, second);
+    assert.equal(state.previousAttempts, 1);
+    assert.equal((await req(other, "POST", `/v1/discussions/${id}/build/retry`)).statusCode, 404);
+  });
+
+  test("a build's agent conversation points back to its chat, for its own organization only", async () => {
+    const id = await newDiscussion(org);
+    const plan = JSON.parse((await req(org, "POST", `/v1/discussions/${id}/plan`)).body);
+    const taskId = await bill(id, plan.id, plan.projectId);
+    const agentChat = randomUUID().replace(/-/g, "");
+    await db.insertInto("executions").values({ task_id: taskId, status: "SUCCEEDED", conversation_id: agentChat }).execute();
+
+    const owner = (t: T, conversation: string) => req(t, "GET", `/v1/conversations/${conversation}/owner`);
+    assert.deepEqual(JSON.parse((await owner(org, id)).body), { kind: "discussion", discussionId: id });
+    const build = await owner(org, agentChat);
+    assert.equal(build.statusCode, 200, build.body);
+    assert.deepEqual(JSON.parse(build.body), { kind: "build", discussionId: id, taskId });
+    assert.equal((await owner(other, agentChat)).statusCode, 404);
+    assert.equal((await owner(org, randomUUID())).statusCode, 404);
+
+    const state = JSON.parse((await req(org, "GET", `/v1/discussions/${id}/build`)).body);
+    assert.equal(state.task.agentConversationId, agentChat, "the build panel links to the agent's workspace");
+  });
 });
