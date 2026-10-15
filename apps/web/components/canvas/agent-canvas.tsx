@@ -2,7 +2,8 @@
 
 import { createContext, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { CheckCircle2, Coins, ExternalLink, Loader2, RotateCcw, XCircle } from "lucide-react";
+import { cn } from "@/lib/utils";
+import { CheckCircle2, ChevronRight, Coins, ExternalLink, Loader2, RotateCcw, XCircle } from "lucide-react";
 
 import {
   AgentTimeline,
@@ -19,6 +20,7 @@ import {
   canvasTabs,
   type CanvasTab,
 } from "@/components/canvas/canvas-side-panel";
+import { ThreadNavigator } from "@/components/canvas/thread-navigator";
 import { Button } from "@/components/ui/button";
 import { ProjectFundingPanel } from "@/components/projects/project-funding-panel";
 import { PayoutStatus } from "@/components/tasks/payout-status";
@@ -117,6 +119,11 @@ function CanvasShell({
   tab,
   onTab,
   panel,
+  projectId,
+  activeThreadId,
+  onSelectThread,
+  onCreateThread,
+  onCloseThread,
 }: {
   header: ReactNode;
   thread: ReactNode;
@@ -125,10 +132,16 @@ function CanvasShell({
   tab: CanvasTab;
   onTab: (tab: CanvasTab) => void;
   panel: ReactNode;
+  projectId: string;
+  activeThreadId: string | null;
+  onSelectThread: (threadId: string) => void;
+  onCreateThread: (type: string, parentThreadId?: string) => void;
+  onCloseThread: (threadId: string) => void;
 }) {
   const isDesktop = useIsDesktop() && !useCompact();
   const compact = useCompact();
   const [mobileView, setMobileView] = useState<"agent" | CanvasTab>("agent");
+  const [showThreadNavigator, setShowThreadNavigator] = useState(true);
 
   const chat = (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -158,11 +171,37 @@ function CanvasShell({
   return (
     <div className="flex h-screen flex-col">
       {header}
-      <div className="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_minmax(0,0.9fr)] divide-x divide-border">
+      <div className="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_minmax(0,0.9fr)_minmax(0,280px)] divide-x divide-border">
         {chat}
         <div className="flex min-h-0 flex-col bg-panel/40">
           <CanvasTabBar tabs={tabs} value={tab} onChange={(v) => onTab(v as CanvasTab)} />
           <div className="min-h-0 flex-1">{panel}</div>
+        </div>
+        {/* Thread Navigator side panel */}
+        <div className="flex min-h-0 flex-col bg-panel/30 border-l border-border">
+          <div className="flex shrink-0 items-center justify-between border-b border-border px-3 py-2">
+            <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Threads</span>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="size-7"
+              onClick={() => setShowThreadNavigator(!showThreadNavigator)}
+              aria-label={showThreadNavigator ? "Hide threads" : "Show threads"}
+            >
+              <ChevronRight
+                className={cn("size-4 transition-transform", showThreadNavigator && "rotate-90")}
+              />
+            </Button>
+          </div>
+          {showThreadNavigator && (
+            <ThreadNavigator
+              projectId={projectId}
+              activeThreadId={activeThreadId}
+              onSelectThread={onSelectThread}
+              onCreateThread={onCreateThread}
+              onCloseThread={onCloseThread}
+            />
+          )}
         </div>
       </div>
     </div>
@@ -295,6 +334,18 @@ function LineageCanvas({
 
   const tabs = canvasTabs(false, 0, 0);
 
+  // Thread navigator state for planning lineage
+  const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
+  const handleSelectThread = (threadId: string) => setActiveThreadId(threadId);
+  const handleCreateThread = (type: string, parentThreadId?: string) => {
+    // In a real implementation, this would call the API
+    console.log("Create thread:", type, parentThreadId);
+  };
+  const handleCloseThread = (threadId: string) => {
+    if (activeThreadId === threadId) setActiveThreadId(null);
+    console.log("Close thread:", threadId);
+  };
+
   return (
     <CanvasShell
       header={header(stage)}
@@ -349,6 +400,11 @@ function LineageCanvas({
           )}
         </Thread>
       }
+      projectId={project.id}
+      activeThreadId={activeThreadId}
+      onSelectThread={handleSelectThread}
+      onCreateThread={handleCreateThread}
+      onCloseThread={handleCloseThread}
     />
   );
 }
@@ -428,6 +484,18 @@ function TaskCanvas({
     ? lineageVersions(estimates, sourceEstimate.lineageId).filter((v) => v.version <= sourceEstimate.version)
     : [];
   const authorization = authorizations.find((a) => a.id === task.sourceBudgetAuthorizationId) ?? null;
+
+  // Thread navigator state for task
+  const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
+  const handleSelectThread = (threadId: string) => setActiveThreadId(threadId);
+  const handleCreateThread = (type: string, parentThreadId?: string) => {
+    // In a real implementation, this would call the API
+    console.log("Create thread:", type, parentThreadId);
+  };
+  const handleCloseThread = (threadId: string) => {
+    if (activeThreadId === threadId) setActiveThreadId(null);
+    console.log("Close thread:", threadId);
+  };
 
   const defaultTab: CanvasTab =
     stage === "fund" ? "chain" : stage === "queued" ? "plan" : stage === "verifying" || stage === "review" ? "checks" : "changes";
@@ -567,6 +635,11 @@ function TaskCanvas({
           <OutcomeNote status={task.status} />
         </Thread>
       }
+      projectId={project.id}
+      activeThreadId={activeThreadId}
+      onSelectThread={handleSelectThread}
+      onCreateThread={handleCreateThread}
+      onCloseThread={handleCloseThread}
     />
   );
 }

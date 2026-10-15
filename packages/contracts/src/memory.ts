@@ -20,6 +20,9 @@ import { z } from "zod";
  *             └── running.json # AgentRunningMemory
  */
 
+// Re-export thread types from threads.ts
+export * from "./threads";
+
 // ============================================================================
 // Project Permanent Memory
 // ============================================================================
@@ -226,66 +229,6 @@ export const AgentMemorySchema = z.object({
   updatedAt: z.string(),
 });
 export type AgentMemory = z.infer<typeof AgentMemorySchema>;
-
-// ============================================================================
-// Thread System
-// ============================================================================
-
-export const ThreadTypeSchema = z.enum([
-  "planning",
-  "build",
-  "fix",
-  "review",
-  "discussion",
-]);
-export type ThreadType = z.infer<typeof ThreadTypeSchema>;
-
-export const ThreadStatusSchema = z.enum(["open", "resolved", "archived"]);
-export type ThreadStatus = z.infer<typeof ThreadStatusSchema>;
-
-export const ThreadContextPointersSchema = z.object({
-  taskId: z.string(),
-  checkpointId: z.string().optional(),
-  executionId: z.string().optional(),
-  relatedThreads: z.array(z.string()),
-  parentThreadId: z.string().optional(),
-});
-export type ThreadContextPointers = z.infer<typeof ThreadContextPointersSchema>;
-
-export const ThreadMessageSchema = z.object({
-  id: z.string(),
-  threadId: z.string(),
-  role: z.enum(["user", "assistant", "system", "tool"]),
-  content: z.string(),
-  metadata: z
-    .object({
-      checkpointId: z.string().optional(),
-      toolCalls: z.array(z.unknown()).optional(),
-      artifacts: z.array(z.unknown()).optional(),
-      fromAgent: z.string().optional(),
-      toAgent: z.string().optional(),
-      messageType: z.enum(["instruction", "result", "decision", "error", "handoff"]).optional(),
-    })
-    .optional(),
-  createdAt: z.string(),
-});
-export type ThreadMessage = z.infer<typeof ThreadMessageSchema>;
-
-export const ThreadMetaSchema = z.object({
-  id: z.string(),
-  projectId: z.string(),
-  taskId: z.string(),
-  type: ThreadTypeSchema,
-  status: ThreadStatusSchema,
-  createdAt: z.string(),
-  updatedAt: z.string(),
-  createdBy: z.string(),
-  parentThreadId: z.string().optional(),
-  contextPointers: ThreadContextPointersSchema,
-  messageCount: z.number().default(0),
-  lastMessageAt: z.string().optional(),
-});
-export type ThreadMeta = z.infer<typeof ThreadMetaSchema>;
 
 // ============================================================================
 // Checkpoint System

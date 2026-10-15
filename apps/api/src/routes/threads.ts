@@ -62,12 +62,16 @@ export function threadRoutes(app: FastifyInstance) {
           createdAt: now,
           updatedAt: now,
           createdBy: userId,
-          parentThreadId: body.parentThreadId,
+          parentThreadId: body.parentThreadId ?? null,
           contextPointers: body.contextPointers ?? {
           taskId: body.taskId,
           relatedThreads: [],
+          parentThreadId: undefined,
+          checkpointId: undefined,
+          branchName: undefined,
         },
           messageCount: 0,
+          lastMessageAt: null,
         };
 
         memoryManager.createThread(meta);
@@ -79,7 +83,7 @@ export function threadRoutes(app: FastifyInstance) {
             threadId,
             role: body.initialMessage.role,
             content: body.initialMessage.content,
-            metadata: body.initialMessage.metadata,
+            metadata: body.initialMessage.metadata ?? null,
             createdAt: now,
           };
           memoryManager.appendMessage(threadId, message);
@@ -281,7 +285,7 @@ export function threadRoutes(app: FastifyInstance) {
           threadId,
           role: body.role,
           content: body.content,
-          metadata: body.metadata,
+          metadata: body.metadata ?? null,
           createdAt: new Date().toISOString(),
         };
 
