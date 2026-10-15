@@ -26,10 +26,12 @@ import { verificationRoutes } from "./routes/verification.js";
 import { realtimeGatewayRoutes } from "./routes/realtime-gateway.js";
 import { MAX_RELAY_MESSAGE_BYTES, relayRoutes } from "./routes/relay.js";
 import { taskProvenanceRoutes } from "./routes/task-provenance.js";
+import { taskSandboxRoutes } from "./routes/task-sandboxes.js";
 import { getTrustedOrigins } from "./trusted-origins.js";
 import { usageRoutes } from "./routes/usage.js";
 import { usagePolicyRoutes } from "./routes/usage-policies.js";
 import { threadRoutes } from "./routes/threads.js";
+import { llmProxyRoutes } from "./routes/llm-proxy.js";
 
 // Split from index.ts so tests can build the app in-process (Fastify's
 // `inject()`) against a real test database, without binding a real port.
@@ -82,6 +84,8 @@ export async function buildApp(opts: { logger?: boolean } = {}): Promise<Fastify
   await app.register(usagePolicyRoutes);
   await app.register(checkpointRoutes);
   await app.register(threadRoutes);
+  await app.register(taskSandboxRoutes);
+  await app.register(llmProxyRoutes);
   await app.register(internalRoutes);
   // ADR-0017 — patch capture + independent verifier endpoints.
   await app.register(verificationRoutes);

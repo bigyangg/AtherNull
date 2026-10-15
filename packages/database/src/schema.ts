@@ -450,6 +450,32 @@ export interface TaskChangeRequestsTable {
   created_at: Generated<Date>;
 }
 
+// 0021 — Per-task sandbox isolation and LLM proxy usage logging
+export interface TaskSandboxesTable {
+  task_id: string;
+  organization_id: string;
+  project_id: string;
+  container_name: string;
+  base_url: string;
+  session_api_key: string;
+  network_name: string;
+  volume_name: string;
+  status: Generated<string>; // PROVISIONING | READY | DECOMMISSIONING | DECOMMISSIONED
+  created_at: Timestamp;
+  ready_at: NullableTimestamp;
+  decommissioned_at: NullableTimestamp;
+}
+
+export interface LLMUsageLogTable {
+  id: Generated<string>;
+  task_id: string;
+  model: string;
+  prompt_tokens: Generated<number>; // default 0
+  completion_tokens: Generated<number>; // default 0
+  total_tokens: Generated<number>; // default 0
+  created_at: Timestamp;
+}
+
 export interface Database {
   projects: ProjectsTable;
   agent_profiles: AgentProfilesTable;
@@ -473,4 +499,6 @@ export interface Database {
   agent_sandbox_requests: AgentSandboxRequestsTable;
   task_change_requests: TaskChangeRequestsTable;
   sandbox_pool: SandboxPoolTable;
+  task_sandboxes: TaskSandboxesTable;
+  llm_usage_log: LLMUsageLogTable;
 }
