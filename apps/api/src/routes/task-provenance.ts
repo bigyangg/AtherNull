@@ -4,6 +4,7 @@ import { z } from "zod";
 
 import { db } from "../db.js";
 import { HttpError, requireOrgSession, requirePrivilegedRole, sendHttpError } from "../session.js";
+import { ensureProjectMemory, addTodoToProject, updateProjectPhase } from "../memory-init.js";
 
 // Phase 4C — Provenance-Bound Task Creation and Execution Activation Gate.
 //
@@ -43,7 +44,7 @@ import { HttpError, requireOrgSession, requirePrivilegedRole, sendHttpError } fr
 async function loadOwnedProject(projectId: string, organizationId: string) {
   return db
     .selectFrom("projects")
-    .select(["id"])
+    .select(["id", "permitted_repository"])
     .where("id", "=", projectId)
     .where("organization_id", "=", organizationId)
     .executeTakeFirst();
@@ -94,6 +95,8 @@ export async function taskProvenanceRoutes(app: FastifyInstance) {
         }
 
         assertTransition("CREATED", "AWAITING_FUNDING");
+
+        const projectName = project.permitted_repository || "Unnamed Project";
 
         const result = await db.transaction().execute(async (trx) => {
           const authorization = await trx
@@ -174,6 +177,20 @@ export async function taskProvenanceRoutes(app: FastifyInstance) {
           }
 
           const plannerOutput = estimate.planner_output as PlannerOutput;
+
+          // Initialize project memory for this task
+          ensureProjectMemory(projectId, projectName, organizationId);
+          
+          // Add todo items from planner output
+          if (plannerOutput.deliverables) {
+            for (const deliverable of plannerOutput.deliverables) {
+              addTodoToProject(projectId, deliverable);
+            }
+          }
+
+          // Update project phase to implementation
+          updateProjectPhase(projectId, "planning", "done");
+          updateProjectPhase(projectId, "implementation", "in_progress");
 
           // repositoryRevision and the agent profile's config_revision/
           // policy_version are snapshotted here, not re-read later — same

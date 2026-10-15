@@ -6,6 +6,7 @@ import Fastify, { type FastifyInstance } from "fastify";
 import { auth } from "./auth.js";
 import { agentProfileRoutes } from "./routes/agent-profiles.js";
 import { budgetAuthorizationRoutes } from "./routes/budget-authorizations.js";
+import { checkpointRoutes } from "./routes/checkpoints.js";
 import { estimateRoutes } from "./routes/estimates.js";
 import { internalRoutes } from "./routes/internal.js";
 import { jobRoutes } from "./routes/jobs.js";
@@ -28,6 +29,7 @@ import { taskProvenanceRoutes } from "./routes/task-provenance.js";
 import { getTrustedOrigins } from "./trusted-origins.js";
 import { usageRoutes } from "./routes/usage.js";
 import { usagePolicyRoutes } from "./routes/usage-policies.js";
+import { threadRoutes } from "./routes/threads.js";
 
 // Split from index.ts so tests can build the app in-process (Fastify's
 // `inject()`) against a real test database, without binding a real port.
@@ -78,6 +80,8 @@ export async function buildApp(opts: { logger?: boolean } = {}): Promise<Fastify
   // task.max_budget_minor/project_budget_authorizations/cost_minor/
   // payment_intents (correction 23).
   await app.register(usagePolicyRoutes);
+  await app.register(checkpointRoutes);
+  await app.register(threadRoutes);
   await app.register(internalRoutes);
   // ADR-0017 — patch capture + independent verifier endpoints.
   await app.register(verificationRoutes);

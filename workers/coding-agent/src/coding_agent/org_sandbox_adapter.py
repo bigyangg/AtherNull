@@ -28,6 +28,8 @@ from pathlib import Path
 
 import httpx
 
+from coding_agent.checkpoint_manager import CheckpointManager, classify_error, ErrorContext, ErrorType, RollbackAction
+from coding_agent.memory import get_memory_manager, CheckpointLabel
 from coding_agent.llm import require_api_key
 from coding_agent.worker import (
     API_URL,
@@ -362,6 +364,7 @@ def run_dispatch_via_org_sandbox(client: httpx.Client, dispatch: dict) -> tuple[
 
     execution_id = dispatch["executionId"]
     task_id = dispatch["jobId"]
+    project_id = dispatch.get("projectId", "unknown")
     workdir = f"{BUILDS_ROOT}/{task_id}"
     stop = threading.Event()
     threading.Thread(target=heartbeat_loop, args=(client, execution_id, stop), daemon=True).start()
@@ -369,6 +372,21 @@ def run_dispatch_via_org_sandbox(client: httpx.Client, dispatch: dict) -> tuple[
     seen_events: set[str] = set()
     seen_usage: set[str] = set()
     conversation_id: str | None = None
+    
+    # Initialize checkpoint manager
+    checkpoint_mgr = CheckpointManager(sandbox, task_id, execution_id, project_id, workdir)
+    memory_mgr = get_memory_manager(project_id)
+    
+    # Create baseline checkpoint
+    baseline_cp = checkpoint_mgr.create_checkpoint(CheckpointLabel.BASELINE, "Task started")
+    
+    # Update running memory
+    running_mem = memory_mgr.load_running_memory()
+    running_mem.active_task_id = task_id
+    running_mem.current_checkpoint = baseline_cp.id
+    running_mem.checkpoint_history.append(baseline_cp.id)
+    memory_mgr.save_running_memory(running_mem)
+    
     try:
         base = dispatch.get("baseCommit")
         if base:
@@ -407,6 +425,7 @@ def run_dispatch_via_org_sandbox(client: httpx.Client, dispatch: dict) -> tuple[
         if res.status_code >= 400:
             return "failure", f"starting the conversation failed ({res.status_code}): {res.text[:300]}"
         conversation_id = res.json()["id"]
+        checkpoint_mgr.conversation_id = conversation_id
         try:
             sandbox.http.patch(f"/api/conversations/{conversation_id}", json={"title": build_title(dispatch["objective"])})
         except Exception as err:  # noqa: BLE001 - best-effort: an untitled build still runs
@@ -421,6 +440,7 @@ def run_dispatch_via_org_sandbox(client: httpx.Client, dispatch: dict) -> tuple[
             log(f"failed to persist conversation id ({report.status_code}): {report.text}")
 
         started = time.monotonic()
+        deliverable_count = 0
         while True:
             info_res = sandbox.http.get(f"/api/conversations/{conversation_id}")
             info_res.raise_for_status()
@@ -435,15 +455,88 @@ def run_dispatch_via_org_sandbox(client: httpx.Client, dispatch: dict) -> tuple[
                     _capture_commit(client, sandbox, execution_id, task_id, base, workdir, dispatch["objective"])
                 else:
                     _capture_patch(client, sandbox, execution_id, workdir, dispatch["repositorySnapshot"])
+                
+                # Create milestone checkpoint on success
+                milestone_cp = checkpoint_mgr.create_checkpoint(
+                    CheckpointLabel.MILESTONE, f"Build completed successfully"
+                )
+                running_mem = memory_mgr.load_running_memory()
+                running_mem.current_checkpoint = milestone_cp.id
+                running_mem.checkpoint_history.append(milestone_cp.id)
+                memory_mgr.save_running_memory(running_mem)
+                
                 return "success", None
             if status in TERMINAL_FAILURE:
+                # Create pre-failure checkpoint
+                failure_cp = checkpoint_mgr.create_checkpoint(
+                    CheckpointLabel.PRE_FAILURE, f"Agent ended in status {status}"
+                )
+                
+                # Classify error and decide on rollback
+                error_ctx = ErrorContext(
+                    error_type=ErrorType.AGENT_STUCK,
+                    location=f"conversation:{conversation_id}",
+                    checkpoint_after=checkpoint_mgr.current_checkpoint_id,
+                    reversible=True,
+                    error_message=f"Agent ended in status {status}",
+                )
+                decision = classify_error(Exception(f"Agent ended in status {status}"), checkpoint_mgr.current_checkpoint_id)
+                
+                if decision.action == RollbackAction.ROLLBACK and decision.target_checkpoint:
+                    log(f"Auto-rolling back to checkpoint {decision.target_checkpoint}")
+                    rollback_result = checkpoint_mgr.rollback_to(decision.target_checkpoint)
+                    if rollback_result.success:
+                        # Update conversation_id for retry
+                        conversation_id = rollback_result.new_conversation_id
+                        checkpoint_mgr.conversation_id = conversation_id
+                        # Resume with fix instruction
+                        # TODO: Implement resume with fix instruction
+                        log(f"Rollback successful, would resume with: {decision.fix_instruction}")
+                        continue  # Retry the loop
+                
                 return "failure", f"agent ended in status {status}"
             if time.monotonic() - started > MAX_RUN_SECONDS:
+                # Create pre-failure checkpoint for timeout
+                timeout_cp = checkpoint_mgr.create_checkpoint(
+                    CheckpointLabel.PRE_FAILURE, f"Exceeded {MAX_RUN_SECONDS}s wall time"
+                )
+                
+                # Classify timeout error
+                decision = classify_error(Exception(f"Timeout after {MAX_RUN_SECONDS}s"), checkpoint_mgr.current_checkpoint_id)
+                if decision.action == RollbackAction.ROLLBACK and decision.target_checkpoint:
+                    log(f"Auto-rolling back to checkpoint {decision.target_checkpoint} after timeout")
+                    rollback_result = checkpoint_mgr.rollback_to(decision.target_checkpoint)
+                    if rollback_result.success:
+                        conversation_id = rollback_result.new_conversation_id
+                        checkpoint_mgr.conversation_id = conversation_id
+                        log(f"Rollback successful after timeout, would resume with: {decision.fix_instruction}")
+                        continue
+                
                 sandbox.http.post(f"/api/conversations/{conversation_id}/pause")
                 return "failure", f"exceeded {MAX_RUN_SECONDS}s wall time"
             time.sleep(POLL_SECONDS)
     except Exception as err:  # noqa: BLE001 - the dispatch must always reach complete()
         log(f"org sandbox dispatch failed: {err!r}")
+        
+        # Create pre-failure checkpoint on exception
+        try:
+            failure_cp = checkpoint_mgr.create_checkpoint(
+                CheckpointLabel.PRE_FAILURE, f"Exception: {err!r}"
+            )
+            
+            # Classify and potentially rollback
+            decision = classify_error(err, checkpoint_mgr.current_checkpoint_id)
+            if decision.action == RollbackAction.ROLLBACK and decision.target_checkpoint:
+                log(f"Auto-rolling back to checkpoint {decision.target_checkpoint} after exception")
+                rollback_result = checkpoint_mgr.rollback_to(decision.target_checkpoint)
+                if rollback_result.success:
+                    conversation_id = rollback_result.new_conversation_id
+                    checkpoint_mgr.conversation_id = conversation_id
+                    log(f"Rollback successful after exception, would resume with: {decision.fix_instruction}")
+                    # Could retry here, but for now return failure
+        except Exception as cp_err:
+            log(f"Failed to create pre-failure checkpoint: {cp_err}")
+        
         return "failure", str(err)[:500]
     finally:
         if conversation_id:
