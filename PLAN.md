@@ -37,8 +37,8 @@ Open from spec §11 still needing validation: backend runtime choice (TypeScript
 
 ## 2. Build phases (from spec §10, adjusted)
 
-Refreshed 2026-10-11 against the code and ADRs 0001–0017; per-phase detail
-lives in the ADRs, not here.
+Refreshed 2026-10-24 against the code and ADRs 0001–0017 and 0022; per-phase
+detail lives in the ADRs, not here.
 
 - [x] **Phase 0 — Repo and decisions** — layout, CI, ADR-0001 (SDK pinned
   1.42.1). ADR-0002 sandbox choice still Proposed (VPS KVM support unconfirmed).
@@ -77,15 +77,35 @@ lives in the ADRs, not here.
 - [~] **Phase 7 — Reliability and demo** — one-command stack
   (`pnpm dev`), dependency-free demo repo, demo runbook. Still: devnet
   rehearsal incl. refund path, recordings, backup/restore and crash drills.
-- [ ] **Phase 8 — Multi-rail payments (ADR-0022)** — architecture accepted,
-  rollout gated. Preserve Solana as the only build escrow rail. Before any
-  x402 charge: configure real pricing; decide the billable endpoint, network,
-  asset, facilitator/finality trust, replay protection, reconciliation, and
-  refund/dispute behavior. Then add a capability-aware provider contract and
-  x402-specific append-only ledger, and enable only the agreed one-shot
-  metered operation. No x402 build activation or implicit provider fallback.
-  Stripe remains deferred until x402 is stable and Stripe lifecycle semantics
-  are separately decided.
+- [~] **Phase 8 — Multi-rail payments (ADR-0022)** — architecture accepted;
+  provider rollout remains gated. Preserve Solana as the only build escrow
+  rail. No x402 charge until pricing and the product, network, asset,
+  facilitator/finality, replay, reconciliation, and refund/dispute decisions
+  are complete.
+  - [~] **8.1 — Capability contract** — shared modes and operations; provider
+    operations must be explicitly supported. In progress; no provider routing
+    or payment behavior changes.
+  - [ ] **8.2 — x402 product and settlement decisions** — decide the exact
+    customer-facing paid operation, pricing/units, network/asset, facilitator,
+    payment confirmation, idempotency/replay protection, and refund/dispute
+    behavior. No charge work before this gate.
+  - [ ] **8.3 — x402 ledger and verification design** — settle provider-evidence
+    schema, tenant attribution, append-only audit requirements, duplicate
+    handling, reconciliation, and outage/ambiguous-result behavior; keep it
+    separate from the Solana funding and settlement ledgers.
+  - [ ] **8.4 — x402 implementation** — implement only the approved one-shot
+    operation, explicit provider selection, payment confirmation before
+    fulfillment, safe replay handling, and reconciliation. Do not expose
+    worker/internal or usage-summary endpoints as billable; do not permit x402
+    to satisfy the build activation gate.
+  - [ ] **8.5 — x402 validation and staged rollout** — automated tests for
+    retries, replay, pending/failed/ambiguous confirmation, reconciliation,
+    tenant isolation, and unsupported capabilities; then runbook, observability,
+    and a disabled-by-default rollout.
+  - [ ] **8.6 — Stripe evaluation and implementation** — begin only after
+    x402 is stable; decide Stripe authorization/capture/refund/dispute and
+    ledger/reconciliation semantics before integrating. No implicit fallback
+    between providers.
 
 **Go/no-go gate** (spec §10): don't add marketplace bidding, multi-chain, autonomous prod deploy, or more agent types until one coding job reliably produces a verified patch within budget and survives retries.
 
