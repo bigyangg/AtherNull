@@ -6,7 +6,7 @@ import {
   UnsupportedPaymentOperationError,
   assertPaymentOperationSupported,
   supportsPaymentOperation,
-} from "./payments.js";
+} from "./payments";
 
 const capabilities = [
   PaymentProviderCapabilitySchema.parse({
