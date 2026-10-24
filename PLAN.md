@@ -77,6 +77,15 @@ lives in the ADRs, not here.
 - [~] **Phase 7 — Reliability and demo** — one-command stack
   (`pnpm dev`), dependency-free demo repo, demo runbook. Still: devnet
   rehearsal incl. refund path, recordings, backup/restore and crash drills.
+- [ ] **Phase 8 — Multi-rail payments (ADR-0022)** — architecture accepted,
+  rollout gated. Preserve Solana as the only build escrow rail. Before any
+  x402 charge: configure real pricing; decide the billable endpoint, network,
+  asset, facilitator/finality trust, replay protection, reconciliation, and
+  refund/dispute behavior. Then add a capability-aware provider contract and
+  x402-specific append-only ledger, and enable only the agreed one-shot
+  metered operation. No x402 build activation or implicit provider fallback.
+  Stripe remains deferred until x402 is stable and Stripe lifecycle semantics
+  are separately decided.
 
 **Go/no-go gate** (spec §10): don't add marketplace bidding, multi-chain, autonomous prod deploy, or more agent types until one coding job reliably produces a verified patch within budget and survives retries.
 
@@ -118,3 +127,4 @@ docs/                     # ADRs, runbooks, threat model
 - [ ] Who owns verification/dispute acceptance decisions in the MVP (a human reviewer, or fully automated on test pass)?
 - [ ] Confirm Solana devnet as the only settlement target for the first demo (per spec §8 scope decision — no Meteora/token launch/Zcash)
 - [ ] Which sign-in method(s) should Better Auth actually offer (email/password, OAuth providers, magic link)? Currently none are enabled — `apps/api/src/auth.ts` only configures the database and the organization plugin.
+- [ ] **ADR-0022 rollout gate:** provide the x402 rate/pricing policy, first billable customer-facing endpoint, accepted network and asset, facilitator/settlement trust and finality rules, idempotency/replay retention, and reconciliation/refund/dispute policy. Until these are specified, x402 and Stripe remain non-billable and cannot satisfy the Solana build-funding gate. Do not derive charges from `UNPRICED` usage or budget authorizations.
