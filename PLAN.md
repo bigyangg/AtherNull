@@ -82,9 +82,9 @@ detail lives in the ADRs, not here.
   rail. No x402 charge until pricing and the product, network, asset,
   facilitator/finality, replay, reconciliation, and refund/dispute decisions
   are complete.
-  - [~] **8.1 — Capability contract** — shared modes and operations; provider
-    operations must be explicitly supported. In progress; no provider routing
-    or payment behavior changes.
+  - [x] **8.1 — Capability contract** — shared modes and operations; API
+    provider registry requires explicit provider/mode/operation support and
+    never falls back to another provider. No payment behavior is enabled.
   - [ ] **8.2 — x402 product and settlement decisions** — decide the exact
     customer-facing paid operation, pricing/units, network/asset, facilitator,
     payment confirmation, idempotency/replay protection, and refund/dispute
