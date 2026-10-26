@@ -44,7 +44,7 @@ export class PaymentProviderRegistry {
     this.providers = registered;
   }
 
-  execute(
+  async execute(
     providerId: PaymentProviderId,
     mode: PaymentMode,
     operation: PaymentOperation,
